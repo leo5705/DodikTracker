@@ -1,0 +1,6 @@
+{
+  "name": "Dodik Tracker",
+  "description": "Социальный медиатрекер для фильмов, сериалов, аниме, манги, игр, книг, комиксов и настолок с реальной базой данных и API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
