@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import {
   Shield,
   Lock,
-  Mail,
   KeyRound,
   User,
   Ticket,
@@ -26,7 +25,6 @@ export const AuthGatekeeper: React.FC = () => {
 
   // Form states
   const [identifier, setIdentifier] = useState(''); // email or username
-  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
@@ -103,7 +101,7 @@ export const AuthGatekeeper: React.FC = () => {
       setError('Для регистрации требуется действующий инвайт-код.');
       return;
     }
-    if (!email.trim() || !password || !username.trim()) {
+    if (!password || !username.trim()) {
       setError('Заполните все обязательные поля');
       return;
     }
@@ -111,7 +109,7 @@ export const AuthGatekeeper: React.FC = () => {
     setSubmitting(true);
     setError(null);
     try {
-      await registerPassword(email.trim(), password, username.trim(), inviteCode.trim() || undefined);
+      await registerPassword(username.trim(), password, inviteCode.trim() || undefined);
     } catch (err: any) {
       setError(err.message || 'Ошибка регистрации');
     } finally {
@@ -319,21 +317,6 @@ export const AuthGatekeeper: React.FC = () => {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="dodik_master"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#9A94AA]">Электронная почта</label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#9A94AA]" />
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="alex@dodik.gg"
                     className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
                   />
                 </div>

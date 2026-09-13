@@ -49,7 +49,7 @@ interface AuthContextType {
   login: () => Promise<void>;
   loginGoogle: () => Promise<void>;
   loginPassword: (login: string, pass: string) => Promise<void>;
-  registerPassword: (username: string, email: string, pass: string, inviteCode?: string) => Promise<void>;
+  registerPassword: (username: string, pass: string, inviteCode?: string) => Promise<void>;
   loginTelegram: (code: string, telegramUsername?: string, inviteCode?: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -175,11 +175,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await fetchProfile();
   };
 
-  const registerPassword = async (username: string, email: string, pass: string, inviteCode?: string) => {
+  const registerPassword = async (username: string, pass: string, inviteCode?: string) => {
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password: pass, inviteCode }),
+      body: JSON.stringify({ username, password: pass, inviteCode }),
       credentials: 'include',
     });
     const data = await res.json();

@@ -87,6 +87,12 @@ export const requireAuth = async (
       .slice(0, 20);
     const username = `${baseUsername}_${Math.floor(Math.random() * 899 + 100)}`;
 
+    const targetAdminEmail = (process.env.INITIAL_ADMIN_EMAIL || process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const targetAdminUser = (process.env.INITIAL_ADMIN_USERNAME || process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+    const shouldBeAdmin = (targetAdminEmail && targetAdminEmail === email.toLowerCase()) ||
+                          (targetAdminUser && targetAdminUser === username.toLowerCase()) ||
+                          (isFirst && !targetAdminEmail && !targetAdminUser && process.env.ALLOW_FIRST_USER_ADMIN !== 'false');
+
     const [newUser] = await db
       .insert(users)
       .values({
@@ -94,7 +100,7 @@ export const requireAuth = async (
         email,
         username,
         avatar: decodedToken.picture || null,
-        role: isFirst ? 'SUPER_ADMIN' : 'USER',
+        role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
         invitesLeft: 3,
       })
       .returning();

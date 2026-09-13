@@ -321,13 +321,16 @@ apiRouter.post('/auth/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const customUid = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
+    const targetAdminUser = (process.env.INITIAL_ADMIN_USERNAME || process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+    const shouldBeAdmin = (targetAdminUser && targetAdminUser === cleanUsername) || (isFirstUser && !targetAdminUser && process.env.ALLOW_FIRST_USER_ADMIN !== 'false');
+
     const [newUser] = await db
       .insert(users)
       .values({
         uid: customUid,
         username: cleanUsername,
         passwordHash,
-        role: isFirstUser ? 'SUPER_ADMIN' : 'USER',
+        role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
         invitesLeft: 3,
       })
       .returning();
@@ -737,6 +740,9 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
       const generatedUsername = `tg_${cleanUserPrefix}_${Math.floor(Math.random() * 899 + 100)}`;
       const customUid = `tg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
+      const targetAdminUser = (process.env.INITIAL_ADMIN_USERNAME || process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+      const shouldBeAdmin = (targetAdminUser && (targetAdminUser === generatedUsername.toLowerCase() || targetAdminUser === stored.telegramUsername?.toLowerCase())) || (isFirst && !targetAdminUser && process.env.ALLOW_FIRST_USER_ADMIN !== 'false');
+
       const [created] = await db
         .insert(users)
         .values({
@@ -746,7 +752,7 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
           telegramUsername: stored.telegramUsername || null,
           telegramId: tgId || null,
           telegramChatId: tgChatId || null,
-          role: isFirst ? 'SUPER_ADMIN' : 'USER',
+          role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
           invitesLeft: 3,
         })
         .returning();
@@ -843,6 +849,12 @@ apiRouter.post('/auth/session', async (req, res) => {
         candidate = `${baseUsername}${counter++}`;
       }
 
+      const targetAdminEmail = (process.env.INITIAL_ADMIN_EMAIL || process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+      const targetAdminUser = (process.env.INITIAL_ADMIN_USERNAME || process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+      const shouldBeAdmin = (targetAdminEmail && targetAdminEmail === email.toLowerCase()) ||
+                            (targetAdminUser && targetAdminUser === candidate.toLowerCase()) ||
+                            (isFirst && !targetAdminEmail && !targetAdminUser && process.env.ALLOW_FIRST_USER_ADMIN !== 'false');
+
       const [created] = await db
         .insert(users)
         .values({
@@ -850,7 +862,7 @@ apiRouter.post('/auth/session', async (req, res) => {
           email,
           username: candidate,
           avatar: payload.picture || null,
-          role: isFirst ? 'SUPER_ADMIN' : 'USER',
+          role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
           invitesLeft: 3,
         })
         .returning();
