@@ -85,8 +85,14 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
             releaseDate: game.releaseDate,
             year: game.year,
             rating: game.rating,
-            provider: game.externalIds.rawg ? 'RAWG' : 'THEGAMESDB',
-            externalId: game.externalIds.rawg || game.externalIds.gmdb || game.slug,
+            provider: game.externalIds.rawg
+              ? 'RAWG'
+              : game.externalIds.igdb
+              ? 'IGDB'
+              : game.externalIds.gmdb
+              ? 'THEGAMESDB'
+              : 'LOCAL',
+            externalId: String(game.externalIds.rawg || game.externalIds.igdb || game.externalIds.gmdb || game.slug || game.id),
           },
           status,
           score: userTracking?.score || undefined,
@@ -122,8 +128,14 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
             releaseDate: game.releaseDate,
             year: game.year,
             rating: game.rating,
-            provider: game.externalIds.rawg ? 'RAWG' : 'THEGAMESDB',
-            externalId: game.externalIds.rawg || game.externalIds.gmdb || game.slug,
+            provider: game.externalIds.rawg
+              ? 'RAWG'
+              : game.externalIds.igdb
+              ? 'IGDB'
+              : game.externalIds.gmdb
+              ? 'THEGAMESDB'
+              : 'LOCAL',
+            externalId: String(game.externalIds.rawg || game.externalIds.igdb || game.externalIds.gmdb || game.slug || game.id),
           },
           status: userTracking?.status || 'COMPLETED',
           score: selectedScore,
