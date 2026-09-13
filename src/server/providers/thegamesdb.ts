@@ -49,6 +49,14 @@ export class TheGamesDBProvider implements MediaProvider {
         };
       }
 
+      if (json.status === 'Error' || (json.status && json.status !== 'Success')) {
+        return {
+          ok: false,
+          latencyMs,
+          error: json.error || `TheGamesDB: ${json.status || 'Неверный API ключ TheGamesDB'}`,
+        };
+      }
+
       return { ok: true, latencyMs, details: 'TheGamesDB подключен' };
     } catch (err: any) {
       return { ok: false, latencyMs: Date.now() - start, error: err.message || 'Ошибка сети при обращении к TheGamesDB' };

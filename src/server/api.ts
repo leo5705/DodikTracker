@@ -5914,12 +5914,27 @@ apiRouter.get('/admin/integrations', requireAuth, requireAdmin, async (req: Auth
 
     const result = registeredProviders.map((p) => {
       const stored = integrationsMap.get(p.name.toUpperCase());
+      let creds: Record<string, any> | undefined = undefined;
+      if (stored?.encryptedCredentials) {
+        try {
+          creds = decryptCredentials(stored.encryptedCredentials);
+        } catch {}
+      }
+
+      const hasKey = !!(creds?.apiKey || creds?.clientId || creds?.clientSecret || stored?.encryptedCredentials);
+      const hasClientId = !!(creds?.clientId || (creds?.apiKey && !creds?.clientSecret && p.name.toUpperCase() === 'IGDB'));
+      const hasClientSecret = !!creds?.clientSecret;
+
       return {
         provider: p.name,
         supportedTypes: p.supportedTypes,
         requiresKey: p.requiresKey,
         enabled: stored ? stored.enabled : !p.requiresKey,
-        hasKey: stored && stored.encryptedCredentials ? true : false,
+        hasKey,
+        hasClientId,
+        hasClientSecret,
+        maskedKey: creds?.apiKey ? maskApiKey(creds.apiKey) : undefined,
+        maskedClientId: creds?.clientId ? maskApiKey(creds.clientId) : undefined,
         lastCheckedAt: stored?.lastCheckedAt || null,
         lastError: stored?.lastError || null,
         priority: stored?.priority || 1,
@@ -5951,7 +5966,7 @@ apiRouter.post('/admin/integrations', requireAuth, requireAdmin, async (req: Aut
 
     let encrypted: string | null = existing[0]?.encryptedCredentials || null;
 
-    if (removeKey || apiKey === '') {
+    if (removeKey) {
       encrypted = null;
     } else if (apiKey !== undefined || clientId !== undefined || clientSecret !== undefined) {
       let currentCreds: Record<string, any> = {};
@@ -5961,12 +5976,29 @@ apiRouter.post('/admin/integrations', requireAuth, requireAdmin, async (req: Aut
         } catch (_e) {}
       }
 
+      let newClientId = clientId;
+      let newClientSecret = clientSecret;
+      let newApiKey = apiKey;
+
+      // Auto-split combined strings for IGDB
+      if (providerKey === 'IGDB' && newApiKey && typeof newApiKey === 'string' && newApiKey.includes(':') && !newClientSecret) {
+        const parts = newApiKey.split(':');
+        newClientId = parts[0].trim();
+        newClientSecret = parts.slice(1).join(':').trim();
+        newApiKey = undefined;
+      }
+
       const credentialsPayload: Record<string, any> = {
         ...currentCreds,
-        ...(apiKey !== undefined && apiKey !== '' ? { apiKey } : {}),
-        ...(clientId !== undefined && clientId !== '' ? { clientId } : {}),
-        ...(clientSecret !== undefined && clientSecret !== '' ? { clientSecret } : {}),
+        ...(newApiKey !== undefined ? (newApiKey === '' ? {} : { apiKey: newApiKey }) : {}),
+        ...(newClientId !== undefined ? (newClientId === '' ? {} : { clientId: newClientId }) : {}),
+        ...(newClientSecret !== undefined ? (newClientSecret === '' ? {} : { clientSecret: newClientSecret }) : {}),
       };
+
+      // Clean empty keys
+      if (newApiKey === '') delete credentialsPayload.apiKey;
+      if (newClientId === '') delete credentialsPayload.clientId;
+      if (newClientSecret === '') delete credentialsPayload.clientSecret;
 
       if (Object.keys(credentialsPayload).length > 0) {
         encrypted = encryptCredentials(credentialsPayload);

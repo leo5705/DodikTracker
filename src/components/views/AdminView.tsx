@@ -91,8 +91,10 @@ export const AdminView: React.FC = () => {
 
   // Integration editing state
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
+  const [clientIds, setClientIds] = useState<Record<string, string>>({});
+  const [clientSecrets, setClientSecrets] = useState<Record<string, string>>({});
   const [healthChecking, setHealthChecking] = useState<Record<string, boolean>>({});
-  const [healthResults, setHealthResults] = useState<Record<string, { ok: boolean; latencyMs: number; error?: string }>>({});
+  const [healthResults, setHealthResults] = useState<Record<string, { ok: boolean; latencyMs: number; error?: string; details?: string }>>({});
   const [saveStatus, setSaveStatus] = useState<Record<string, string>>({});
 
   // Message Cleanup Worker State
@@ -326,6 +328,9 @@ export const AdminView: React.FC = () => {
     extraCreds?: { clientId?: string; clientSecret?: string }
   ) => {
     const key = apiKeys[provider];
+    const cId = extraCreds?.clientId !== undefined ? extraCreds.clientId : clientIds[provider];
+    const cSec = extraCreds?.clientSecret !== undefined ? extraCreds.clientSecret : clientSecrets[provider];
+
     setSaveStatus((prev) => ({ ...prev, [provider]: 'Сохранение...' }));
     try {
       const res = await authFetch('/api/admin/integrations', {
@@ -333,11 +338,11 @@ export const AdminView: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider,
-          apiKey: key !== undefined ? key : undefined,
+          apiKey: key !== undefined && key !== '' ? key : undefined,
           enabled,
           priority,
-          clientId: extraCreds?.clientId,
-          clientSecret: extraCreds?.clientSecret,
+          clientId: cId !== undefined && cId !== '' ? cId : undefined,
+          clientSecret: cSec !== undefined && cSec !== '' ? cSec : undefined,
         }),
       });
       if (res.ok) {
@@ -346,7 +351,8 @@ export const AdminView: React.FC = () => {
         const updated = await authFetch('/api/admin/integrations');
         if (updated.ok) setIntegrations(await updated.json());
       } else {
-        setSaveStatus((prev) => ({ ...prev, [provider]: 'Ошибка сохранения' }));
+        const errJson = await res.json().catch(() => ({}));
+        setSaveStatus((prev) => ({ ...prev, [provider]: errJson.error || 'Ошибка сохранения' }));
       }
     } catch (_err) {
       setSaveStatus((prev) => ({ ...prev, [provider]: 'Ошибка сети' }));
@@ -366,7 +372,9 @@ export const AdminView: React.FC = () => {
       });
       if (res.ok) {
         setApiKeys((prev) => ({ ...prev, [provider]: '' }));
-        setSaveStatus((prev) => ({ ...prev, [provider]: 'Ключ удален!' }));
+        setClientIds((prev) => ({ ...prev, [provider]: '' }));
+        setClientSecrets((prev) => ({ ...prev, [provider]: '' }));
+        setSaveStatus((prev) => ({ ...prev, [provider]: 'Ключи удалены!' }));
         setTimeout(() => setSaveStatus((prev) => ({ ...prev, [provider]: '' })), 2500);
         const updated = await authFetch('/api/admin/integrations');
         if (updated.ok) setIntegrations(await updated.json());
@@ -395,6 +403,8 @@ export const AdminView: React.FC = () => {
         body: JSON.stringify({
           provider,
           apiKey: apiKeys[provider] || undefined,
+          clientId: clientIds[provider] || undefined,
+          clientSecret: clientSecrets[provider] || undefined,
         }),
       });
       const data = await res.json();
@@ -1158,11 +1168,111 @@ export const AdminView: React.FC = () => {
                     </div>
                   </div>
 
-                  {intg.requiresKey ? (
+                  {intg.provider === 'IGDB' ? (
+                    /* DEDICATED IGDB OAUTH FORM (Twitch Client ID + Client Secret) */
+                    <div className="space-y-3 pt-2">
+                      <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-800/40 text-xs text-purple-200 leading-relaxed">
+                        <strong className="text-purple-300 font-semibold">Важно для IGDB:</strong> Для авторизации в IGDB API v4 требуется зарегистрировать приложение в{' '}
+                        <a
+                          href="https://dev.twitch.tv/console/apps"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[#AC82FF] underline hover:text-white"
+                        >
+                          Twitch Developer Console
+                        </a>{' '}
+                        и скопировать <strong>Client ID</strong> и <strong>Client Secret</strong>. Dodik Tracker автоматически генерирует и продлевает OAuth-токены.
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-semibold text-zinc-300">
+                              Twitch Client ID:
+                            </label>
+                            {intg.hasClientId && (
+                              <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" /> Сохранен
+                              </span>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            value={clientIds[intg.provider] !== undefined ? clientIds[intg.provider] : ''}
+                            onChange={(e) =>
+                              setClientIds((prev) => ({
+                                ...prev,
+                                [intg.provider]: e.target.value,
+                              }))
+                            }
+                            placeholder={intg.hasClientId ? '•••••••••••• (изменить Client ID)' : 'Например: gp762nuuoqcoxypju8c569th9wz7q5'}
+                            className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-[#9B6BFF]"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-semibold text-zinc-300">
+                              Twitch Client Secret:
+                            </label>
+                            {intg.hasClientSecret && (
+                              <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" /> Сохранен
+                              </span>
+                            )}
+                          </div>
+                          <input
+                            type="password"
+                            value={clientSecrets[intg.provider] !== undefined ? clientSecrets[intg.provider] : ''}
+                            onChange={(e) =>
+                              setClientSecrets((prev) => ({
+                                ...prev,
+                                [intg.provider]: e.target.value,
+                              }))
+                            }
+                            placeholder={intg.hasClientSecret ? '•••••••••••••••••••••••• (изменить Secret)' : 'Например: 8x39f...'}
+                            className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-[#9B6BFF]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          onClick={() => saveIntegration(intg.provider, intg.enabled)}
+                          className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold shadow transition-colors"
+                        >
+                          Сохранить Twitch ключи
+                        </button>
+                        {intg.hasKey && (
+                          <button
+                            onClick={() => deleteKey(intg.provider)}
+                            title="Удалить сохраненные ключи IGDB"
+                            className="px-3 py-2 rounded-xl bg-rose-950/30 hover:bg-rose-900/50 border border-rose-800/40 text-rose-300 text-xs font-medium flex items-center gap-1 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Удалить</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={() => testHealthCheck(intg.provider)}
+                          disabled={isChecking}
+                          className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-medium text-zinc-200 flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                        >
+                          {isChecking ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Activity className="w-3.5 h-3.5 text-[#AC82FF]" />
+                          )}
+                          Проверить связь с IGDB
+                        </button>
+                      </div>
+                      {statusText && <p className="text-xs text-[#AC82FF] font-medium">{statusText}</p>}
+                    </div>
+                  ) : intg.requiresKey ? (
                     <div className="space-y-3 pt-2">
                       <div className="flex items-center justify-between">
                         <label className="text-xs font-semibold text-zinc-300">
-                          {intg.provider === 'IGDB' ? 'API Ключ или Client ID Twitch:' : 'Секретный API Ключ:'}
+                          {intg.provider === 'THEGAMESDB' ? 'API Ключ TheGamesDB (thegamesdb.net):' : 'Секретный API Ключ:'}
                         </label>
                         {intg.hasKey && (
                           <span className="text-[11px] text-emerald-400 font-mono flex items-center gap-1">
@@ -1171,6 +1281,21 @@ export const AdminView: React.FC = () => {
                           </span>
                         )}
                       </div>
+
+                      {intg.provider === 'THEGAMESDB' && (
+                        <p className="text-[11px] text-zinc-400">
+                          Получите ключ в личном кабинете на{' '}
+                          <a
+                            href="https://thegamesdb.net/user/apikeys"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[#AC82FF] underline hover:text-white"
+                          >
+                            thegamesdb.net/user/apikeys
+                          </a>
+                          . Этот ключ предназначен только для TheGamesDB и не подходит для IGDB.
+                        </p>
+                      )}
 
                       <div className="flex flex-col sm:flex-row gap-2">
                         <input
@@ -1252,7 +1377,7 @@ export const AdminView: React.FC = () => {
                         )}
                         <span>
                           {health.ok
-                            ? `Связь установлена успешно (Задержка: ${health.latencyMs} мс)`
+                            ? (health.details || `Связь установлена успешно (Задержка: ${health.latencyMs} мс)`)
                             : `Ошибка подключения: ${health.error || 'Провайдер отклонил запрос'}`}
                         </span>
                       </div>

@@ -247,15 +247,34 @@ UPDATE users SET role = 'SUPER_ADMIN' WHERE username = 'ваш_логин';
 
 ---
 
-## 🤖 Интеграции
+## 🤖 Интеграции и Базы Данных Контента
 
-### Gemini AI (Умный помощник и автопереводы)
+### 🎮 Игровые базы: IGDB и TheGamesDB
+
+В Dodik Tracker встроена поддержка сразу нескольких игровых провайдеров (настраиваются в **Панели Администратора** -> вкладка **Интеграции**):
+
+1. **IGDB (Twitch API v4) — Рекомендуется для 1080p постеров, скриншотов и трейлеров:**
+   * **Где получить:** Перейдите в [Twitch Developer Console](https://dev.twitch.tv/console/apps), создайте приложение и нажмите **Manage**.
+   * Скопируйте **Client ID** и нажмите кнопку **New Secret**, чтобы сгенерировать **Client Secret**.
+   * Вставьте **Twitch Client ID** и **Twitch Client Secret** в соответствующие поля в панели Dodik Tracker (`/admin` -> Интеграции).
+   * *Примечание:* Сервер автоматически обменивает Client ID и Secret на OAuth-токен Twitch и обновляет его без вашего участия.
+
+2. **TheGamesDB (thegamesdb.net):**
+   * **Где получить:** Зарегистрируйтесь на [thegamesdb.net](https://thegamesdb.net/) и сгенерируйте API ключ на странице [thegamesdb.net/user/apikeys](https://thegamesdb.net/user/apikeys).
+   * Вставьте ключ в поле TheGamesDB в панели управления.
+   * *Внимание:* Ключ от TheGamesDB не подходит к IGDB, так как это разные сервисы с разной схемой авторизации.
+
+### 🎬 Фильмы и Сериалы: TMDB и Кинопоиск
+* **TMDB:** Бесплатный ключ на [themoviedb.org](https://www.themoviedb.org/settings/api).
+* **Кинопоиск (Неофициальный API):** Ключ на [kinopoiskapiunofficial.tech](https://kinopoiskapiunofficial.tech/).
+
+### 🧠 Gemini AI (Умный помощник и автопереводы)
 Получите бесплатный API ключ в [Google AI Studio](https://aistudio.google.com/) и добавьте в `.env`:
 ```env
 GEMINI_API_KEY="AIzaSy..."
 ```
 
-### Telegram Bot (Вход без пароля и уведомления)
+### 📱 Telegram Bot (Вход без пароля и уведомления)
 1. Создайте бота через `@BotFather` в Telegram и получите токен.
 2. В файле `.env` укажите:
 ```env
