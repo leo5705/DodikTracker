@@ -24,7 +24,6 @@ import {
   Book,
   BookOpen,
   Flame,
-  Dices,
   Bookmark,
   Share2,
   Users,
@@ -384,8 +383,6 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({ mediaId, media
         return <Book className="w-4 h-4 text-amber-400" />;
       case 'COMIC':
         return <Flame className="w-4 h-4 text-orange-400" />;
-      case 'BOARD_GAME':
-        return <Dices className="w-4 h-4 text-teal-400" />;
       default:
         return <Film className="w-4 h-4 text-zinc-400" />;
     }

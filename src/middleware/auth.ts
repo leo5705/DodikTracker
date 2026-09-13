@@ -68,7 +68,7 @@ export const requireAuth = async (
       .from(systemSettings)
       .where(eq(systemSettings.key, 'registration_mode'))
       .limit(1);
-    const regMode = regModeSetting.length > 0 ? regModeSetting[0].value : 'INVITE_ONLY';
+    const regMode = regModeSetting.length > 0 ? regModeSetting[0].value : 'OPEN';
 
     const allUsersCount = await db.select().from(users);
     const isFirst = allUsersCount.length === 0;

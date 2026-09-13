@@ -146,14 +146,15 @@ export const TierListViewModal: React.FC<TierListViewModalProps> = ({
                           <span className="text-[11px] text-[#6B667B] italic px-2">Пусто</span>
                         ) : (
                           tierItems.map((item) => {
-                            const mediaObj = mediaMap.get(item.mediaId);
+                            const mediaObj = mediaMap.get(item.id || item.mediaId);
                             const poster = item.posterUrl || mediaObj?.posterUrl;
                             const title = item.title || mediaObj?.title || 'Без названия';
+                            const targetId = item.id || item.mediaId;
 
                             return (
                               <div
-                                key={item.id || item.mediaId}
-                                onClick={() => onSelectMedia?.(item.mediaId)}
+                                key={targetId}
+                                onClick={() => onSelectMedia?.(targetId)}
                                 title={title}
                                 className="group relative w-14 h-20 rounded-md overflow-hidden bg-[#201D2C] border border-[#2E2A40] hover:border-[#AC82FF] cursor-pointer shadow transition-all hover:scale-105"
                               >

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Star, Heart, Film, Tv, Sparkles, BookOpen, Gamepad2, Book, Flame, Dices, Plus, Bookmark } from 'lucide-react';
+import { Star, Heart, Film, Tv, Sparkles, BookOpen, Gamepad2, Book, Flame, Plus, Bookmark } from 'lucide-react';
 import { useRouter } from '../../context/RouterContext.tsx';
 
 export interface MediaCardItem {
@@ -72,8 +72,6 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         return <Book className="w-3 h-3 text-amber-400" />;
       case 'COMIC':
         return <Flame className="w-3 h-3 text-orange-400" />;
-      case 'BOARD_GAME':
-        return <Dices className="w-3 h-3 text-teal-400" />;
       default:
         return <Film className="w-3 h-3 text-zinc-400" />;
     }

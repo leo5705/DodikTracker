@@ -19,6 +19,7 @@ import { eq } from 'drizzle-orm';
 class ProviderManager {
   private providers: Map<string, MediaProvider> = new Map();
   private detailsCache: Map<string, { data: MediaSearchResult & MediaDetailExtended; expiresAt: number }> = new Map();
+  private searchCache: Map<string, { data: MediaSearchResult[]; expiresAt: number }> = new Map();
 
   constructor() {
     this.register(new TMDBProvider());
@@ -212,10 +213,18 @@ class ProviderManager {
   }
 
   async search(query: string, typeFilter?: string): Promise<MediaSearchResult[]> {
-    const results: MediaSearchResult[] = [];
+    const trimmedQuery = query.trim().toLowerCase();
+    if (!trimmedQuery) return [];
+
+    const cacheKey = `${typeFilter || 'ALL'}_${trimmedQuery}`;
+    const cached = this.searchCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.data;
+    }
+
     const allProviders = this.getAllProviders();
 
-    // Fetch integration statuses to respect priority
+    // Fetch integration statuses to respect priority and enabled status
     const providerStatuses: Array<{ provider: MediaProvider; priority: number; credentials?: Record<string, any> }> = [];
 
     for (const provider of allProviders) {
@@ -232,29 +241,61 @@ class ProviderManager {
     // Sort by priority (1 is highest priority)
     providerStatuses.sort((a, b) => a.priority - b.priority);
 
-    for (const { provider, credentials } of providerStatuses) {
+    // Run searches in parallel with a strict 3.5s timeout per provider
+    const searchPromises = providerStatuses.map(async ({ provider, credentials }) => {
       const start = Date.now();
       try {
-        const items = await provider.search(query, credentials);
-        const latencyMs = Date.now() - start;
+        const timeoutPromise = new Promise<MediaSearchResult[]>((_, reject) =>
+          setTimeout(() => reject(new Error('Provider search timeout')), 3500)
+        );
 
-        await db.insert(apiLogs).values({
+        const items = await Promise.race([
+          provider.search(query, credentials),
+          timeoutPromise,
+        ]);
+
+        const latencyMs = Date.now() - start;
+        db.insert(apiLogs).values({
           provider: provider.name,
           endpoint: `search?q=${query}`,
           status: 200,
           latencyMs,
         }).catch(() => {});
 
-        results.push(...items);
+        return (Array.isArray(items) ? items : []).slice(0, 15);
       } catch (err: any) {
         const latencyMs = Date.now() - start;
-        await db.insert(apiLogs).values({
+        db.insert(apiLogs).values({
           provider: provider.name,
           endpoint: `search?q=${query}`,
           status: 500,
           latencyMs,
           error: err.message,
         }).catch(() => {});
+        return [] as MediaSearchResult[];
+      }
+    });
+
+    const settled = await Promise.allSettled(searchPromises);
+    const results: MediaSearchResult[] = [];
+
+    for (const res of settled) {
+      if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+        results.push(...res.value);
+      }
+    }
+
+    // Cache results for 5 minutes
+    this.searchCache.set(cacheKey, {
+      data: results,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    });
+
+    // Cleanup old search cache entries if cache grows
+    if (this.searchCache.size > 200) {
+      const now = Date.now();
+      for (const [k, v] of this.searchCache.entries()) {
+        if (now > v.expiresAt) this.searchCache.delete(k);
       }
     }
 

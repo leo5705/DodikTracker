@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { boolean, doublePrecision, integer, pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { index, boolean, doublePrecision, integer, pgTable, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // 1. Users Table
 export const users = pgTable('users', {
@@ -24,6 +24,7 @@ export const users = pgTable('users', {
   telegramUsername: text('telegram_username'),
   telegramAuthCode: text('telegram_auth_code'),
   telegramAuthExpires: timestamp('telegram_auth_expires'),
+  notificationSettings: text('notification_settings').notNull().default('{"friendRequests":true,"friendReviews":true,"likes":true,"comments":true,"newReleases":true,"lists":true}'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -159,7 +160,7 @@ export const lists = pgTable('lists', {
   id: serial('id').primaryKey(),
   title: text('title').notNull(),
   description: text('description'),
-  category: text('category').notNull().default('MOVIE'), // 'MOVIE' | 'TV' | 'ANIME' | 'MANGA' | 'GAME' | 'BOOK' | 'COMIC'
+  category: text('category').notNull().default('MOVIES_TV'), // 'MOVIE' | 'TV' | 'ANIME' | 'MANGA' | 'GAME' | 'BOOK' | 'COMIC'
   cover: text('cover'),
   visibility: text('visibility').notNull().default('PUBLIC'), // PUBLIC, FRIENDS, PRIVATE
   ownerId: integer('owner_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
@@ -174,8 +175,11 @@ export const listItems = pgTable('list_items', {
   mediaId: integer('media_id').references(() => media.id, { onDelete: 'cascade' }).notNull(),
   orderIndex: integer('order_index').notNull().default(0),
   notes: text('notes'),
+  addedById: integer('added_by_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => ({
+  unqListMedia: uniqueIndex('list_items_list_id_media_id_unq').on(t.listId, t.mediaId),
+}));
 
 // 15. List Members (Collaborative Lists) Table
 export const listMembers = pgTable('list_members', {
@@ -184,7 +188,9 @@ export const listMembers = pgTable('list_members', {
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   role: text('role').notNull().default('EDITOR'), // OWNER, EDITOR, VIEWER
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => ({
+  unqListUser: uniqueIndex('list_members_list_id_user_id_unq').on(t.listId, t.userId),
+}));
 
 // 16. List Followers Table
 export const listFollowers = pgTable('list_followers', {
@@ -214,10 +220,19 @@ export const notifications = pgTable('notifications', {
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   type: text('type').notNull(), // FRIEND_REQUEST, FRIEND_ACCEPTED, COMMENT, COMMENT_REPLY, LIKE, LIST_FOLLOW, LIST_UPDATE, TIERLIST_LIKE, TIERLIST_COMMENT, NEW_RELEASE
   title: text('title').notNull(),
-  content: text('content').notNull(),
+  body: text('body').notNull(),
   link: text('link'),
+  relatedEntity: text('related_entity'),
+  relatedEntityId: text('related_entity_id'),
   isRead: boolean('is_read').notNull().default(false),
+  readAt: timestamp('read_at'),
   createdAt: timestamp('created_at').defaultNow(),
+}, (table) => {
+  return {
+    userIdIdx: index('notifications_user_id_idx').on(table.userId),
+    isReadIdx: index('notifications_is_read_idx').on(table.isRead),
+    typeIdx: index('notifications_type_idx').on(table.type)
+  };
 });
 
 // 19. System Integrations Table

@@ -28,7 +28,7 @@ import {
   inviteCodes,
   passwordResetTokens,
 } from '../db/schema.ts';
-import { eq, and, or, desc, sql, inArray, isNull, ilike, gte } from 'drizzle-orm';
+import { eq, and, or, desc, asc, sql, inArray, isNull, ilike, gte } from 'drizzle-orm';
 import { providerManager } from './providers/index.ts';
 import { encryptCredentials, decryptCredentials, maskApiKey } from '../lib/crypto.ts';
 import { GameTranslator } from './services/gameTranslator.ts';
@@ -111,7 +111,9 @@ export async function sendAppNotification(
   notif: {
     type: string;
     title: string;
-    content: string;
+    body: string;
+    relatedEntity?: string;
+    relatedEntityId?: string;
     link?: string;
   }
 ) {
@@ -120,7 +122,9 @@ export async function sendAppNotification(
       userId,
       type: notif.type,
       title: notif.title,
-      content: notif.content,
+      body: notif.body,
+      relatedEntity: notif.relatedEntity,
+      relatedEntityId: notif.relatedEntityId,
       link: notif.link,
     });
     // Async Telegram delivery
@@ -217,7 +221,7 @@ const getRegistrationStatusHandler = async (_req: any, res: any) => {
       .where(eq(systemSettings.key, 'telegram_bot_username'))
       .limit(1);
 
-    const mode = setting.length > 0 ? setting[0].value : 'INVITE_ONLY'; // 'OPEN' | 'INVITE_ONLY' | 'CLOSED'
+    const mode = setting.length > 0 ? setting[0].value : 'OPEN'; // 'OPEN' | 'INVITE_ONLY' | 'CLOSED'
     const botUsername = botSetting.length > 0 ? botSetting[0].value : 'DodikTrackerBot';
 
     res.json({
@@ -260,7 +264,7 @@ apiRouter.post('/auth/register', async (req, res) => {
       .from(systemSettings)
       .where(eq(systemSettings.key, 'registration_mode'))
       .limit(1);
-    const mode = regModeSetting.length > 0 ? regModeSetting[0].value : 'INVITE_ONLY';
+    const mode = regModeSetting.length > 0 ? regModeSetting[0].value : 'OPEN';
 
     const allUsers = await db.select({ id: users.id }).from(users);
     const isFirstUser = allUsers.length === 0;
@@ -676,7 +680,7 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
         .from(systemSettings)
         .where(eq(systemSettings.key, 'registration_mode'))
         .limit(1);
-      const mode = regModeSetting.length > 0 ? regModeSetting[0].value : 'INVITE_ONLY';
+      const mode = regModeSetting.length > 0 ? regModeSetting[0].value : 'OPEN';
 
       const allUsers = await db.select({ id: users.id }).from(users);
       const isFirst = allUsers.length === 0;
@@ -988,6 +992,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
       ratingVisibility,
       listVisibility,
       statisticsVisibility,
+      notificationSettings,
       telegramChatId,
     } = req.body;
 
@@ -1011,6 +1016,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
         ratingVisibility: ratingVisibility || user.ratingVisibility,
         listVisibility: listVisibility || user.listVisibility,
         statisticsVisibility: statisticsVisibility || user.statisticsVisibility,
+        notificationSettings: notificationSettings !== undefined ? notificationSettings : user.notificationSettings,
         telegramChatId: telegramChatId !== undefined ? telegramChatId : user.telegramChatId,
         updatedAt: new Date(),
       })
@@ -1028,21 +1034,54 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
 // ==========================================
 
 // Global search across external providers and local catalog
-apiRouter.get('/media/search', async (req, res) => {
+const mediaSearchHandler = async (req: any, res: any) => {
   try {
     const query = String(req.query.q || '').trim();
-    const typeFilter = req.query.type ? String(req.query.type).toUpperCase() : undefined;
+    const rawCategory = req.query.category || req.query.listCategory;
+    const categoryFilter = rawCategory ? String(rawCategory).toUpperCase() : undefined;
+    let typeFilter = req.query.type ? String(req.query.type).toUpperCase() : undefined;
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '25'), 10) || 25, 1), 50);
 
-    if (!query) {
+    if (!typeFilter && categoryFilter) {
+      if (categoryFilter === 'GAME' || categoryFilter === 'GAMES') typeFilter = 'GAME';
+      else if (categoryFilter === 'ANIME') typeFilter = 'ANIME';
+      else if (categoryFilter === 'MANGA') typeFilter = 'MANGA';
+      else if (categoryFilter === 'BOOK' || categoryFilter === 'BOOKS') typeFilter = 'BOOK';
+      else if (categoryFilter === 'COMIC' || categoryFilter === 'COMICS') typeFilter = 'COMIC';
+    }
+
+    if (!query || query.length < 2) {
       return res.json([]);
     }
 
-    // 1. Search local database
+    // 1. Search local database with direct SQL conditions
+    const localConditions: any[] = [
+      sql`(LOWER(${media.title}) LIKE ${'%' + query.toLowerCase() + '%'} OR LOWER(COALESCE(${media.originalTitle}, '')) LIKE ${'%' + query.toLowerCase() + '%'})`
+    ];
+
+    if (typeFilter) {
+      localConditions.push(eq(media.type, typeFilter));
+    } else if (categoryFilter && categoryFilter !== 'ALL') {
+      if (categoryFilter === 'MOVIES_TV' || categoryFilter === 'MOVIE_TV' || categoryFilter === 'FILMS_SERIES') {
+        localConditions.push(or(eq(media.type, 'MOVIE'), eq(media.type, 'TV')));
+      } else if (categoryFilter === 'GAME' || categoryFilter === 'GAMES') {
+        localConditions.push(eq(media.type, 'GAME'));
+      } else if (categoryFilter === 'ANIME') {
+        localConditions.push(eq(media.type, 'ANIME'));
+      } else if (categoryFilter === 'MANGA') {
+        localConditions.push(eq(media.type, 'MANGA'));
+      } else if (categoryFilter === 'BOOK' || categoryFilter === 'BOOKS') {
+        localConditions.push(eq(media.type, 'BOOK'));
+      } else if (categoryFilter === 'COMIC' || categoryFilter === 'COMICS') {
+        localConditions.push(eq(media.type, 'COMIC'));
+      }
+    }
+
     const localItems = await db
       .select()
       .from(media)
-      .where(sql`LOWER(${media.title}) LIKE ${'%' + query.toLowerCase() + '%'}`)
-      .limit(10);
+      .where(and(...localConditions))
+      .limit(limit);
 
     const localFormatted = localItems.map((item) => ({
       provider: 'DODIK_DB',
@@ -1058,17 +1097,35 @@ apiRouter.get('/media/search', async (req, res) => {
       rating: item.rating,
     }));
 
-    // 2. Search external active providers
+    // 2. Search external active providers (runs in parallel with timeouts)
     const externalResults = await providerManager.search(query, typeFilter);
 
     // Merge without duplicates
-    const combined = [...localFormatted, ...externalResults];
-    res.json(combined);
+    let combined = [...localFormatted, ...externalResults];
+    
+    // Deduplicate by mediaId or provider+externalId or normalized title+type
+    const seen = new Set<string>();
+    combined = combined.filter((item: any) => {
+      const key = item.mediaId ? `media-${item.mediaId}` : `${item.provider}-${item.externalId}-${item.title}-${item.type}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (categoryFilter && categoryFilter !== 'ALL') {
+      combined = combined.filter(item => isMediaAllowedForTierCategory(item.type, categoryFilter));
+    }
+
+    // Limit returned results to avoid overloading the UI
+    res.json(combined.slice(0, limit));
   } catch (err: any) {
     console.error('Search error:', err);
     res.status(500).json({ error: 'Ошибка при поиске медиа' });
   }
-});
+};
+
+apiRouter.get('/media/search', mediaSearchHandler);
+apiRouter.get('/search', mediaSearchHandler);
 
 // Trending items
 apiRouter.get('/media/trending', async (req, res) => {
@@ -1080,6 +1137,63 @@ apiRouter.get('/media/trending', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Helper to ensure media exists in local DB, creating it from provider payload if necessary
+export async function ensureMediaInDb(mediaPayload: any): Promise<any> {
+  if (!mediaPayload) return null;
+
+  let targetMedia: any = null;
+
+  if (mediaPayload.provider && mediaPayload.externalId) {
+    const foundExt = await db
+      .select()
+      .from(mediaExternalIds)
+      .where(
+        and(
+          eq(mediaExternalIds.provider, mediaPayload.provider),
+          eq(mediaExternalIds.externalId, String(mediaPayload.externalId))
+        )
+      )
+      .limit(1);
+
+    if (foundExt.length > 0) {
+      const found = await db.select().from(media).where(eq(media.id, foundExt[0].mediaId)).limit(1);
+      if (found.length > 0) {
+        targetMedia = found[0];
+      }
+    }
+  }
+
+  if (!targetMedia) {
+    const [created] = await db
+      .insert(media)
+      .values({
+        type: mediaPayload.type || 'MOVIE',
+        title: mediaPayload.title || 'Без названия',
+        originalTitle: mediaPayload.originalTitle || null,
+        description: mediaPayload.description || null,
+        posterUrl: mediaPayload.posterUrl || null,
+        backdropUrl: mediaPayload.backdropUrl || null,
+        releaseDate: mediaPayload.releaseDate || null,
+        year: mediaPayload.year || null,
+        rating: mediaPayload.rating || null,
+        totalEpisodes: mediaPayload.totalEpisodes || 0,
+      })
+      .returning();
+
+    targetMedia = created;
+
+    if (mediaPayload.provider && mediaPayload.externalId) {
+      await db.insert(mediaExternalIds).values({
+        mediaId: targetMedia.id,
+        provider: mediaPayload.provider,
+        externalId: String(mediaPayload.externalId),
+      });
+    }
+  }
+
+  return targetMedia;
+}
 
 // Ensure media exists in local DB, creating it from provider payload if necessary
 apiRouter.post('/media/ensure', async (req, res) => {
@@ -1096,56 +1210,7 @@ apiRouter.post('/media/ensure', async (req, res) => {
       return res.status(400).json({ error: 'Не указаны данные медиа' });
     }
 
-    let targetMedia: any = null;
-
-    if (mediaPayload.provider && mediaPayload.externalId) {
-      const foundExt = await db
-        .select()
-        .from(mediaExternalIds)
-        .where(
-          and(
-            eq(mediaExternalIds.provider, mediaPayload.provider),
-            eq(mediaExternalIds.externalId, String(mediaPayload.externalId))
-          )
-        )
-        .limit(1);
-
-      if (foundExt.length > 0) {
-        const found = await db.select().from(media).where(eq(media.id, foundExt[0].mediaId)).limit(1);
-        if (found.length > 0) {
-          targetMedia = found[0];
-        }
-      }
-    }
-
-    if (!targetMedia) {
-      const [created] = await db
-        .insert(media)
-        .values({
-          type: mediaPayload.type || 'MOVIE',
-          title: mediaPayload.title || 'Без названия',
-          originalTitle: mediaPayload.originalTitle || null,
-          description: mediaPayload.description || null,
-          posterUrl: mediaPayload.posterUrl || null,
-          backdropUrl: mediaPayload.backdropUrl || null,
-          releaseDate: mediaPayload.releaseDate || null,
-          year: mediaPayload.year || null,
-          rating: mediaPayload.rating || null,
-          totalEpisodes: mediaPayload.totalEpisodes || 0,
-        })
-        .returning();
-
-      targetMedia = created;
-
-      if (mediaPayload.provider && mediaPayload.externalId) {
-        await db.insert(mediaExternalIds).values({
-          mediaId: targetMedia.id,
-          provider: mediaPayload.provider,
-          externalId: String(mediaPayload.externalId),
-        });
-      }
-    }
-
+    const targetMedia = await ensureMediaInDb(mediaPayload);
     res.json({ media: targetMedia });
   } catch (err: any) {
     console.error('Error ensuring media:', err);
@@ -1722,7 +1787,7 @@ apiRouter.post('/reviews/:id/like', requireAuth, async (req: AuthRequest, res: R
         sendAppNotification(reviewItem.userId, {
           type: 'LIKE',
           title: 'Новый лайк',
-          content: `@${user.username} оценил(а) вашу рецензию`,
+          body: `@${user.username} оценил(а) вашу рецензию`,
           link: `/media/any/${reviewItem.mediaId}`,
         });
       }
@@ -2209,7 +2274,7 @@ apiRouter.post('/friends/request', requireAuth, async (req: AuthRequest, res: Re
     await sendAppNotification(targetUser.id, {
       type: 'FRIEND_REQUEST',
       title: 'Новая заявка в друзья',
-      content: `@${user.username} отправил(а) вам заявку в друзья`,
+      body: `@${user.username} отправил(а) вам заявку в друзья`,
       link: '/friends',
     });
 
@@ -2250,7 +2315,7 @@ apiRouter.put('/friends/request/:id', requireAuth, async (req: AuthRequest, res:
       await sendAppNotification(reqFound[0].senderId, {
         type: 'FRIEND_ACCEPTED',
         title: 'Заявка принята',
-        content: `@${user.username} принял(а) вашу заявку в друзья`,
+        body: `@${user.username} принял(а) вашу заявку в друзья`,
         link: `/u/${user.username}`,
       });
     }
@@ -2264,6 +2329,36 @@ apiRouter.put('/friends/request/:id', requireAuth, async (req: AuthRequest, res:
 // ==========================================
 // 6. PUBLIC PROFILES & TASTE COMPARISON
 // ==========================================
+
+// Search users for collaborators or friends
+apiRouter.get('/users/search', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q || q.length < 1) {
+      return res.json([]);
+    }
+
+    const matchedUsers = await db
+      .select({
+        id: users.id,
+        username: users.username,
+        avatar: users.avatar,
+        bio: users.bio,
+      })
+      .from(users)
+      .where(
+        and(
+          sql`LOWER(${users.username}) LIKE ${'%' + q.toLowerCase() + '%'}`,
+          eq(users.isBlocked, false)
+        )
+      )
+      .limit(20);
+
+    res.json(matchedUsers);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 apiRouter.get('/users/:username', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -2743,13 +2838,16 @@ apiRouter.get('/lists', optionalAuth, async (req: AuthRequest, res: Response) =>
 apiRouter.post('/lists', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
-    const { title, description, cover, visibility, category } = req.body;
+    const { title, description, cover, visibility, category, members } = req.body;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Название списка обязательно' });
     }
 
-    const listCategory = category || 'MOVIE';
+    const validCategories = ['MOVIES_TV', 'GAMES', 'ANIME', 'MANGA', 'BOOKS', 'COMICS'];
+    const listCategory = validCategories.includes(category) ? category : 'MOVIES_TV';
+    const validVisibilities = ['PUBLIC', 'FRIENDS', 'PRIVATE'];
+    const listVisibility = validVisibilities.includes(visibility) ? visibility : 'PUBLIC';
 
     const [newList] = await db
       .insert(lists)
@@ -2757,7 +2855,7 @@ apiRouter.post('/lists', requireAuth, async (req: AuthRequest, res: Response) =>
         title: title.trim(),
         description: description ? description.trim() : null,
         cover: cover || null,
-        visibility: visibility || 'PUBLIC',
+        visibility: listVisibility,
         category: listCategory,
         ownerId: user.id,
       })
@@ -2769,6 +2867,35 @@ apiRouter.post('/lists', requireAuth, async (req: AuthRequest, res: Response) =>
       userId: user.id,
       role: 'OWNER',
     });
+
+    // Add initial collaborators if provided
+    if (Array.isArray(members) && members.length > 0) {
+      const addedUserIds = new Set<number>();
+      for (const m of members) {
+        const uId = Number(m.userId);
+        if (!uId || isNaN(uId) || uId === user.id || addedUserIds.has(uId)) {
+          continue;
+        }
+        addedUserIds.add(uId);
+
+        const [userExists] = await db.select({ id: users.id }).from(users).where(eq(users.id, uId)).limit(1);
+        if (userExists) {
+          const role = m.role === 'VIEWER' ? 'VIEWER' : 'EDITOR';
+          await db.insert(listMembers).values({
+            listId: newList.id,
+            userId: uId,
+            role,
+          }).catch(() => {});
+
+          await sendAppNotification(uId, {
+            type: 'LIST_INVITE',
+            title: 'Приглашение в совместный список',
+            body: `${user.username} добавил вас в список «${newList.title}» как ${role === 'EDITOR' ? 'редактора' : 'читателя'}.`,
+            link: `/lists/${newList.id}`,
+          });
+        }
+      }
+    }
 
     res.json(newList);
   } catch (err: any) {
@@ -3011,6 +3138,10 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
   try {
     const user = req.dbUser;
     const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Некорректный ID списка' });
+    }
+
     const found = await db
       .select({
         id: lists.id,
@@ -3035,41 +3166,7 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
 
     const list = found[0];
 
-    // Check visibility
-    if (list.visibility === 'PRIVATE' && (!user || user.id !== list.ownerId)) {
-      const isMember = user
-        ? (await db
-            .select()
-            .from(listMembers)
-            .where(and(eq(listMembers.listId, id), eq(listMembers.userId, user.id)))
-            .limit(1)).length > 0
-        : false;
-      if (!isMember) {
-        return res.status(403).json({ error: 'Этот список является приватным' });
-      }
-    }
-
-    // Fetch items
-    const items = await db
-      .select({
-        id: listItems.id,
-        orderIndex: listItems.orderIndex,
-        notes: listItems.notes,
-        mediaId: media.id,
-        title: media.title,
-        originalTitle: media.originalTitle,
-        type: media.type,
-        posterUrl: media.posterUrl,
-        year: media.year,
-        rating: media.rating,
-        description: media.description,
-      })
-      .from(listItems)
-      .innerJoin(media, eq(listItems.mediaId, media.id))
-      .where(eq(listItems.listId, id))
-      .orderBy(listItems.orderIndex);
-
-    // Fetch members
+    // Fetch members first to check membership
     const members = await db
       .select({
         id: listMembers.id,
@@ -3082,6 +3179,64 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
       .from(listMembers)
       .innerJoin(users, eq(listMembers.userId, users.id))
       .where(eq(listMembers.listId, id));
+
+    const isMember = user ? members.some((m) => m.userId === user.id) : false;
+    const isOwner = user ? (user.id === list.ownerId || user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') : false;
+
+    // Check visibility permissions
+    if (list.visibility === 'PRIVATE') {
+      if (!isOwner && !isMember) {
+        return res.status(403).json({ error: 'Этот список является приватным' });
+      }
+    } else if (list.visibility === 'FRIENDS') {
+      if (!isOwner && !isMember) {
+        let isFriend = false;
+        if (user) {
+          const reqs = await db
+            .select()
+            .from(friendRequests)
+            .where(
+              and(
+                or(
+                  and(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, list.ownerId)),
+                  and(eq(friendRequests.senderId, list.ownerId), eq(friendRequests.receiverId, user.id))
+                ),
+                eq(friendRequests.status, 'ACCEPTED')
+              )
+            )
+            .limit(1);
+          isFriend = reqs.length > 0;
+        }
+        if (!isFriend) {
+          return res.status(403).json({ error: 'Этот список доступен только автору и его друзьям' });
+        }
+      }
+    }
+
+    // Fetch items with media and addedBy user details
+    const rawItems = await db
+      .select({
+        id: listItems.id,
+        orderIndex: listItems.orderIndex,
+        notes: listItems.notes,
+        addedById: listItems.addedById,
+        createdAt: listItems.createdAt,
+        mediaId: media.id,
+        title: media.title,
+        originalTitle: media.originalTitle,
+        type: media.type,
+        posterUrl: media.posterUrl,
+        year: media.year,
+        rating: media.rating,
+        description: media.description,
+        addedByUsername: users.username,
+        addedByAvatar: users.avatar,
+      })
+      .from(listItems)
+      .innerJoin(media, eq(listItems.mediaId, media.id))
+      .leftJoin(users, eq(listItems.addedById, users.id))
+      .where(eq(listItems.listId, id))
+      .orderBy(listItems.orderIndex, listItems.id);
 
     // Determine current user's role
     let userRole: 'OWNER' | 'EDITOR' | 'VIEWER' | null = null;
@@ -3111,6 +3266,8 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
       isLiked = likeRow.length > 0;
     }
 
+    const canEdit = userRole === 'OWNER' || userRole === 'EDITOR' || (user ? (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') : false);
+
     const followersCount = await db
       .select({ count: sql<number>`count(*)` })
       .from(listFollowers)
@@ -3123,9 +3280,11 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
 
     res.json({
       ...list,
-      items,
+      items: rawItems,
       members,
       userRole,
+      isOwner: user?.id === list.ownerId,
+      canEdit,
       isFollowed,
       followersCount: Number(followersCount[0]?.count || 0),
       isLiked,
@@ -3136,7 +3295,7 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
   }
 });
 
-// Update list
+// Update list settings (OWNER ONLY)
 apiRouter.put('/lists/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
@@ -3148,17 +3307,13 @@ apiRouter.put('/lists/:id', requireAuth, async (req: AuthRequest, res: Response)
       return res.status(404).json({ error: 'Список не найден' });
     }
 
-    // Must be OWNER or EDITOR
-    if (targetList.ownerId !== user.id) {
-      const member = await db
-        .select()
-        .from(listMembers)
-        .where(and(eq(listMembers.listId, id), eq(listMembers.userId, user.id)))
-        .limit(1);
-      if (member.length === 0 || member[0].role === 'VIEWER') {
-        return res.status(403).json({ error: 'Нет прав на редактирование списка' });
-      }
+    // Strictly OWNER or system ADMIN
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Только владелец может изменять настройки списка' });
     }
+
+    const validCategories = ['MOVIES_TV', 'GAMES', 'ANIME', 'MANGA', 'BOOKS', 'COMICS'];
+    const validVisibilities = ['PUBLIC', 'FRIENDS', 'PRIVATE'];
 
     const [updated] = await db
       .update(lists)
@@ -3166,8 +3321,8 @@ apiRouter.put('/lists/:id', requireAuth, async (req: AuthRequest, res: Response)
         title: title ? title.trim() : targetList.title,
         description: description !== undefined ? (description ? description.trim() : null) : targetList.description,
         cover: cover !== undefined ? cover : targetList.cover,
-        visibility: visibility || targetList.visibility,
-        category: category || targetList.category,
+        visibility: visibility && validVisibilities.includes(visibility) ? visibility : targetList.visibility,
+        category: category && validCategories.includes(category) ? category : targetList.category,
         updatedAt: new Date(),
       })
       .where(eq(lists.id, id))
@@ -3179,7 +3334,44 @@ apiRouter.put('/lists/:id', requireAuth, async (req: AuthRequest, res: Response)
   }
 });
 
-// Delete list
+apiRouter.patch('/lists/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const id = parseInt(req.params.id, 10);
+    const { title, description, cover, visibility, category } = req.body;
+
+    const [targetList] = await db.select().from(lists).where(eq(lists.id, id)).limit(1);
+    if (!targetList) {
+      return res.status(404).json({ error: 'Список не найден' });
+    }
+
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Только владелец может изменять настройки списка' });
+    }
+
+    const validCategories = ['MOVIES_TV', 'GAMES', 'ANIME', 'MANGA', 'BOOKS', 'COMICS'];
+    const validVisibilities = ['PUBLIC', 'FRIENDS', 'PRIVATE'];
+
+    const [updated] = await db
+      .update(lists)
+      .set({
+        title: title ? title.trim() : targetList.title,
+        description: description !== undefined ? (description ? description.trim() : null) : targetList.description,
+        cover: cover !== undefined ? cover : targetList.cover,
+        visibility: visibility && validVisibilities.includes(visibility) ? visibility : targetList.visibility,
+        category: category && validCategories.includes(category) ? category : targetList.category,
+        updatedAt: new Date(),
+      })
+      .where(eq(lists.id, id))
+      .returning();
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete list (OWNER ONLY)
 apiRouter.delete('/lists/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
@@ -3191,7 +3383,7 @@ apiRouter.delete('/lists/:id', requireAuth, async (req: AuthRequest, res: Respon
     }
 
     if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Только создатель может удалить список' });
+      return res.status(403).json({ error: 'Только владелец может удалить список' });
     }
 
     await db.delete(lists).where(eq(lists.id, id));
@@ -3201,20 +3393,73 @@ apiRouter.delete('/lists/:id', requireAuth, async (req: AuthRequest, res: Respon
   }
 });
 
-// Add item with Category Locking
+// Get items of a list
+apiRouter.get('/lists/:id/items', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser;
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Некорректный ID списка' });
+    }
+
+    const [targetList] = await db.select().from(lists).where(eq(lists.id, id)).limit(1);
+    if (!targetList) {
+      return res.status(404).json({ error: 'Список не найден' });
+    }
+
+    // Visibility check
+    if (targetList.visibility === 'PRIVATE') {
+      const isOwner = user ? (user.id === targetList.ownerId || user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') : false;
+      const isMember = user ? (await db.select().from(listMembers).where(and(eq(listMembers.listId, id), eq(listMembers.userId, user.id))).limit(1)).length > 0 : false;
+      if (!isOwner && !isMember) {
+        return res.status(403).json({ error: 'Этот список является приватным' });
+      }
+    }
+
+    const items = await db
+      .select({
+        id: listItems.id,
+        orderIndex: listItems.orderIndex,
+        notes: listItems.notes,
+        addedById: listItems.addedById,
+        createdAt: listItems.createdAt,
+        mediaId: media.id,
+        title: media.title,
+        originalTitle: media.originalTitle,
+        type: media.type,
+        posterUrl: media.posterUrl,
+        year: media.year,
+        rating: media.rating,
+        description: media.description,
+        addedByUsername: users.username,
+        addedByAvatar: users.avatar,
+      })
+      .from(listItems)
+      .innerJoin(media, eq(listItems.mediaId, media.id))
+      .leftJoin(users, eq(listItems.addedById, users.id))
+      .where(eq(listItems.listId, id))
+      .orderBy(listItems.orderIndex, listItems.id);
+
+    res.json(items);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add item with Category Locking & Permission enforcement
 apiRouter.post('/lists/:id/items', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
     const listId = parseInt(req.params.id, 10);
-    const { mediaId, notes } = req.body;
+    const { mediaId, mediaPayload, notes } = req.body;
 
     const [targetList] = await db.select().from(lists).where(eq(lists.id, listId)).limit(1);
     if (!targetList) {
       return res.status(404).json({ error: 'Список не найден' });
     }
 
-    // Check membership
-    if (targetList.ownerId !== user.id) {
+    // Check membership & role (OWNER or EDITOR only)
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
       const member = await db
         .select()
         .from(listMembers)
@@ -3222,20 +3467,67 @@ apiRouter.post('/lists/:id/items', requireAuth, async (req: AuthRequest, res: Re
         .limit(1);
 
       if (member.length === 0 || member[0].role === 'VIEWER') {
-        return res.status(403).json({ error: 'Нет прав на добавление в этот список' });
+        return res.status(403).json({ error: 'У вас нет прав на добавление тайтлов в этот список' });
       }
     }
 
-    // Enforce Category Locking
-    const [mediaRow] = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
-    if (!mediaRow) {
-      return res.status(404).json({ error: 'Медиа не найдено' });
+    // Resolve mediaId if mediaPayload provided
+    let resolvedMediaId = mediaId ? Number(mediaId) : undefined;
+    if ((!resolvedMediaId || isNaN(resolvedMediaId)) && mediaPayload) {
+      resolvedMediaId = (await ensureMediaRecord(undefined, mediaPayload)) || undefined;
+    } else if (resolvedMediaId && mediaPayload) {
+      resolvedMediaId = (await ensureMediaRecord(resolvedMediaId, mediaPayload)) || resolvedMediaId;
     }
 
-    if (targetList.category && mediaRow.type !== targetList.category) {
-      return res.status(400).json({
-        error: `В этот список можно добавлять только контент категории "${targetList.category}". Выбранный элемент имеет категорию "${mediaRow.type}".`,
-      });
+    if (!resolvedMediaId) {
+      return res.status(400).json({ error: 'Не указан тайтл для добавления' });
+    }
+
+    // Enforce Category Locking
+    const [mediaRow] = await db.select().from(media).where(eq(media.id, resolvedMediaId)).limit(1);
+    if (!mediaRow) {
+      return res.status(404).json({ error: 'Тайтл не найден в базе данных' });
+    }
+
+    if (targetList.category) {
+      let allowed = false;
+      switch (targetList.category) {
+        case 'MOVIES_TV':
+          allowed = mediaRow.type === 'MOVIE' || mediaRow.type === 'TV';
+          break;
+        case 'GAMES':
+          allowed = mediaRow.type === 'GAME';
+          break;
+        case 'ANIME':
+          allowed = mediaRow.type === 'ANIME';
+          break;
+        case 'MANGA':
+          allowed = mediaRow.type === 'MANGA';
+          break;
+        case 'BOOKS':
+          allowed = mediaRow.type === 'BOOK';
+          break;
+        case 'COMICS':
+          allowed = mediaRow.type === 'COMIC';
+          break;
+      }
+
+      if (!allowed) {
+        return res.status(400).json({
+          error: `В этот список нельзя добавить контент категории «${mediaRow.type}». Категория списка: ${targetList.category}.`,
+        });
+      }
+    }
+
+    // Check if already in list
+    const existing = await db
+      .select()
+      .from(listItems)
+      .where(and(eq(listItems.listId, listId), eq(listItems.mediaId, resolvedMediaId)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'Тайтл уже добавлен в этот список' });
     }
 
     const currentItems = await db
@@ -3248,44 +3540,56 @@ apiRouter.post('/lists/:id/items', requireAuth, async (req: AuthRequest, res: Re
       .insert(listItems)
       .values({
         listId,
-        mediaId,
-        notes: notes || null,
+        mediaId: resolvedMediaId,
+        notes: notes ? notes.trim() : null,
         orderIndex: nextOrder,
+        addedById: user.id,
       })
       .returning();
 
-    res.json(item);
+    res.json({
+      ...item,
+      media: mediaRow,
+      addedByUsername: user.username,
+      addedByAvatar: user.avatar,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Remove item from list
+// Remove item from list (OWNER or EDITOR only)
 apiRouter.delete('/lists/:id/items/:mediaId', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
     const listId = parseInt(req.params.id, 10);
-    const mediaId = parseInt(req.params.mediaId, 10);
+    const targetParam = parseInt(req.params.mediaId, 10);
 
     const [targetList] = await db.select().from(lists).where(eq(lists.id, listId)).limit(1);
     if (!targetList) {
       return res.status(404).json({ error: 'Список не найден' });
     }
 
-    if (targetList.ownerId !== user.id) {
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
       const member = await db
         .select()
         .from(listMembers)
         .where(and(eq(listMembers.listId, listId), eq(listMembers.userId, user.id)))
         .limit(1);
       if (member.length === 0 || member[0].role === 'VIEWER') {
-        return res.status(403).json({ error: 'Нет прав на изменение этого списка' });
+        return res.status(403).json({ error: 'У вас нет прав на удаление элементов из этого списка' });
       }
     }
 
+    // Match either by mediaId or by itemId
     await db
       .delete(listItems)
-      .where(and(eq(listItems.listId, listId), eq(listItems.mediaId, mediaId)));
+      .where(
+        and(
+          eq(listItems.listId, listId),
+          or(eq(listItems.mediaId, targetParam), eq(listItems.id, targetParam))
+        )
+      );
 
     res.json({ success: true });
   } catch (err: any) {
@@ -3293,41 +3597,105 @@ apiRouter.delete('/lists/:id/items/:mediaId', requireAuth, async (req: AuthReque
   }
 });
 
-// Reorder items in list (Requirement: drag and drop reordering)
+// Reorder items in list (OWNER or EDITOR only)
 apiRouter.put('/lists/:id/reorder', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
     const listId = parseInt(req.params.id, 10);
-    const { items } = req.body; // Array of { id: listItemId, orderIndex: number }
-
-    if (!Array.isArray(items)) {
-      return res.status(400).json({ error: 'items должен быть массивом' });
-    }
+    const { items, itemIds, mediaIds } = req.body;
 
     const [targetList] = await db.select().from(lists).where(eq(lists.id, listId)).limit(1);
     if (!targetList) {
       return res.status(404).json({ error: 'Список не найден' });
     }
 
-    if (targetList.ownerId !== user.id) {
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
       const member = await db
         .select()
         .from(listMembers)
         .where(and(eq(listMembers.listId, listId), eq(listMembers.userId, user.id)))
         .limit(1);
       if (member.length === 0 || member[0].role === 'VIEWER') {
-        return res.status(403).json({ error: 'Нет прав на изменение порядка' });
+        return res.status(403).json({ error: 'У вас нет прав на изменение порядка' });
       }
     }
 
-    await Promise.all(
-      items.map((item: { id: number; orderIndex: number }) =>
-        db
-          .update(listItems)
-          .set({ orderIndex: item.orderIndex })
-          .where(and(eq(listItems.id, item.id), eq(listItems.listId, listId)))
-      )
-    );
+    if (Array.isArray(items)) {
+      await Promise.all(
+        items.map((item: { id: number; orderIndex: number }) =>
+          db
+            .update(listItems)
+            .set({ orderIndex: item.orderIndex })
+            .where(and(eq(listItems.id, item.id), eq(listItems.listId, listId)))
+        )
+      );
+    } else if (Array.isArray(itemIds)) {
+      await Promise.all(
+        itemIds.map((itemId: number, idx: number) =>
+          db
+            .update(listItems)
+            .set({ orderIndex: idx })
+            .where(and(eq(listItems.id, itemId), eq(listItems.listId, listId)))
+        )
+      );
+    } else if (Array.isArray(mediaIds)) {
+      await Promise.all(
+        mediaIds.map((mId: number, idx: number) =>
+          db
+            .update(listItems)
+            .set({ orderIndex: idx })
+            .where(and(eq(listItems.mediaId, mId), eq(listItems.listId, listId)))
+        )
+      );
+    }
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.patch('/lists/:id/items/reorder', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const listId = parseInt(req.params.id, 10);
+    const { items, itemIds, mediaIds } = req.body;
+
+    const [targetList] = await db.select().from(lists).where(eq(lists.id, listId)).limit(1);
+    if (!targetList) {
+      return res.status(404).json({ error: 'Список не найден' });
+    }
+
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+      const member = await db
+        .select()
+        .from(listMembers)
+        .where(and(eq(listMembers.listId, listId), eq(listMembers.userId, user.id)))
+        .limit(1);
+      if (member.length === 0 || member[0].role === 'VIEWER') {
+        return res.status(403).json({ error: 'У вас нет прав на изменение порядка' });
+      }
+    }
+
+    if (Array.isArray(items)) {
+      await Promise.all(
+        items.map((item: { id: number; orderIndex: number }) =>
+          db
+            .update(listItems)
+            .set({ orderIndex: item.orderIndex })
+            .where(and(eq(listItems.id, item.id), eq(listItems.listId, listId)))
+        )
+      );
+    } else if (Array.isArray(itemIds)) {
+      await Promise.all(
+        itemIds.map((itemId: number, idx: number) =>
+          db
+            .update(listItems)
+            .set({ orderIndex: idx })
+            .where(and(eq(listItems.id, itemId), eq(listItems.listId, listId)))
+        )
+      );
+    }
 
     res.json({ success: true });
   } catch (err: any) {
@@ -3358,7 +3726,7 @@ apiRouter.get('/lists/:id/members', optionalAuth, async (req: AuthRequest, res: 
   }
 });
 
-// Add member to collaborative list
+// Add member to collaborative list (OWNER ONLY)
 apiRouter.post('/lists/:id/members', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
@@ -3370,11 +3738,21 @@ apiRouter.post('/lists/:id/members', requireAuth, async (req: AuthRequest, res: 
       return res.status(404).json({ error: 'Список не найден' });
     }
 
-    if (targetList.ownerId !== user.id) {
-      return res.status(403).json({ error: 'Только создатель списка может добавлять соавторов' });
+    // Only OWNER or ADMIN
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Только создатель списка может добавлять участников' });
     }
 
-    const [targetUser] = await db.select().from(users).where(eq(users.id, Number(userId))).limit(1);
+    const targetUserId = Number(userId);
+    if (!targetUserId || isNaN(targetUserId)) {
+      return res.status(400).json({ error: 'Некорректный ID пользователя' });
+    }
+
+    if (targetUserId === targetList.ownerId) {
+      return res.status(400).json({ error: 'Владелец уже является участником списка' });
+    }
+
+    const [targetUser] = await db.select().from(users).where(eq(users.id, targetUserId)).limit(1);
     if (!targetUser) {
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
@@ -3383,41 +3761,130 @@ apiRouter.post('/lists/:id/members', requireAuth, async (req: AuthRequest, res: 
     const existing = await db
       .select()
       .from(listMembers)
-      .where(and(eq(listMembers.listId, listId), eq(listMembers.userId, Number(userId))))
+      .where(and(eq(listMembers.listId, listId), eq(listMembers.userId, targetUserId)))
       .limit(1);
+
+    const validRole = role === 'VIEWER' ? 'VIEWER' : 'EDITOR';
 
     if (existing.length > 0) {
       const [updated] = await db
         .update(listMembers)
-        .set({ role })
+        .set({ role: validRole })
         .where(eq(listMembers.id, existing[0].id))
         .returning();
-      return res.json(updated);
+
+      return res.json({
+        ...updated,
+        username: targetUser.username,
+        avatar: targetUser.avatar,
+      });
     }
 
     const [member] = await db
       .insert(listMembers)
       .values({
         listId,
-        userId: Number(userId),
-        role,
+        userId: targetUserId,
+        role: validRole,
       })
       .returning();
 
-    await sendAppNotification(Number(userId), {
+    await sendAppNotification(targetUserId, {
       type: 'LIST_INVITE',
       title: 'Приглашение в совместный список',
-      content: `${user.username} пригласил вас в список "${targetList.title}" как ${role === 'EDITOR' ? 'редактора' : 'зрителя'}.`,
+      body: `${user.username} добавил вас в список «${targetList.title}» как ${validRole === 'EDITOR' ? 'редактора' : 'читателя'}.`,
       link: `/lists/${listId}`,
     });
 
-    res.json(member);
+    res.json({
+      ...member,
+      username: targetUser.username,
+      avatar: targetUser.avatar,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Remove member from collaborative list
+// Change member role (OWNER ONLY)
+apiRouter.patch('/lists/:id/members/:userId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const listId = parseInt(req.params.id, 10);
+    const targetUserId = parseInt(req.params.userId, 10);
+    const { role } = req.body;
+
+    const [targetList] = await db.select().from(lists).where(eq(lists.id, listId)).limit(1);
+    if (!targetList) {
+      return res.status(404).json({ error: 'Список не найден' });
+    }
+
+    // Only OWNER can change roles
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Только создатель списка может изменять роли участников' });
+    }
+
+    if (targetUserId === targetList.ownerId) {
+      return res.status(400).json({ error: 'Нельзя изменить роль владельца списка' });
+    }
+
+    const validRole = role === 'VIEWER' ? 'VIEWER' : 'EDITOR';
+
+    const [updated] = await db
+      .update(listMembers)
+      .set({ role: validRole })
+      .where(and(eq(listMembers.listId, listId), eq(listMembers.userId, targetUserId)))
+      .returning();
+
+    if (!updated) {
+      return res.status(404).json({ error: 'Участник не найден в списке' });
+    }
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.put('/lists/:id/members/:userId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const listId = parseInt(req.params.id, 10);
+    const targetUserId = parseInt(req.params.userId, 10);
+    const { role } = req.body;
+
+    const [targetList] = await db.select().from(lists).where(eq(lists.id, listId)).limit(1);
+    if (!targetList) {
+      return res.status(404).json({ error: 'Список не найден' });
+    }
+
+    if (targetList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Только создатель списка может изменять роли участников' });
+    }
+
+    if (targetUserId === targetList.ownerId) {
+      return res.status(400).json({ error: 'Нельзя изменить роль владельца списка' });
+    }
+
+    const validRole = role === 'VIEWER' ? 'VIEWER' : 'EDITOR';
+
+    const [updated] = await db
+      .update(listMembers)
+      .set({ role: validRole })
+      .where(and(eq(listMembers.listId, listId), eq(listMembers.userId, targetUserId)))
+      .returning();
+
+    if (!updated) {
+      return res.status(404).json({ error: 'Участник не найден в списке' });
+    }
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove member from collaborative list (OWNER or SELF)
 apiRouter.delete('/lists/:id/members/:userId', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
@@ -3429,8 +3896,12 @@ apiRouter.delete('/lists/:id/members/:userId', requireAuth, async (req: AuthRequ
       return res.status(404).json({ error: 'Список не найден' });
     }
 
+    if (targetUserId === targetList.ownerId) {
+      return res.status(400).json({ error: 'Нельзя удалить владельца списка' });
+    }
+
     // Can only be removed by list owner OR if user is leaving the list themselves
-    if (targetList.ownerId !== user.id && user.id !== targetUserId) {
+    if (targetList.ownerId !== user.id && user.id !== targetUserId && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
       return res.status(403).json({ error: 'Нет прав на удаление участника' });
     }
 
@@ -3476,7 +3947,7 @@ apiRouter.post('/lists/:id/follow', requireAuth, async (req: AuthRequest, res: R
         await sendAppNotification(targetList.ownerId, {
           type: 'LIST_FOLLOW',
           title: 'Новый подписчик на список',
-          content: `${user.username} подписался на ваш список "${targetList.title}".`,
+          body: `${user.username} подписался на ваш список "${targetList.title}".`,
           link: `/lists/${listId}`,
         });
       }
@@ -3585,7 +4056,7 @@ apiRouter.post('/lists/:id/comments', requireAuth, async (req: AuthRequest, res:
       await sendAppNotification(targetList.ownerId, {
         type: 'LIST_COMMENT',
         title: 'Новый комментарий к списку',
-        content: `${user.username} прокомментировал ваш список "${targetList.title}".`,
+        body: `${user.username} прокомментировал ваш список "${targetList.title}".`,
         link: `/lists/${listId}`,
       });
     }
@@ -3604,8 +4075,135 @@ apiRouter.post('/lists/:id/comments', requireAuth, async (req: AuthRequest, res:
 // 8. TIER LISTS
 // ==========================================
 
+export function isMediaAllowedForTierCategory(mediaType: string, category?: string | null): boolean {
+  if (!category || category === 'ALL') return true;
+  const normalized = category.toUpperCase();
+  if (normalized === 'MOVIES_TV' || normalized === 'MOVIE_TV' || normalized === 'FILMS_SERIES') {
+    return mediaType === 'MOVIE' || mediaType === 'TV';
+  }
+  if (normalized === 'GAME' || normalized === 'GAMES') {
+    return mediaType === 'GAME';
+  }
+  if (normalized === 'ANIME') {
+    return mediaType === 'ANIME';
+  }
+  if (normalized === 'MANGA') {
+    return mediaType === 'MANGA';
+  }
+  if (normalized === 'BOOK' || normalized === 'BOOKS') {
+    return mediaType === 'BOOK';
+  }
+  if (normalized === 'COMIC' || normalized === 'COMICS') {
+    return mediaType === 'COMIC';
+  }
+  if (normalized === 'MOVIE') return mediaType === 'MOVIE';
+  if (normalized === 'TV') return mediaType === 'TV';
+  return mediaType === normalized;
+}
+
+// Get public tier lists (with optional category filter)
 apiRouter.get('/tier-lists', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
+    const user = req.dbUser;
+    const categoryParam = req.query.category ? String(req.query.category).toUpperCase() : undefined;
+
+    let query = db
+      .select({
+        id: tierLists.id,
+        title: tierLists.title,
+        description: tierLists.description,
+        category: tierLists.category,
+        visibility: tierLists.visibility,
+        tiersJson: tierLists.tiersJson,
+        itemsJson: tierLists.itemsJson,
+        createdAt: tierLists.createdAt,
+        updatedAt: tierLists.updatedAt,
+        ownerId: users.id,
+        ownerUsername: users.username,
+        ownerAvatar: users.avatar,
+      })
+      .from(tierLists)
+      .innerJoin(users, eq(tierLists.ownerId, users.id));
+
+    const conditions: any[] = [];
+
+    // Filter by category if supplied and not ALL
+    if (categoryParam && categoryParam !== 'ALL') {
+      if (categoryParam === 'GAME' || categoryParam === 'GAMES') {
+        conditions.push(or(eq(tierLists.category, 'GAME'), eq(tierLists.category, 'GAMES')));
+      } else if (categoryParam === 'BOOK' || categoryParam === 'BOOKS') {
+        conditions.push(or(eq(tierLists.category, 'BOOK'), eq(tierLists.category, 'BOOKS')));
+      } else if (categoryParam === 'COMIC' || categoryParam === 'COMICS') {
+        conditions.push(or(eq(tierLists.category, 'COMIC'), eq(tierLists.category, 'COMICS')));
+      } else {
+        conditions.push(eq(tierLists.category, categoryParam));
+      }
+    }
+
+    // Visibility filter: if not logged in, only public; if logged in, public or own
+    if (!user) {
+      conditions.push(eq(tierLists.visibility, 'PUBLIC'));
+    } else {
+      conditions.push(or(eq(tierLists.visibility, 'PUBLIC'), eq(tierLists.ownerId, user.id)));
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+
+    const rows = await query.orderBy(desc(tierLists.createdAt)).limit(50);
+
+    // Resolve preview posters for each tier list
+    const allMediaIds = new Set<number>();
+    rows.forEach((row) => {
+      try {
+        const parsed = JSON.parse(row.itemsJson || '[]');
+        parsed.slice(0, 8).forEach((item: any) => {
+          const mId = item.id || item.mediaId;
+          if (mId) allMediaIds.add(Number(mId));
+        });
+      } catch (_e) {}
+    });
+
+    const mediaMap = new Map<number, any>();
+    if (allMediaIds.size > 0) {
+      const mediaList = await db.select().from(media).where(inArray(media.id, Array.from(allMediaIds)));
+      mediaList.forEach((m) => mediaMap.set(m.id, m));
+    }
+
+    const formatted = rows.map((row) => {
+      let parsedItems: any[] = [];
+      try {
+        parsedItems = JSON.parse(row.itemsJson || '[]');
+      } catch (_e) {}
+
+      const previewPosters = parsedItems
+        .slice(0, 6)
+        .map((it: any) => {
+          const mId = it.id || it.mediaId;
+          const mObj = mediaMap.get(mId);
+          return it.posterUrl || mObj?.posterUrl || null;
+        })
+        .filter(Boolean);
+
+      return {
+        ...row,
+        itemCount: parsedItems.length,
+        previewPosters,
+      };
+    });
+
+    res.json(formatted);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get user's own tier lists
+apiRouter.get('/tier-lists/my', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+
     const rows = await db
       .select({
         id: tierLists.id,
@@ -3616,51 +4214,93 @@ apiRouter.get('/tier-lists', optionalAuth, async (req: AuthRequest, res: Respons
         tiersJson: tierLists.tiersJson,
         itemsJson: tierLists.itemsJson,
         createdAt: tierLists.createdAt,
+        updatedAt: tierLists.updatedAt,
         ownerId: users.id,
         ownerUsername: users.username,
         ownerAvatar: users.avatar,
       })
       .from(tierLists)
       .innerJoin(users, eq(tierLists.ownerId, users.id))
-      .where(eq(tierLists.visibility, 'PUBLIC'))
-      .orderBy(desc(tierLists.createdAt))
-      .limit(20);
+      .where(eq(tierLists.ownerId, user.id))
+      .orderBy(desc(tierLists.updatedAt), desc(tierLists.createdAt));
 
-    res.json(rows);
+    // Resolve preview posters
+    const allMediaIds = new Set<number>();
+    rows.forEach((row) => {
+      try {
+        const parsed = JSON.parse(row.itemsJson || '[]');
+        parsed.slice(0, 8).forEach((item: any) => {
+          const mId = item.id || item.mediaId;
+          if (mId) allMediaIds.add(Number(mId));
+        });
+      } catch (_e) {}
+    });
+
+    const mediaMap = new Map<number, any>();
+    if (allMediaIds.size > 0) {
+      const mediaList = await db.select().from(media).where(inArray(media.id, Array.from(allMediaIds)));
+      mediaList.forEach((m) => mediaMap.set(m.id, m));
+    }
+
+    const formatted = rows.map((row) => {
+      let parsedItems: any[] = [];
+      try {
+        parsedItems = JSON.parse(row.itemsJson || '[]');
+      } catch (_e) {}
+
+      const previewPosters = parsedItems
+        .slice(0, 6)
+        .map((it: any) => {
+          const mId = it.id || it.mediaId;
+          const mObj = mediaMap.get(mId);
+          return it.posterUrl || mObj?.posterUrl || null;
+        })
+        .filter(Boolean);
+
+      return {
+        ...row,
+        itemCount: parsedItems.length,
+        previewPosters,
+      };
+    });
+
+    res.json(formatted);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Create new tier list
 apiRouter.post('/tier-lists', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
     const { title, description, category, tiersJson, itemsJson, visibility } = req.body;
 
+    const normalizedCategory = category ? String(category).toUpperCase() : 'MOVIES_TV';
+
     const defaultTiers = JSON.stringify([
-      { id: 's', name: 'S', color: '#ef4444' },
-      { id: 'a', name: 'A', color: '#f97316' },
-      { id: 'b', name: 'B', color: '#eab308' },
-      { id: 'c', name: 'C', color: '#22c55e' },
-      { id: 'd', name: 'D', color: '#3b82f6' },
-      { id: 'f', name: 'F', color: '#6b7280' },
+      { id: 's', label: 'S', color: 'bg-red-600 text-white' },
+      { id: 'a', label: 'A', color: 'bg-orange-600 text-white' },
+      { id: 'b', label: 'B', color: 'bg-amber-500 text-black' },
+      { id: 'c', label: 'C', color: 'bg-emerald-600 text-white' },
+      { id: 'd', label: 'D', color: 'bg-blue-600 text-white' },
     ]);
 
     // Backend-enforced category locking validation
-    if (category && category !== 'ALL' && itemsJson) {
+    if (normalizedCategory && normalizedCategory !== 'ALL' && itemsJson) {
       try {
-        const parsed = JSON.parse(itemsJson);
-        const mediaIds = parsed.map((item: any) => item.mediaId).filter(Boolean);
+        const parsed = typeof itemsJson === 'string' ? JSON.parse(itemsJson) : itemsJson;
+        const mediaIds = parsed.map((item: any) => item.id || item.mediaId).filter(Boolean);
         if (mediaIds.length > 0) {
           const itemsInDb = await db
             .select({ id: media.id, type: media.type, title: media.title })
             .from(media)
             .where(inArray(media.id, mediaIds));
 
-          const invalid = itemsInDb.filter((m) => m.type !== category);
+          const invalid = itemsInDb.filter((m) => !isMediaAllowedForTierCategory(m.type, normalizedCategory));
           if (invalid.length > 0) {
             return res.status(400).json({
-              error: `В тир-лист категории "${category}" нельзя добавлять медиа другого типа ("${invalid[0].title}" — это ${invalid[0].type})`,
+              error: `В тир-лист категории "${normalizedCategory}" нельзя добавлять медиа другого типа ("${invalid[0].title}" — это ${invalid[0].type})`,
             });
           }
         }
@@ -3672,11 +4312,11 @@ apiRouter.post('/tier-lists', requireAuth, async (req: AuthRequest, res: Respons
     const [newTierList] = await db
       .insert(tierLists)
       .values({
-        title: title || 'Мой Tier List',
-        description,
-        category: category || 'ALL',
-        tiersJson: tiersJson || defaultTiers,
-        itemsJson: itemsJson || '[]',
+        title: title ? title.trim() : 'Мой Tier List',
+        description: description ? description.trim() : null,
+        category: normalizedCategory,
+        tiersJson: typeof tiersJson === 'string' ? tiersJson : tiersJson ? JSON.stringify(tiersJson) : defaultTiers,
+        itemsJson: typeof itemsJson === 'string' ? itemsJson : itemsJson ? JSON.stringify(itemsJson) : '[]',
         visibility: visibility || 'PUBLIC',
         ownerId: user.id,
       })
@@ -3688,6 +4328,7 @@ apiRouter.post('/tier-lists', requireAuth, async (req: AuthRequest, res: Respons
   }
 });
 
+// Update tier list
 apiRouter.put('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
@@ -3704,20 +4345,20 @@ apiRouter.put('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: Resp
       return res.status(404).json({ error: 'Тир-лист не найден или нет прав' });
     }
 
-    const targetCategory = category || existing[0].category;
+    const targetCategory = (category || existing[0].category || 'MOVIES_TV').toUpperCase();
 
     // Backend-enforced category locking validation
     if (targetCategory && targetCategory !== 'ALL' && itemsJson) {
       try {
-        const parsed = JSON.parse(itemsJson);
-        const mediaIds = parsed.map((item: any) => item.mediaId).filter(Boolean);
+        const parsed = typeof itemsJson === 'string' ? JSON.parse(itemsJson) : itemsJson;
+        const mediaIds = parsed.map((item: any) => item.id || item.mediaId).filter(Boolean);
         if (mediaIds.length > 0) {
           const itemsInDb = await db
             .select({ id: media.id, type: media.type, title: media.title })
             .from(media)
             .where(inArray(media.id, mediaIds));
 
-          const invalid = itemsInDb.filter((m) => m.type !== targetCategory);
+          const invalid = itemsInDb.filter((m) => !isMediaAllowedForTierCategory(m.type, targetCategory));
           if (invalid.length > 0) {
             return res.status(400).json({
               error: `В тир-лист категории "${targetCategory}" нельзя добавлять медиа другого типа ("${invalid[0].title}" — это ${invalid[0].type})`,
@@ -3732,12 +4373,12 @@ apiRouter.put('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: Resp
     const [updated] = await db
       .update(tierLists)
       .set({
-        title,
-        description,
+        title: title !== undefined ? title.trim() : existing[0].title,
+        description: description !== undefined ? (description ? description.trim() : null) : existing[0].description,
         category: targetCategory,
-        tiersJson,
-        itemsJson,
-        visibility,
+        tiersJson: tiersJson !== undefined ? (typeof tiersJson === 'string' ? tiersJson : JSON.stringify(tiersJson)) : existing[0].tiersJson,
+        itemsJson: itemsJson !== undefined ? (typeof itemsJson === 'string' ? itemsJson : JSON.stringify(itemsJson)) : existing[0].itemsJson,
+        visibility: visibility || existing[0].visibility,
         updatedAt: new Date(),
       })
       .where(and(eq(tierLists.id, id), eq(tierLists.ownerId, user.id)))
@@ -3749,9 +4390,129 @@ apiRouter.put('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: Resp
   }
 });
 
+// Delete tier list
+apiRouter.delete('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const id = parseInt(req.params.id, 10);
+
+    const existing = await db
+      .select()
+      .from(tierLists)
+      .where(eq(tierLists.id, id))
+      .limit(1);
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Тир-лист не найден' });
+    }
+
+    if (existing[0].ownerId !== user.id && user.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Нет прав на удаление этого тир-листа' });
+    }
+
+    await db.delete(tierLists).where(eq(tierLists.id, id));
+
+    res.json({ ok: true, message: 'Тир-лист успешно удален' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add media to tier list with backend validation
+apiRouter.post('/tier-lists/:id/add-media', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const id = parseInt(req.params.id, 10);
+    const { mediaId, tierId = 'unranked', mediaPayload } = req.body;
+
+    // 1. Tier list exists
+    const [tierList] = await db
+      .select()
+      .from(tierLists)
+      .where(eq(tierLists.id, id))
+      .limit(1);
+
+    if (!tierList) {
+      return res.status(404).json({ error: 'Тир-лист не найден' });
+    }
+
+    // 2. User has OWNER/ADMIN
+    if (tierList.ownerId !== user.id && user.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'У вас нет прав на редактирование этого тир-листа' });
+    }
+
+    // 3. Resolve / ensure media in DB
+    let targetMediaId = mediaId ? parseInt(String(mediaId), 10) : null;
+    let targetMedia: any = null;
+
+    if (targetMediaId) {
+      const [found] = await db.select().from(media).where(eq(media.id, targetMediaId)).limit(1);
+      targetMedia = found;
+    }
+
+    if (!targetMedia && mediaPayload) {
+      targetMedia = await ensureMediaInDb(mediaPayload);
+      targetMediaId = targetMedia.id;
+    }
+
+    if (!targetMedia || !targetMediaId) {
+      return res.status(404).json({ error: 'Медиа не найдено в базе данных' });
+    }
+
+    // 4. Media matches Tier List category
+    if (!isMediaAllowedForTierCategory(targetMedia.type, tierList.category)) {
+      return res.status(400).json({
+        error: `Медиа типа "${targetMedia.type}" не соответствует категории тир-листа "${tierList.category}"`,
+      });
+    }
+
+    // 5. Check if already added
+    let currentItems: any[] = [];
+    try {
+      currentItems = JSON.parse(tierList.itemsJson || '[]');
+    } catch (_e) {}
+
+    const alreadyAdded = currentItems.some((it: any) => (it.id || it.mediaId) === targetMediaId);
+    if (alreadyAdded) {
+      return res.status(400).json({ error: 'Этот тайтл уже добавлен в тир-лист' });
+    }
+
+    // 6. Add to itemsJson
+    const newItem = {
+      id: targetMediaId,
+      mediaId: targetMediaId,
+      title: targetMedia.title,
+      type: targetMedia.type,
+      posterUrl: targetMedia.posterUrl,
+      tierId: tierId || 'unranked',
+      order: currentItems.length,
+    };
+
+    currentItems.push(newItem);
+
+    const [updated] = await db
+      .update(tierLists)
+      .set({
+        itemsJson: JSON.stringify(currentItems),
+        updatedAt: new Date(),
+      })
+      .where(eq(tierLists.id, id))
+      .returning();
+
+    res.json({
+      success: true,
+      item: newItem,
+      tierList: updated,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get single tier list with resolved media
 apiRouter.get('/tier-lists/:id', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
+    const user = req.dbUser;
     const id = parseInt(req.params.id, 10);
     const found = await db
       .select({
@@ -3763,6 +4524,7 @@ apiRouter.get('/tier-lists/:id', optionalAuth, async (req: AuthRequest, res: Res
         tiersJson: tierLists.tiersJson,
         itemsJson: tierLists.itemsJson,
         createdAt: tierLists.createdAt,
+        updatedAt: tierLists.updatedAt,
         ownerId: users.id,
         ownerUsername: users.username,
         ownerAvatar: users.avatar,
@@ -3777,12 +4539,18 @@ apiRouter.get('/tier-lists/:id', optionalAuth, async (req: AuthRequest, res: Res
     }
 
     const tierList = found[0];
+
+    // Privacy check
+    if (tierList.visibility === 'PRIVATE' && (!user || (user.id !== tierList.ownerId && user.role !== 'ADMIN'))) {
+      return res.status(403).json({ error: 'Этот тир-лист является приватным' });
+    }
+
     let items: any[] = [];
     try {
       items = JSON.parse(tierList.itemsJson || '[]');
     } catch (_e) {}
 
-    const mediaIds = items.map((i: any) => i.mediaId).filter(Boolean);
+    const mediaIds = items.map((i: any) => i.id || i.mediaId).filter(Boolean);
     let resolvedMedia: any[] = [];
     if (mediaIds.length > 0) {
       resolvedMedia = await db.select().from(media).where(inArray(media.id, mediaIds));
@@ -3801,76 +4569,251 @@ apiRouter.get('/tier-lists/:id', optionalAuth, async (req: AuthRequest, res: Res
 // 9. ROULETTE (CONTENT RANDOMIZER)
 // ==========================================
 
+async function getRouletteCandidateMedia(options: {
+  user?: any;
+  source?: string;
+  listId?: number | string;
+  category?: string;
+  minRating?: number | string;
+}) {
+  const { user, source, listId, category, minRating } = options;
+  let candidateMedia: any[] = [];
+  let listInfo: { id: number; title: string; category: string } | null = null;
+
+  const parsedMinRating = minRating ? parseFloat(String(minRating)) : 0;
+
+  const matchesCategory = (mediaType: string, cat?: string) => {
+    if (!cat || cat === 'ALL') return true;
+    if (cat === 'MOVIES_TV') return mediaType === 'MOVIE' || mediaType === 'TV';
+    return mediaType === cat;
+  };
+
+  if (source === 'USER_LIST' || listId) {
+    const numericListId = typeof listId === 'string' ? parseInt(listId, 10) : Number(listId);
+    if (!numericListId || isNaN(numericListId)) {
+      throw { status: 400, message: 'Не выбран список' };
+    }
+
+    const found = await db
+      .select({
+        id: lists.id,
+        title: lists.title,
+        description: lists.description,
+        category: lists.category,
+        visibility: lists.visibility,
+        ownerId: lists.ownerId,
+      })
+      .from(lists)
+      .where(eq(lists.id, numericListId))
+      .limit(1);
+
+    if (found.length === 0) {
+      throw { status: 404, message: 'Выбранный список не найден' };
+    }
+
+    const targetList = found[0];
+
+    // Check membership and permissions
+    const members = await db
+      .select({ userId: listMembers.userId })
+      .from(listMembers)
+      .where(eq(listMembers.listId, numericListId));
+
+    const isMember = user ? members.some((m) => m.userId === user.id) : false;
+    const isOwner = user ? (user.id === targetList.ownerId || user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') : false;
+
+    if (targetList.visibility === 'PRIVATE') {
+      if (!isOwner && !isMember) {
+        throw { status: 403, message: 'Этот список приватный. У вас нет к нему доступа.' };
+      }
+    } else if (targetList.visibility === 'FRIENDS') {
+      if (!isOwner && !isMember) {
+        let isFriend = false;
+        if (user) {
+          const reqs = await db
+            .select()
+            .from(friendRequests)
+            .where(
+              and(
+                or(
+                  and(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, targetList.ownerId)),
+                  and(eq(friendRequests.senderId, targetList.ownerId), eq(friendRequests.receiverId, user.id))
+                ),
+                eq(friendRequests.status, 'ACCEPTED')
+              )
+            )
+            .limit(1);
+          isFriend = reqs.length > 0;
+        }
+        if (!isFriend) {
+          throw { status: 403, message: 'Этот список доступен только для друзей автора' };
+        }
+      }
+    }
+
+    listInfo = {
+      id: targetList.id,
+      title: targetList.title,
+      category: targetList.category,
+    };
+
+    // Load items in this list
+    const items = await db
+      .select({
+        id: media.id,
+        title: media.title,
+        originalTitle: media.originalTitle,
+        type: media.type,
+        description: media.description,
+        posterUrl: media.posterUrl,
+        year: media.year,
+        rating: media.rating,
+      })
+      .from(listItems)
+      .innerJoin(media, eq(listItems.mediaId, media.id))
+      .where(eq(listItems.listId, numericListId))
+      .orderBy(asc(listItems.orderIndex));
+
+    candidateMedia = items;
+
+    // Filter by list's category rules if specific
+    if (targetList.category && targetList.category !== 'ALL') {
+      candidateMedia = candidateMedia.filter((m) => matchesCategory(m.type, targetList.category));
+    }
+  } else if (user && (source === 'MY_LIBRARY' || source === 'MY_PLANNED' || source === 'MY_FAVORITES')) {
+    const rows = await db
+      .select({
+        id: media.id,
+        title: media.title,
+        originalTitle: media.originalTitle,
+        type: media.type,
+        posterUrl: media.posterUrl,
+        rating: media.rating,
+        year: media.year,
+        description: media.description,
+        userStatus: userMedia.status,
+        userRating: userMedia.rating,
+        isFavorite: userMedia.isFavorite,
+      })
+      .from(userMedia)
+      .innerJoin(media, eq(userMedia.mediaId, media.id))
+      .where(eq(userMedia.userId, user.id));
+
+    candidateMedia = rows;
+
+    if (source === 'MY_PLANNED') {
+      candidateMedia = candidateMedia.filter((r) => r.userStatus?.includes('PLAN_TO_'));
+    } else if (source === 'MY_FAVORITES') {
+      candidateMedia = candidateMedia.filter((r) => r.isFavorite);
+    }
+  } else {
+    // From entire media catalog
+    const conditions: any[] = [];
+    if (category && category !== 'ALL') {
+      if (category === 'MOVIES_TV') {
+        conditions.push(inArray(media.type, ['MOVIE', 'TV']));
+      } else {
+        conditions.push(eq(media.type, String(category)));
+      }
+    }
+    if (parsedMinRating > 0) {
+      conditions.push(gte(media.rating, parsedMinRating));
+    }
+
+    candidateMedia = await db
+      .select({
+        id: media.id,
+        title: media.title,
+        originalTitle: media.originalTitle,
+        type: media.type,
+        description: media.description,
+        posterUrl: media.posterUrl,
+        year: media.year,
+        rating: media.rating,
+      })
+      .from(media)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(media.rating))
+      .limit(500);
+  }
+
+  // Apply category filter if requested
+  if (category && category !== 'ALL') {
+    candidateMedia = candidateMedia.filter((m) => matchesCategory(m.type, category));
+  }
+
+  // Apply minRating filter if requested
+  if (parsedMinRating > 0) {
+    candidateMedia = candidateMedia.filter((m) => (m.rating || 0) >= parsedMinRating);
+  }
+
+  return { candidateMedia, listInfo };
+}
+
+// Get items and info from a user list for roulette
+apiRouter.get('/roulette/sources/list/:listId', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser;
+    const { listId } = req.params;
+    const { category, minRating } = req.query;
+
+    const { candidateMedia, listInfo } = await getRouletteCandidateMedia({
+      user,
+      source: 'USER_LIST',
+      listId,
+      category: category as string,
+      minRating: minRating as string,
+    });
+
+    res.json({
+      list: listInfo,
+      count: candidateMedia.length,
+      items: candidateMedia,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message || 'Ошибка загрузки списка для рулетки' });
+  }
+});
+
+// Helper to check pool size and candidate preview
+apiRouter.get('/roulette/pool', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser;
+    const { category, source, listId, minRating } = req.query;
+
+    const { candidateMedia, listInfo } = await getRouletteCandidateMedia({
+      user,
+      source: source as string,
+      listId: listId as string,
+      category: category as string,
+      minRating: minRating as string,
+    });
+
+    res.json({
+      count: candidateMedia.length,
+      candidates: candidateMedia.slice(0, 45),
+      listInfo,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message || 'Ошибка загрузки пула рулетки' });
+  }
+});
+
 apiRouter.post('/roulette/spin', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser;
-    const { category, source, minRating } = req.body; // source: 'ALL', 'MY_LIBRARY', 'MY_PLANNED', 'MY_FAVORITES'
+    const { category, source, listId, minRating } = req.body;
 
-    let candidateMedia: any[] = [];
-
-    if (user && (source === 'MY_LIBRARY' || source === 'MY_PLANNED' || source === 'MY_FAVORITES')) {
-      const q = db
-        .select({
-          id: media.id,
-          title: media.title,
-          originalTitle: media.originalTitle,
-          type: media.type,
-          description: media.description,
-          posterUrl: media.posterUrl,
-          year: media.year,
-          rating: media.rating,
-          userStatus: userMedia.status,
-          userRating: userMedia.rating,
-          isFavorite: userMedia.isFavorite,
-        })
-        .from(userMedia)
-        .innerJoin(media, eq(userMedia.mediaId, media.id))
-        .where(eq(userMedia.userId, user.id));
-
-      const rows = await q;
-      candidateMedia = rows;
-
-      if (source === 'MY_PLANNED') {
-        candidateMedia = candidateMedia.filter((r) => r.userStatus?.includes('PLAN_TO_'));
-      } else if (source === 'MY_FAVORITES') {
-        candidateMedia = candidateMedia.filter((r) => r.isFavorite);
-      }
-    } else {
-      // From entire media database - filter directly in SQL if possible
-      const conditions: any[] = [];
-      if (category && category !== 'ALL') {
-        conditions.push(eq(media.type, category));
-      }
-      if (minRating && parseFloat(minRating) > 0) {
-        conditions.push(gte(media.rating, parseFloat(minRating)));
-      }
-
-      candidateMedia = await db
-        .select({
-          id: media.id,
-          title: media.title,
-          originalTitle: media.originalTitle,
-          type: media.type,
-          description: media.description,
-          posterUrl: media.posterUrl,
-          year: media.year,
-          rating: media.rating,
-        })
-        .from(media)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .limit(300);
-    }
-
-    if (category && category !== 'ALL') {
-      candidateMedia = candidateMedia.filter((m) => m.type === category);
-    }
-
-    if (minRating) {
-      candidateMedia = candidateMedia.filter((m) => (m.rating || 0) >= parseFloat(minRating));
-    }
+    const { candidateMedia, listInfo } = await getRouletteCandidateMedia({
+      user,
+      source,
+      listId,
+      category,
+      minRating,
+    });
 
     if (candidateMedia.length === 0) {
-      return res.status(404).json({ error: 'По выбранным критериям не найдено медиа' });
+      return res.status(404).json({ error: 'По выбранным критериям не найдено медиа для выбора' });
     }
 
     // Pick winning random media item
@@ -3902,84 +4845,10 @@ apiRouter.post('/roulette/spin', optionalAuth, async (req: AuthRequest, res: Res
       reelItems,
       targetIndex: TARGET_INDEX,
       poolSize: candidateMedia.length,
+      listInfo,
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Helper to check pool size and candidate preview
-apiRouter.get('/roulette/pool', optionalAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const user = req.dbUser;
-    const { category, source, minRating } = req.query;
-
-    let candidateMedia: any[] = [];
-
-    if (user && (source === 'MY_LIBRARY' || source === 'MY_PLANNED' || source === 'MY_FAVORITES')) {
-      const rows = await db
-        .select({
-          id: media.id,
-          title: media.title,
-          originalTitle: media.originalTitle,
-          type: media.type,
-          posterUrl: media.posterUrl,
-          rating: media.rating,
-          year: media.year,
-          description: media.description,
-          userStatus: userMedia.status,
-          isFavorite: userMedia.isFavorite,
-        })
-        .from(userMedia)
-        .innerJoin(media, eq(userMedia.mediaId, media.id))
-        .where(eq(userMedia.userId, user.id));
-
-      candidateMedia = rows;
-
-      if (source === 'MY_PLANNED') {
-        candidateMedia = candidateMedia.filter((r) => r.userStatus?.includes('PLAN_TO_'));
-      } else if (source === 'MY_FAVORITES') {
-        candidateMedia = candidateMedia.filter((r) => r.isFavorite);
-      }
-    } else {
-      const conditions: any[] = [];
-      if (category && category !== 'ALL') {
-        conditions.push(eq(media.type, String(category)));
-      }
-      if (minRating && parseFloat(String(minRating)) > 0) {
-        conditions.push(gte(media.rating, parseFloat(String(minRating))));
-      }
-
-      candidateMedia = await db
-        .select({
-          id: media.id,
-          title: media.title,
-          originalTitle: media.originalTitle,
-          type: media.type,
-          posterUrl: media.posterUrl,
-          rating: media.rating,
-          year: media.year,
-          description: media.description,
-        })
-        .from(media)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .limit(300);
-    }
-
-    if (category && category !== 'ALL') {
-      candidateMedia = candidateMedia.filter((m) => m.type === category);
-    }
-
-    if (minRating && parseFloat(String(minRating)) > 0) {
-      candidateMedia = candidateMedia.filter((m) => (m.rating || 0) >= parseFloat(String(minRating)));
-    }
-
-    res.json({
-      count: candidateMedia.length,
-      candidates: candidateMedia.slice(0, 30),
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message || 'Ошибка вращения рулетки' });
   }
 });
 
@@ -4839,3 +5708,6 @@ apiRouter.post('/admin/telegram-test', requireAuth, requireAdmin, async (req: Au
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+import { importExportRouter } from './routes/importExport.ts';
+apiRouter.use('/library-sync', importExportRouter);

@@ -11,7 +11,6 @@ import {
   Star,
   Loader2,
   Flame,
-  Dices,
   Bookmark,
 } from 'lucide-react';
 import { AddToLibraryModal } from '../modals/AddToLibraryModal.tsx';
@@ -43,7 +42,6 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
     { id: 'GAME', label: 'Игры', icon: Gamepad2 },
     { id: 'BOOK', label: 'Книги', icon: Book },
     { id: 'COMIC', label: 'Комиксы', icon: Flame },
-    { id: 'BOARD_GAME', label: 'Настолки', icon: Dices },
   ];
 
   // Fetch trending on mount
@@ -66,30 +64,45 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
     fetchTrending();
   }, [selectedType]);
 
-  // Debounced search
+  // Debounced search with AbortController
   useEffect(() => {
-    if (!query.trim()) {
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
       setResults([]);
+      setLoading(false);
       return;
     }
+
+    const controller = new AbortController();
 
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
         const typeParam = selectedType !== 'ALL' ? `&type=${selectedType}` : '';
-        const res = await fetch(`/api/media/search?q=${encodeURIComponent(query)}${typeParam}`);
+        const res = await fetch(`/api/media/search?q=${encodeURIComponent(trimmed)}${typeParam}&limit=25`, {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
         if (res.ok) {
           const data = await res.json();
-          setResults(data);
+          if (!controller.signal.aborted) {
+            setResults(Array.isArray(data) ? data : []);
+          }
         }
-      } catch (err) {
+      } catch (err: any) {
+        if (err.name === 'AbortError' || controller.signal.aborted) return;
         console.error('Search failed:', err);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
-    }, 400);
+    }, 300);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query, selectedType]);
 
   const displayList = query.trim() ? results : trending;

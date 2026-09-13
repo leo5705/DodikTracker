@@ -5,6 +5,8 @@ export interface RouteMatch {
     | 'home'
     | 'search'
     | 'library'
+    | 'library-import'
+    | 'library-export'
     | 'feed'
     | 'friends'
     | 'lists'
@@ -17,6 +19,7 @@ export interface RouteMatch {
     | 'admin'
     | 'profile'
     | 'settings'
+    | 'notifications'
     | 'media-detail'
     | 'reset-password';
   params: Record<string, string>;
@@ -107,7 +110,11 @@ export function parseRoute(rawPathname: string): RouteMatch {
     };
   }
 
-  // 5. Library with category: /library/:category
+  // 5. Library import / export
+  if (cleanPath === '/library/import') return { name: 'library-import', params: queryParams, pathname: cleanPath };
+  if (cleanPath === '/library/export') return { name: 'library-export', params: queryParams, pathname: cleanPath };
+
+  // 6. Library with category: /library/:category
   const libraryCatMatch = cleanPath.match(/^\/library\/([a-zA-Z0-9_-]+)$/);
   if (libraryCatMatch) {
     return {
@@ -130,6 +137,7 @@ export function parseRoute(rawPathname: string): RouteMatch {
   if (cleanPath === '/calendar') return { name: 'calendar', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/admin') return { name: 'admin', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/settings') return { name: 'settings', params: queryParams, pathname: cleanPath };
+  if (cleanPath === '/notifications') return { name: 'notifications', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/profile') return { name: 'profile', params: queryParams, pathname: cleanPath };
 
   // Default: home

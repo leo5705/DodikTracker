@@ -6,7 +6,6 @@ import {
   Gamepad2,
   Book,
   BookOpen,
-  Dices,
   Flame,
   Library,
   Radio,
@@ -167,7 +166,6 @@ export const Navigation: React.FC<NavigationProps> = ({
     { id: 'GAME', label: 'Игры', icon: Gamepad2, color: 'text-emerald-400' },
     { id: 'BOOK', label: 'Книги', icon: Book, color: 'text-amber-400' },
     { id: 'COMIC', label: 'Комиксы', icon: Flame, color: 'text-orange-400' },
-    { id: 'BOARD_GAME', label: 'Настолки', icon: Dices, color: 'text-teal-400' },
   ];
 
   const mainTools = [
@@ -324,14 +322,23 @@ export const Navigation: React.FC<NavigationProps> = ({
 
                 <div className="flex items-center gap-0.5">
                   <button
+                    onClick={() => navigate('/notifications')}
+                    title="Уведомления"
+                    className="p-1.5 text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#252233] rounded-lg transition-colors relative"
+                  >
+                    <Bell className="w-4 h-4" />
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-red-500 border-2 border-[#121118] flex items-center justify-center text-[8px] font-bold text-white shadow-sm">
+                        {unreadCount > 9 ? '9+' : unreadCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
                     onClick={handleSettingsClick}
                     title="Настройки аккаунта"
                     className="p-1.5 text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#252233] rounded-lg transition-colors relative"
                   >
                     <Settings className="w-4 h-4" />
-                    {unreadCount > 0 && (
-                      <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#9B6BFF]" />
-                    )}
                   </button>
                   <button
                     onClick={() => logout()}
@@ -372,6 +379,15 @@ export const Navigation: React.FC<NavigationProps> = ({
         <div className="flex items-center gap-2">
           {dbUser ? (
             <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => navigate('/notifications')}
+                className="p-1.5 text-[#9A94AA] hover:text-white relative"
+              >
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500 border border-[#0F0E12]" />
+                )}
+              </button>
               <button
                 onClick={handleSettingsClick}
                 className="p-1.5 text-[#9A94AA] hover:text-white"

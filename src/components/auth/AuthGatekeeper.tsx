@@ -21,7 +21,7 @@ export const AuthGatekeeper: React.FC = () => {
   const { loginGoogle, loginPassword, registerPassword, loginTelegram, loading: authLoading } = useAuth();
 
   const [tab, setTab] = useState<'LOGIN' | 'REGISTER' | 'TELEGRAM'>('LOGIN');
-  const [regMode, setRegMode] = useState<string>('INVITE_ONLY');
+  const [regMode, setRegMode] = useState<string>('OPEN');
   const [loadingMode, setLoadingMode] = useState(true);
 
   // Form states
@@ -69,6 +69,25 @@ export const AuthGatekeeper: React.FC = () => {
       await loginPassword(identifier.trim(), password);
     } catch (err: any) {
       setError(err.message || 'Ошибка входа');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await loginGoogle();
+    } catch (err: any) {
+      if (err.message && err.message.includes('popup-blocked')) {
+        setError('Всплывающее окно заблокировано браузером. Пожалуйста, разрешите всплывающие окна для этого сайта, или откройте приложение в новой вкладке.');
+      } else if (err.message && err.message.includes('Pending promise was never set')) {
+        // Ignore this internal assertion
+      } else {
+        setError(err.message || 'Ошибка входа через Google');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -495,8 +514,8 @@ export const AuthGatekeeper: React.FC = () => {
             </div>
 
             <button
-              onClick={loginGoogle}
-              disabled={authLoading}
+              onClick={handleGoogleLogin}
+              disabled={authLoading || submitting}
               className="w-full py-2.5 px-4 rounded-xl bg-[#191724] hover:bg-[#1E1C29] text-xs font-semibold text-[#F3F1F8] border border-[#2E2A40] hover:border-[#3A344E] transition-all flex items-center justify-center gap-2 shadow-sm"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">

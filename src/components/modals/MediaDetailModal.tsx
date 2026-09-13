@@ -20,7 +20,6 @@ import {
   Gamepad2,
   Book,
   BookOpen,
-  Dices,
   Flame,
   AlertTriangle,
   Bookmark,
@@ -283,8 +282,6 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         return <Book className="w-4 h-4 text-amber-400" />;
       case 'COMIC':
         return <Flame className="w-4 h-4 text-orange-400" />;
-      case 'BOARD_GAME':
-        return <Dices className="w-4 h-4 text-teal-400" />;
       default:
         return <Film className="w-4 h-4 text-purple-400" />;
     }

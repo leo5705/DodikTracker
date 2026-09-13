@@ -13,7 +13,6 @@ import {
   Gamepad2,
   Book,
   BookOpen,
-  Dices,
   Flame,
   MessageSquare,
   ListOrdered,
@@ -120,8 +119,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         return <Book className="w-3.5 h-3.5 text-amber-400" />;
       case 'COMIC':
         return <Flame className="w-3.5 h-3.5 text-orange-400" />;
-      case 'BOARD_GAME':
-        return <Dices className="w-3.5 h-3.5 text-teal-400" />;
       default:
         return <Film className="w-3.5 h-3.5 text-purple-400" />;
     }
@@ -143,8 +140,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         return 'Книги';
       case 'COMIC':
         return 'Комиксы';
-      case 'BOARD_GAME':
-        return 'Настолки';
       default:
         return type;
     }
@@ -409,7 +404,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       { id: 'GAME', label: 'Игры' },
                       { id: 'BOOK', label: 'Книги' },
                       { id: 'COMIC', label: 'Комиксы' },
-                      { id: 'BOARD_GAME', label: 'Настолки' },
                     ].map((cat) => (
                       <button
                         key={cat.id}

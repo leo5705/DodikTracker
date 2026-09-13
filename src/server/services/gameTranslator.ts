@@ -50,7 +50,7 @@ const GENRE_MAP: Record<string, string> = {
   'point-and-click': 'Квест / Point-and-Click',
   'visual novel': 'Визуальная новелла',
   card: 'Карточная игра',
-  'board games': 'Настольная игра',
+  'board games': 'Цифровые настольные',
   educational: 'Обучающая игра',
   family: 'Семейная игра',
   casual: 'Казуальная игра',

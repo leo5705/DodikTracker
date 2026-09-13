@@ -16,6 +16,8 @@ import {
   Book,
   Sparkles,
   Loader2,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
@@ -57,7 +59,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     { id: 'BOOK', label: 'Книги' },
     { id: 'MANGA', label: 'Манга' },
     { id: 'COMIC', label: 'Комиксы' },
-    { id: 'BOARD_GAME', label: 'Настолки' },
   ];
 
   const statusFilters = [
@@ -240,13 +241,29 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </p>
           </div>
 
-          <button
-            onClick={onNavigateSearch}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-lg shadow-purple-950/30 transition-all self-start sm:self-auto"
-          >
-            <Plus className="w-4 h-4" />
-            Добавить тайтл
-          </button>
+          <div className="flex gap-2 self-start sm:self-auto">
+            <button
+              onClick={() => navigate('/library/import')}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold shadow-lg transition-all"
+            >
+              <Download className="w-4 h-4" />
+              Импорт
+            </button>
+            <button
+              onClick={() => navigate('/library/export')}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold shadow-lg transition-all"
+            >
+              <Upload className="w-4 h-4" />
+              Экспорт
+            </button>
+            <button
+              onClick={onNavigateSearch}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-lg shadow-purple-950/30 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              Добавить тайтл
+            </button>
+          </div>
         </div>
 
         {/* Category filters */}

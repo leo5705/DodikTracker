@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import {
   signInWithPopup,
   signOut,
@@ -31,7 +31,6 @@ export interface LibraryCounts {
   books: number;
   manga: number;
   comics: number;
-  boardGames: number;
   completed: number;
 }
 
@@ -221,7 +220,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await fetchProfile();
   };
 
-  const authFetch = async (url: string, init: RequestInit = {}) => {
+  const authFetch = useCallback(async (url: string, init: RequestInit = {}) => {
     let currentToken = token;
     if (firebaseUser) {
       try {
@@ -255,7 +254,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     return res;
-  };
+  }, [token, firebaseUser]);
 
   return (
     <AuthContext.Provider

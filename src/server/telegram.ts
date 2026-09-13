@@ -434,7 +434,9 @@ class TelegramBotManager {
     notification: {
       type: string;
       title: string;
-      content: string;
+      body: string;
+      relatedEntity?: string;
+      relatedEntityId?: string;
       link?: string;
     }
   ) {
@@ -455,7 +457,7 @@ class TelegramBotManager {
       const lines = [
         `${icon} *${this.escapeMarkdown(notification.title)}*`,
         '',
-        this.escapeMarkdown(notification.content),
+        this.escapeMarkdown(notification.body),
       ];
 
       if (notification.link) {

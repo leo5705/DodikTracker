@@ -1,20 +1,22 @@
 import express from 'express';
+import http from 'http';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './src/server/api.ts';
 import { telegramBot } from './src/server/telegram.ts';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { initDbSettings } from './src/server/init.ts';
 
 async function startServer() {
+  await initDbSettings();
+
   const app = express();
   const PORT = 3000;
+  const httpServer = http.createServer(app);
 
   app.use(cookieParser());
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
 
   // Health check
   app.get('/api/health', (_req, res) => {
@@ -31,8 +33,13 @@ async function startServer() {
 
   // Vite middleware for development or static file serving for production
   if (process.env.NODE_ENV !== 'production') {
+    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: isHmrDisabled ? false : { server: httpServer },
+        watch: isHmrDisabled ? null : {},
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -44,7 +51,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Dodik Tracker server running on http://0.0.0.0:${PORT}`);
     telegramBot.init().catch((err) => {
       console.error('[Telegram] Init error:', err);

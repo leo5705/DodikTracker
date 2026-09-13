@@ -14,17 +14,27 @@ import {
   Gamepad2,
   Book,
   BookOpen,
-  ArrowRight,
-  SlidersHorizontal,
-  Layers,
   Flame,
-  Dices,
-  ExternalLink,
+  ArrowRight,
+  Layers,
+  ListPlus,
+  Check,
+  FolderOpen,
+  Plus,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { AddToListModal } from '../modals/AddToListModal.tsx';
 import { formatMediaTypePath } from '../common/MediaCard.tsx';
+
+interface UserListOption {
+  id: number;
+  title: string;
+  description?: string;
+  category: string;
+  itemCount?: number;
+  visibility?: string;
+}
 
 interface RouletteViewProps {
   onSelectMedia?: (mediaId: number) => void;
@@ -34,18 +44,21 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
   const { authFetch, dbUser } = useAuth();
   const { navigate } = useRouter();
 
-  // Mode: 'REEL' (Horizontal Reel) or 'WHEEL' (Roulette Wheel)
-  const [rouletteMode, setRouletteMode] = useState<'REEL' | 'WHEEL'>('REEL');
-
   // Filters
   const [category, setCategory] = useState('ALL');
-  const [source, setSource] = useState('ALL');
+  const [source, setSource] = useState<'ALL' | 'MY_PLANNED' | 'MY_LIBRARY' | 'MY_FAVORITES' | 'USER_LIST'>('ALL');
+  const [selectedListId, setSelectedListId] = useState<number | null>(null);
   const [minRating, setMinRating] = useState('0');
   const [soundEnabled, setSoundEnabled] = useState(true);
 
-  // Pool count
+  // User lists
+  const [userLists, setUserLists] = useState<UserListOption[]>([]);
+  const [loadingLists, setLoadingLists] = useState(false);
+
+  // Pool state & candidate items for preview
   const [poolSize, setPoolSize] = useState<number | null>(null);
   const [poolLoading, setPoolLoading] = useState(false);
+  const [activeListInfo, setActiveListInfo] = useState<{ id: number; title: string; category: string } | null>(null);
 
   // Reel State
   const [reelItems, setReelItems] = useState<any[]>([]);
@@ -57,16 +70,12 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
   // Modals
   const [showAddToList, setShowAddToList] = useState(false);
 
-  // Wheel State
-  const [wheelRotation, setWheelRotation] = useState(0);
-  const [wheelCandidates, setWheelCandidates] = useState<any[]>([]);
-
   const reelContainerRef = useRef<HTMLDivElement>(null);
   const ITEM_WIDTH = 180;
   const ITEM_GAP = 14;
   const TOTAL_STEP = ITEM_WIDTH + ITEM_GAP; // 194px
 
-  // Subtle Web Audio synthesizer for ticks and result chime
+  // Web Audio synthesizer for ticks and result chime
   const audioContextRef = useRef<AudioContext | null>(null);
 
   const playTick = () => {
@@ -116,45 +125,115 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
 
   const categories = [
     { id: 'ALL', label: 'Всё подряд', icon: Sparkles },
+    { id: 'MOVIES_TV', label: 'Фильмы и сериалы', icon: Film },
     { id: 'MOVIE', label: 'Фильмы', icon: Film },
     { id: 'TV', label: 'Сериалы', icon: Tv },
-    { id: 'ANIME', label: 'Аниме', icon: Sparkles },
     { id: 'GAME', label: 'Игры', icon: Gamepad2 },
-    { id: 'BOOK', label: 'Книги', icon: Book },
+    { id: 'ANIME', label: 'Аниме', icon: Sparkles },
     { id: 'MANGA', label: 'Манга', icon: BookOpen },
+    { id: 'BOOK', label: 'Книги', icon: Book },
+    { id: 'COMIC', label: 'Комиксы', icon: Flame },
   ];
 
   const sources = [
     { id: 'ALL', label: 'Вся база тайтлов' },
-    { id: 'MY_PLANNED', label: 'Мой список «В планах»' },
-    { id: 'MY_LIBRARY', label: 'Вся моя библиотека' },
-    { id: 'MY_FAVORITES', label: 'Мое избранное' },
+    { id: 'MY_PLANNED', label: '«В планах»' },
+    { id: 'MY_LIBRARY', label: 'Моя библиотека' },
+    { id: 'MY_FAVORITES', label: 'Избранное' },
+    { id: 'USER_LIST', label: 'Пользовательский список' },
   ];
 
-  // Fetch pool counter
-  const fetchPoolCount = async () => {
+  // Load user's lists when source is USER_LIST or on initial load if user is logged in
+  useEffect(() => {
+    if (!dbUser) return;
+    const fetchUserLists = async () => {
+      setLoadingLists(true);
+      try {
+        const res = await authFetch('/api/lists/my');
+        if (res.ok) {
+          const data = await res.json();
+          setUserLists(data);
+          if (data.length > 0 && !selectedListId) {
+            setSelectedListId(data[0].id);
+          }
+        }
+      } catch (_err) {
+      } finally {
+        setLoadingLists(false);
+      }
+    };
+    fetchUserLists();
+  }, [dbUser]);
+
+  // Fetch pool counter and real candidate items for preview
+  const fetchPoolData = async () => {
+    if (source === 'USER_LIST' && !selectedListId) {
+      setPoolSize(0);
+      setReelItems([]);
+      return;
+    }
+
     setPoolLoading(true);
+    setError(null);
     try {
-      const res = await authFetch(
-        `/api/roulette/pool?category=${category}&source=${source}&minRating=${minRating}`
-      );
+      const queryParams = new URLSearchParams();
+      queryParams.set('category', category);
+      queryParams.set('source', source);
+      if (source === 'USER_LIST' && selectedListId) {
+        queryParams.set('listId', String(selectedListId));
+      }
+      if (parseFloat(minRating) > 0) {
+        queryParams.set('minRating', minRating);
+      }
+
+      const res = await authFetch(`/api/roulette/pool?${queryParams.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setPoolSize(data.count);
+        setActiveListInfo(data.listInfo || null);
+
+        // Build initial preview reel from real candidate items!
+        const candidates = data.candidates || [];
+        if (candidates.length > 0) {
+          const REEL_PREVIEW_COUNT = 45;
+          const previewReel: any[] = [];
+          for (let i = 0; i < REEL_PREVIEW_COUNT; i++) {
+            previewReel.push(candidates[i % candidates.length]);
+          }
+          setReelItems(previewReel);
+          setOffset(0);
+        } else {
+          setReelItems([]);
+          setOffset(0);
+        }
+      } else {
+        const errData = await res.json();
+        setPoolSize(0);
+        setReelItems([]);
+        if (res.status === 403) {
+          setError(errData.error || 'У вас нет доступа к выбранному списку');
+        }
       }
     } catch (_err) {
+      setPoolSize(0);
+      setReelItems([]);
     } finally {
       setPoolLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchPoolCount();
-  }, [category, source, minRating, dbUser]);
+    fetchPoolData();
+  }, [category, source, selectedListId, minRating, dbUser]);
 
   // Handle spin
   const handleSpin = async () => {
     if (isSpinning) return;
+    if (source === 'USER_LIST' && !selectedListId) {
+      setError('Пожалуйста, выберите пользовательский список для выбора тайтла');
+      return;
+    }
+
     setError(null);
     setChosenItem(null);
     setIsSpinning(true);
@@ -166,6 +245,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
         body: JSON.stringify({
           category,
           source,
+          listId: source === 'USER_LIST' ? selectedListId : undefined,
           minRating: parseFloat(minRating) > 0 ? minRating : undefined,
         }),
       });
@@ -181,51 +261,37 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
       const winner = data.chosen;
 
       setReelItems(items);
-      setWheelCandidates(items.slice(0, 10));
 
-      if (rouletteMode === 'REEL') {
-        // Compute precise scroll target to center the winning item
-        const containerWidth = reelContainerRef.current?.offsetWidth || 800;
-        const centerOffset = containerWidth / 2 - ITEM_WIDTH / 2;
-        // Add random natural jitter (+/- 25px) within the card
-        const jitter = Math.floor(Math.random() * 50) - 25;
-        const targetOffset = targetIdx * TOTAL_STEP - centerOffset + jitter;
+      // Compute scroll target to center the winning item
+      const containerWidth = reelContainerRef.current?.offsetWidth || 800;
+      const centerOffset = containerWidth / 2 - ITEM_WIDTH / 2;
+      // Add subtle natural jitter (+/- 18px) within the card
+      const jitter = Math.floor(Math.random() * 36) - 18;
+      const targetOffset = targetIdx * TOTAL_STEP - centerOffset + jitter;
 
-        // Reset offset
-        setOffset(0);
+      // Reset offset
+      setOffset(0);
 
-        // Tick sounds timer during spin
-        let tickCount = 0;
-        const tickInterval = setInterval(() => {
-          tickCount++;
-          playTick();
-          if (tickCount > 35) clearInterval(tickInterval);
-        }, 110);
+      // Tick sounds timer during spin
+      let tickCount = 0;
+      const tickInterval = setInterval(() => {
+        tickCount++;
+        playTick();
+        if (tickCount > 35) clearInterval(tickInterval);
+      }, 110);
 
-        // Start animation next tick
-        setTimeout(() => {
-          setOffset(targetOffset);
-        }, 50);
+      // Start animation next tick
+      setTimeout(() => {
+        setOffset(targetOffset);
+      }, 50);
 
-        // Animation finishes in ~4.8s
-        setTimeout(() => {
-          clearInterval(tickInterval);
-          setIsSpinning(false);
-          setChosenItem(winner);
-          playChime();
-        }, 4900);
-      } else {
-        // Wheel of Fortune Mode
-        const extraRotations = 5 + Math.floor(Math.random() * 3);
-        const randomDegree = extraRotations * 360 + Math.floor(Math.random() * 360);
-        setWheelRotation((prev) => prev + randomDegree);
-
-        setTimeout(() => {
-          setIsSpinning(false);
-          setChosenItem(winner);
-          playChime();
-        }, 4000);
-      }
+      // Animation finishes in ~4.8s
+      setTimeout(() => {
+        clearInterval(tickInterval);
+        setIsSpinning(false);
+        setChosenItem(winner);
+        playChime();
+      }, 4900);
     } catch (err: any) {
       setError(err.message || 'Ошибка выбора');
       setIsSpinning(false);
@@ -246,10 +312,37 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
         return <Gamepad2 className="w-3.5 h-3.5 text-emerald-400" />;
       case 'BOOK':
         return <Book className="w-3.5 h-3.5 text-amber-400" />;
+      case 'COMIC':
+        return <Flame className="w-3.5 h-3.5 text-orange-400" />;
       default:
         return <Film className="w-3.5 h-3.5 text-zinc-400" />;
     }
   };
+
+  const getCategoryLabel = (cat: string) => {
+    switch (cat) {
+      case 'MOVIES_TV':
+        return 'Фильмы и сериалы';
+      case 'MOVIE':
+        return 'Фильмы';
+      case 'TV':
+        return 'Сериалы';
+      case 'GAME':
+        return 'Игры';
+      case 'ANIME':
+        return 'Аниме';
+      case 'MANGA':
+        return 'Манга';
+      case 'BOOK':
+        return 'Книги';
+      case 'COMIC':
+        return 'Комиксы';
+      default:
+        return cat;
+    }
+  };
+
+  const selectedList = userLists.find((l) => l.id === selectedListId);
 
   return (
     <div className="space-y-8 pb-16 animate-fadeIn max-w-6xl mx-auto">
@@ -264,15 +357,15 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
             Рулетка выбора
           </h1>
           <p className="text-xs text-[#9A94AA] mt-0.5">
-            Не знаете, что посмотреть или во что поиграть сегодня вечером? Доверьтесь случайному выбору!
+            Случайный выбор фильма, сериала, игры, книги или аниме из общей базы или вашего личного списка.
           </p>
         </div>
 
-        {/* View Mode Toggle & Sound */}
+        {/* Sound toggle */}
         <div className="flex items-center gap-2 self-end sm:self-center">
           <button
             onClick={() => setSoundEnabled(!soundEnabled)}
-            className={`p-2 rounded-xl border transition-colors ${
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-colors ${
               soundEnabled
                 ? 'bg-[#191724] border-[#252233] text-[#AC82FF]'
                 : 'bg-[#191724] border-[#252233] text-zinc-600'
@@ -280,51 +373,126 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
             title={soundEnabled ? 'Звук включен' : 'Звук выключен'}
           >
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            <span>{soundEnabled ? 'Звук включен' : 'Без звука'}</span>
           </button>
-
-          <div className="p-1 rounded-xl bg-[#14131A] border border-[#252233] flex items-center gap-1">
-            <button
-              onClick={() => setRouletteMode('REEL')}
-              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                rouletteMode === 'REEL'
-                  ? 'bg-[#9B6BFF] text-white'
-                  : 'text-[#9A94AA] hover:text-[#F3F1F8]'
-              }`}
-            >
-              Лента
-            </button>
-            <button
-              onClick={() => setRouletteMode('WHEEL')}
-              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                rouletteMode === 'WHEEL'
-                  ? 'bg-[#9B6BFF] text-white'
-                  : 'text-[#9A94AA] hover:text-[#F3F1F8]'
-              }`}
-            >
-              Колесо
-            </button>
-          </div>
         </div>
       </div>
 
       {/* Filter Controls Bar */}
-      <div className="p-5 sm:p-6 rounded-3xl bg-[#14131A] border border-[#252233] space-y-5 shadow-xl">
-        {/* Category Pills */}
+      <div className="p-5 sm:p-6 rounded-3xl bg-[#14131A] border border-[#252233] space-y-6 shadow-xl">
+        {/* 1. Source Pool */}
+        <div>
+          <label className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider block mb-2.5 font-mono">
+            1. Источник выбора
+          </label>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+            {sources.map((s) => (
+              <button
+                key={s.id}
+                disabled={isSpinning}
+                onClick={() => setSource(s.id as any)}
+                className={`py-2.5 px-3 rounded-xl text-xs font-medium border transition-all text-center truncate ${
+                  source === s.id
+                    ? 'bg-[#1F1C2E] text-[#AC82FF] border-[#9B6BFF] shadow-sm font-semibold'
+                    : 'bg-[#191724] text-[#9A94AA] border-[#252233] hover:text-white hover:border-[#3A344E]'
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 1b. User List Selector (Visible when USER_LIST is selected) */}
+        {source === 'USER_LIST' && (
+          <div className="p-4 rounded-2xl bg-[#191724] border border-[#252233] space-y-3 animate-fadeIn">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-[#AC82FF] uppercase tracking-wider font-mono flex items-center gap-1.5">
+                <FolderOpen className="w-4 h-4" />
+                Выберите ваш список
+              </label>
+              <button
+                onClick={() => navigate('/lists')}
+                className="text-[11px] text-[#9A94AA] hover:text-white flex items-center gap-1 transition-colors"
+              >
+                <ListPlus className="w-3.5 h-3.5" />
+                <span>Управление списками</span>
+              </button>
+            </div>
+
+            {loadingLists ? (
+              <p className="text-xs text-[#9A94AA] py-2">Загрузка ваших списков...</p>
+            ) : userLists.length === 0 ? (
+              <div className="py-4 text-center space-y-2">
+                <p className="text-xs text-[#9A94AA]">У вас пока нет созданных списков.</p>
+                <button
+                  onClick={() => navigate('/lists')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#9B6BFF] text-white text-xs font-semibold"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Создать первый список</span>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                {userLists.map((list) => {
+                  const isSelected = selectedListId === list.id;
+                  return (
+                    <button
+                      key={list.id}
+                      disabled={isSpinning}
+                      onClick={() => {
+                        setSelectedListId(list.id);
+                        // If list has specific category, automatically adapt
+                        if (list.category && list.category !== 'ALL') {
+                          if (list.category === 'MOVIES_TV') {
+                            setCategory('ALL');
+                          } else {
+                            setCategory(list.category);
+                          }
+                        }
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all relative ${
+                        isSelected
+                          ? 'bg-[#252233] border-[#9B6BFF] text-white shadow-md'
+                          : 'bg-[#14131A] border-[#252233] text-[#9A94AA] hover:text-white hover:border-[#3A344E]'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-xs font-bold truncate block">{list.title}</span>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-[#AC82FF] shrink-0" />}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1.5 text-[10px] text-zinc-400">
+                        <span className="px-1.5 py-0.5 rounded bg-black/40 border border-white/5 font-mono">
+                          {getCategoryLabel(list.category)}
+                        </span>
+                        {list.itemCount !== undefined && <span>{list.itemCount} тайтлов</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 2. Category Pills */}
         <div>
           <label className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider block mb-2 font-mono">
-            1. Категория медиа
+            2. Категория медиа
           </label>
           <div className="flex flex-wrap gap-2">
             {categories.map((c) => {
               const Icon = c.icon;
+              const isSelected = category === c.id;
               return (
                 <button
                   key={c.id}
                   disabled={isSpinning}
                   onClick={() => setCategory(c.id)}
                   className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium border transition-all ${
-                    category === c.id
-                      ? 'bg-[#9B6BFF] text-white border-[#9B6BFF] shadow-md shadow-[#9B6BFF]/25'
+                    isSelected
+                      ? 'bg-[#9B6BFF] text-white border-[#9B6BFF] shadow-md shadow-[#9B6BFF]/25 font-semibold'
                       : 'bg-[#191724] text-[#9A94AA] border-[#252233] hover:text-white hover:border-[#3A344E]'
                   }`}
                 >
@@ -336,30 +504,8 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
           </div>
         </div>
 
-        {/* Source Pool & Rating */}
+        {/* 3. Rating & Pool count info */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#252233]/60">
-          <div>
-            <label className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider block mb-2 font-mono">
-              2. Откуда выбирать тайтлы
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {sources.map((s) => (
-                <button
-                  key={s.id}
-                  disabled={isSpinning}
-                  onClick={() => setSource(s.id)}
-                  className={`py-2 px-3 rounded-xl text-xs font-medium border transition-all text-left truncate ${
-                    source === s.id
-                      ? 'bg-[#1F1C2E] text-[#AC82FF] border-[#9B6BFF]/60 font-semibold'
-                      : 'bg-[#191724] text-[#9A94AA] border-[#252233] hover:text-white'
-                  }`}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div>
             <label className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider block mb-2 font-mono">
               3. Минимальный рейтинг: {parseFloat(minRating) > 0 ? `${minRating}★+` : 'Любой'}
@@ -386,23 +532,30 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
               ))}
             </div>
           </div>
+
+          <div className="flex flex-col justify-end">
+            <div className="p-3 rounded-2xl bg-[#191724] border border-[#252233] flex items-center justify-between text-xs text-[#9A94AA]">
+              <span className="flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-[#AC82FF]" />
+                В текущей выборке:
+                <strong className="text-white font-mono ml-1">
+                  {poolLoading ? 'подсчет...' : poolSize !== null ? `${poolSize} тайтлов` : 'доступно'}
+                </strong>
+              </span>
+              {selectedList && source === 'USER_LIST' && (
+                <span className="text-[11px] text-[#AC82FF] font-medium truncate max-w-[140px]">
+                  Список: {selectedList.title}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Pool count feedback */}
-        <div className="flex items-center justify-between pt-2 border-t border-[#252233]/60 text-xs text-[#9A94AA]">
-          <span className="flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5 text-[#AC82FF]" />
-            В выбранной выборке:
-            <strong className="text-white font-mono ml-1">
-              {poolLoading ? 'подсчет...' : poolSize !== null ? `${poolSize} тайтлов` : 'доступно'}
-            </strong>
-          </span>
-          {poolSize === 0 && (
-            <span className="text-amber-400 font-medium">
-              По выбранным фильтрам нет тайтлов. Попробуйте выбрать «Вся база».
-            </span>
-          )}
-        </div>
+        {poolSize === 0 && !poolLoading && (
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
+            По выбранным фильтрам нет подходящих тайтлов. Попробуйте сбросить минимальный рейтинг или выбрать другой источник.
+          </div>
+        )}
       </div>
 
       {error && (
@@ -412,22 +565,22 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
         </div>
       )}
 
-      {/* Visual Spin Area */}
-      {rouletteMode === 'REEL' ? (
-        <div className="relative p-6 sm:p-8 rounded-3xl bg-[#14131A] border border-[#252233] shadow-2xl overflow-hidden">
-          {/* Target Center Indicator Needle */}
-          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-1 z-20 pointer-events-none flex flex-col items-center justify-between py-2">
-            <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-t-[10px] border-t-[#AC82FF] drop-shadow-[0_0_8px_rgba(172,130,255,0.8)]" />
-            <div className="w-0.5 h-full bg-[#AC82FF]/80 shadow-[0_0_8px_rgba(172,130,255,0.7)]" />
-            <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-b-[10px] border-b-[#AC82FF] drop-shadow-[0_0_8px_rgba(172,130,255,0.8)]" />
-          </div>
+      {/* Visual Spin Reel Area */}
+      <div className="relative p-6 sm:p-8 rounded-3xl bg-[#14131A] border border-[#252233] shadow-2xl overflow-hidden">
+        {/* Target Center Indicator Needle */}
+        <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-1 z-20 pointer-events-none flex flex-col items-center justify-between py-2">
+          <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-t-[10px] border-t-[#AC82FF] drop-shadow-[0_0_8px_rgba(172,130,255,0.8)]" />
+          <div className="w-0.5 h-full bg-[#AC82FF]/80 shadow-[0_0_8px_rgba(172,130,255,0.7)]" />
+          <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-b-[10px] border-b-[#AC82FF] drop-shadow-[0_0_8px_rgba(172,130,255,0.8)]" />
+        </div>
 
-          {/* Vignette shadows at left and right */}
-          <div className="absolute inset-y-0 left-0 w-24 bg-gradient-to-r from-[#14131A] to-transparent z-10 pointer-events-none" />
-          <div className="absolute inset-y-0 right-0 w-24 bg-gradient-to-l from-[#14131A] to-transparent z-10 pointer-events-none" />
+        {/* Vignette shadows at left and right */}
+        <div className="absolute inset-y-0 left-0 w-28 bg-gradient-to-r from-[#14131A] to-transparent z-10 pointer-events-none" />
+        <div className="absolute inset-y-0 right-0 w-28 bg-gradient-to-l from-[#14131A] to-transparent z-10 pointer-events-none" />
 
-          {/* Scrolling Reel Container */}
-          <div ref={reelContainerRef} className="overflow-hidden py-4">
+        {/* Scrolling Reel Container */}
+        <div ref={reelContainerRef} className="overflow-hidden py-4">
+          {reelItems.length > 0 ? (
             <div
               className="flex items-center transition-transform"
               style={{
@@ -437,19 +590,13 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                 transitionTimingFunction: 'cubic-bezier(0.12, 0.8, 0.2, 1)',
               }}
             >
-              {(reelItems.length > 0
-                ? reelItems
-                : Array.from({ length: 15 }).map((_, i) => ({
-                    id: i,
-                    title: 'Случайный тайтл',
-                    type: category === 'ALL' ? 'MEDIA' : category,
-                  }))
-              ).map((item, idx) => (
+              {reelItems.map((item, idx) => (
                 <div
-                  key={idx}
+                  key={`${item.id || idx}-${idx}`}
                   style={{ width: `${ITEM_WIDTH}px` }}
-                  className="shrink-0 aspect-[2/3] rounded-2xl overflow-hidden bg-[#191724] border border-[#252233] relative flex flex-col justify-between shadow-lg"
+                  className="shrink-0 aspect-[2/3] rounded-2xl overflow-hidden bg-[#191724] border border-[#252233] relative flex flex-col justify-between shadow-lg group select-none"
                 >
+                  {/* Real poster or neutral dark placeholder */}
                   {item.posterUrl ? (
                     <img
                       src={item.posterUrl}
@@ -458,9 +605,11 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center bg-[#191724]">
-                      <Film className="w-8 h-8 text-zinc-600 mb-2" />
-                      <span className="text-xs text-[#9A94AA] line-clamp-2">{item.title}</span>
+                    <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-[#191724]">
+                      {getTypeIcon(item.type)}
+                      <span className="text-xs text-[#9A94AA] line-clamp-2 mt-2 font-medium">
+                        {item.title}
+                      </span>
                     </div>
                   )}
 
@@ -473,59 +622,33 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                   )}
 
                   {/* Title overlay at bottom */}
-                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/80 to-transparent p-2.5 pt-6 text-left">
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/80 to-transparent p-2.5 pt-7 text-left">
                     <p className="text-xs font-bold text-white line-clamp-1">{item.title}</p>
-                    <p className="text-[10px] text-zinc-400 font-mono">{item.year || item.type}</p>
+                    <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 font-mono mt-0.5">
+                      <span>{item.type || 'МЕДИА'}</span>
+                      {item.year && <span>• {item.year}</span>}
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
-          </div>
-        </div>
-      ) : (
-        /* Wheel of Fortune Mode */
-        <div className="p-8 rounded-3xl bg-[#14131A] border border-[#252233] flex flex-col items-center justify-center space-y-6 shadow-2xl">
-          <div className="relative w-64 h-64 sm:w-80 sm:h-80">
-            {/* Pointer */}
-            <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent border-t-[18px] border-t-[#AC82FF] z-20 drop-shadow-[0_0_8px_rgba(172,130,255,0.8)]" />
-
-            {/* Rotating Wheel Plate */}
-            <div
-              className="w-full h-full rounded-full border-4 border-[#252233] bg-[#191724] shadow-2xl overflow-hidden relative transition-transform"
-              style={{
-                transform: `rotate(${wheelRotation}deg)`,
-                transitionDuration: isSpinning ? '4000ms' : '0ms',
-                transitionTimingFunction: 'cubic-bezier(0.15, 0.9, 0.25, 1)',
-              }}
-            >
-              {/* Segments */}
-              {[0, 45, 90, 135, 180, 225, 270, 315].map((deg, i) => (
-                <div
-                  key={i}
-                  className="absolute inset-0 flex items-center justify-center"
-                  style={{ transform: `rotate(${deg}deg)` }}
-                >
-                  <div className="h-full w-0.5 bg-[#252233]" />
-                  <span className="absolute top-4 text-[10px] font-bold text-zinc-400 font-mono">
-                    #{i + 1}
-                  </span>
-                </div>
-              ))}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-16 h-16 rounded-full bg-[#14131A] border-2 border-[#AC82FF] flex items-center justify-center text-[#AC82FF]">
-                  <Dice5 className="w-7 h-7" />
-                </div>
-              </div>
+          ) : (
+            <div className="h-64 flex flex-col items-center justify-center text-center p-6 space-y-2">
+              <Dice5 className="w-10 h-10 text-zinc-600 mb-1" />
+              <p className="text-sm font-semibold text-zinc-300">Нет доступных тайтлов для ленты</p>
+              <p className="text-xs text-[#9A94AA] max-w-sm">
+                Измените фильтры или выберите другой источник, чтобы наполнить рулетку.
+              </p>
             </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Spin Button */}
       <div className="flex justify-center">
         <button
           onClick={handleSpin}
-          disabled={isSpinning || poolSize === 0}
+          disabled={isSpinning || poolSize === 0 || poolLoading}
           className="px-8 sm:px-12 py-3.5 rounded-2xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-sm sm:text-base font-black uppercase tracking-wider flex items-center gap-2.5 shadow-xl shadow-[#9B6BFF]/30 hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
         >
           {isSpinning ? (
@@ -550,7 +673,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
               <Sparkles className="w-4 h-4" />
               Рулетка выбрала для вас:
             </span>
-            <span className="text-xs text-zinc-400">Нажмите «Перейти к тайтлу», чтобы открыть детали</span>
+            <span className="text-xs text-zinc-400">Нажмите «Открыть страницу», чтобы перейти к деталям</span>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-6 items-start">
@@ -565,8 +688,8 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                 />
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-[#9A94AA] text-xs">
-                  <Film className="w-8 h-8 mb-2 text-zinc-600" />
-                  <span>{chosenItem.title}</span>
+                  {getTypeIcon(chosenItem.type)}
+                  <span className="mt-2 line-clamp-2">{chosenItem.title}</span>
                 </div>
               )}
             </div>
@@ -576,7 +699,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[#1F1C2E] border border-[#3A344E] text-xs font-medium text-[#AC82FF]">
                   {getTypeIcon(chosenItem.type)}
-                  {chosenItem.type || 'МЕДИА'}
+                  {getCategoryLabel(chosenItem.type) || 'МЕДИА'}
                 </span>
 
                 {chosenItem.year && (
@@ -619,7 +742,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                   }
                   className="px-5 py-2.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-[#9B6BFF]/25 transition-all"
                 >
-                  <span>Перейти к тайтлу</span>
+                  <span>Открыть страницу</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
 
@@ -654,3 +777,4 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
     </div>
   );
 };
+

@@ -15,9 +15,12 @@ import { CalendarView } from './components/views/CalendarView.tsx';
 import { AdminView } from './components/views/AdminView.tsx';
 import { ProfileView } from './components/views/ProfileView.tsx';
 import { SettingsView } from './components/views/SettingsView.tsx';
+import { NotificationCenterView } from './components/views/NotificationCenterView.tsx';
 import { MediaDetailView } from './components/views/MediaDetailView.tsx';
 import { TierListDetailView } from './components/views/TierListDetailView.tsx';
 import { ListDetailView } from './components/views/ListDetailView.tsx';
+import { LibraryImportView } from './components/views/LibraryImportView.tsx';
+import { LibraryExportView } from './components/views/LibraryExportView.tsx';
 import { AuthGatekeeper } from './components/auth/AuthGatekeeper.tsx';
 import { ResetPasswordView } from './components/auth/ResetPasswordView.tsx';
 import { Loader2 } from 'lucide-react';
@@ -84,6 +87,12 @@ function MainApp() {
       case 'search':
         return <SearchView />;
 
+      case 'library-import':
+        return <LibraryImportView onBack={() => navigate('/library')} />;
+
+      case 'library-export':
+        return <LibraryExportView onBack={() => navigate('/library')} />;
+
       case 'library':
         return (
           <LibraryView
@@ -117,6 +126,8 @@ function MainApp() {
       case 'admin':
         return <AdminView />;
 
+      case 'notifications':
+        return <NotificationCenterView onNavigate={navigate} />;
       case 'settings':
         return (
           <SettingsView
