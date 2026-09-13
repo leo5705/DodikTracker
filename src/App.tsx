@@ -1,3 +1,4 @@
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { RouterProvider, useRouter } from './context/RouterContext.tsx';
@@ -175,7 +176,7 @@ export default function App() {
   return (
     <AuthProvider>
       <RouterProvider>
-        <MainApp />
+        <ErrorBoundary><MainApp /></ErrorBoundary>
       </RouterProvider>
     </AuthProvider>
   );

@@ -17,8 +17,14 @@ export interface DbUser {
   role: 'USER' | 'MODERATOR' | 'ADMIN' | 'SUPER_ADMIN';
   profileVisibility: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   libraryVisibility: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
-  invitesLeft: number;
+  ratingVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
+  activityVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
+  listVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
+  statisticsVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   telegramUsername?: string | null;
+  telegramChatId?: string | null;
+  notificationSettings?: Record<string, boolean>;
+  invitesLeft: number;
   createdAt: string;
 }
 

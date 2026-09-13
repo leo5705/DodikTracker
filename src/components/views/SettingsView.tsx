@@ -50,9 +50,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
       setStatisticsVisibility(dbUser.statisticsVisibility || 'PUBLIC');
       setTelegramChatId(dbUser.telegramChatId || '');
       if (dbUser.notificationSettings) {
-        try {
-          setNotificationSettings(JSON.parse(dbUser.notificationSettings));
-        } catch (e) {}
+        setNotificationSettings(dbUser.notificationSettings);
       }
     }
   }, [dbUser]);

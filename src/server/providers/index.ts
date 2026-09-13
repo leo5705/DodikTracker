@@ -16,10 +16,17 @@ import { systemIntegrations, apiLogs } from '../../db/schema.ts';
 import { decryptCredentials } from '../../lib/crypto.ts';
 import { eq } from 'drizzle-orm';
 
-class ProviderManager {
+
+function extractResults(res: any): { results: import('./types.js').MediaSearchResult[], hasMore: boolean } {
+  if (Array.isArray(res)) return { results: res, hasMore: false };
+  if (res && Array.isArray(res.results)) return { results: res.results, hasMore: !!res.hasMore };
+  return { results: [], hasMore: false };
+}
+
+export class ProviderManager {
   private providers: Map<string, MediaProvider> = new Map();
   private detailsCache: Map<string, { data: MediaSearchResult & MediaDetailExtended; expiresAt: number }> = new Map();
-  private searchCache: Map<string, { data: MediaSearchResult[]; expiresAt: number }> = new Map();
+  private searchCache: Map<string, { data: {results: MediaSearchResult[], hasMore: boolean}; expiresAt: number }> = new Map();
 
   constructor() {
     this.register(new TMDBProvider());
@@ -158,7 +165,8 @@ class ProviderManager {
       }
 
       try {
-        const searchItems = await altProvider.search(queryTitle, credentials);
+        const searchItemsRaw = await altProvider.search(queryTitle, credentials);
+        const searchItems = extractResults(searchItemsRaw).results;
         if (searchItems.length === 0) continue;
 
         // Find the best match
@@ -212,11 +220,11 @@ class ProviderManager {
     return details;
   }
 
-  async search(query: string, typeFilter?: string): Promise<MediaSearchResult[]> {
+  async search(query: string, typeFilter?: string, page: number = 1): Promise<{ results: MediaSearchResult[], hasMore: boolean }> {
     const trimmedQuery = query.trim().toLowerCase();
-    if (!trimmedQuery) return [];
+    if (!trimmedQuery) return { results: [], hasMore: false };
 
-    const cacheKey = `${typeFilter || 'ALL'}_${trimmedQuery}`;
+    const cacheKey = `${typeFilter || 'ALL'}_${trimmedQuery}_${page}`;
     const cached = this.searchCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) {
       return cached.data;
@@ -245,11 +253,11 @@ class ProviderManager {
     const searchPromises = providerStatuses.map(async ({ provider, credentials }) => {
       const start = Date.now();
       try {
-        const timeoutPromise = new Promise<MediaSearchResult[]>((_, reject) =>
+        const timeoutPromise = new Promise<any>((_, reject) =>
           setTimeout(() => reject(new Error('Provider search timeout')), 3500)
         );
 
-        const items = await Promise.race([
+        const rawItems = await Promise.race([
           provider.search(query, credentials),
           timeoutPromise,
         ]);
@@ -262,7 +270,8 @@ class ProviderManager {
           latencyMs,
         }).catch(() => {});
 
-        return (Array.isArray(items) ? items : []).slice(0, 15);
+        const extracted = extractResults(rawItems);
+        return { results: extracted.results.slice(0, 20), hasMore: extracted.hasMore };
       } catch (err: any) {
         const latencyMs = Date.now() - start;
         db.insert(apiLogs).values({
@@ -272,22 +281,24 @@ class ProviderManager {
           latencyMs,
           error: err.message,
         }).catch(() => {});
-        return [] as MediaSearchResult[];
+        return { results: [], hasMore: false };
       }
     });
 
     const settled = await Promise.allSettled(searchPromises);
     const results: MediaSearchResult[] = [];
+    let anyHasMore = false;
 
     for (const res of settled) {
-      if (res.status === 'fulfilled' && Array.isArray(res.value)) {
-        results.push(...res.value);
+      if (res.status === 'fulfilled' && res.value && Array.isArray(res.value.results)) {
+        results.push(...res.value.results);
+        if (res.value.hasMore) anyHasMore = true;
       }
     }
 
     // Cache results for 5 minutes
     this.searchCache.set(cacheKey, {
-      data: results,
+      data: {results, hasMore: anyHasMore},
       expiresAt: Date.now() + 5 * 60 * 1000,
     });
 
@@ -299,12 +310,13 @@ class ProviderManager {
       }
     }
 
-    return results;
+    return { results, hasMore: anyHasMore };
   }
 
-  async getTrending(type: string = 'MOVIE'): Promise<MediaSearchResult[]> {
+  async getTrending(type: string = 'MOVIE', page: number = 1): Promise<{ results: MediaSearchResult[], hasMore: boolean }> {
     const allProviders = this.getAllProviders();
     const results: MediaSearchResult[] = [];
+    let anyHasMore = false;
 
     for (const provider of allProviders) {
       if (!provider.supportedTypes.includes(type) || !provider.getTrending) {
@@ -317,14 +329,16 @@ class ProviderManager {
       }
 
       try {
-        const items = await provider.getTrending(type, credentials);
-        results.push(...items);
+        const raw = await provider.getTrending(type, credentials, page);
+        const extracted = extractResults(raw);
+        results.push(...extracted.results);
+        if (extracted.hasMore) anyHasMore = true;
       } catch (err) {
         console.error(`Error fetching trending from ${provider.name}:`, err);
       }
     }
 
-    return results;
+    return { results, hasMore: anyHasMore };
   }
 
   async healthCheck(providerName: string, customCredentials?: Record<string, any>): Promise<ProviderHealthResult> {

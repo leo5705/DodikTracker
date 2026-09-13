@@ -1539,8 +1539,8 @@ export const AdminView: React.FC = () => {
             ? `Пользователь @${userToBlockConfirm?.username} снова сможет входить в систему и работать с медиатекой.`
             : `Пользователь @${userToBlockConfirm?.username} будет заблокирован и потеряет доступ к сервису.`
         }
-        confirmLabel={userToBlockConfirm?.isBlocked ? 'Разблокировать' : 'Заблокировать'}
-        isDestructive={!userToBlockConfirm?.isBlocked}
+        confirmText={userToBlockConfirm?.isBlocked ? 'Разблокировать' : 'Заблокировать'}
+        variant={userToBlockConfirm?.isBlocked ? 'primary' : 'danger'}
         onConfirm={handleToggleBlockUser}
         onCancel={() => setUserToBlockConfirm(null)}
       />

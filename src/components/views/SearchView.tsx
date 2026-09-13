@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Search,
   Film,
@@ -27,6 +27,10 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
   const [query, setQuery] = useState('');
   const [selectedType, setSelectedType] = useState('ALL');
   const [results, setResults] = useState<any[]>([]);
+  const [page, setPage] = useState(1);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [trendingHasMore, setTrendingHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [trending, setTrending] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [trendingLoading, setTrendingLoading] = useState(true);
@@ -45,24 +49,37 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
   ];
 
   // Fetch trending on mount
-  useEffect(() => {
-    const fetchTrending = async () => {
-      setTrendingLoading(true);
-      try {
-        const type = selectedType === 'ALL' ? 'MOVIE' : selectedType;
-        const res = await fetch(`/api/media/trending?type=${type}`);
-        if (res.ok) {
-          const data = await res.json();
-          setTrending(data);
+  const fetchTrending = useCallback(async (currentPage = 1, append = false) => {
+    if (!append) setTrendingLoading(true);
+    else setLoadingMore(true);
+    try {
+      const type = selectedType === 'ALL' ? 'MOVIE' : selectedType;
+      const res = await fetch(`/api/media/trending?type=${type}&page=${currentPage}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (append) {
+          setTrending(prev => {
+            const newItems = [...prev, ...(data.results || data || [])];
+            const unique = Array.from(new Map(newItems.map(item => [`${item.provider}-${item.externalId}-${item.title}`, item])).values());
+            return unique;
+          });
+        } else {
+          setTrending(data.results || data || []);
         }
-      } catch (err) {
-        console.error('Failed to fetch trending:', err);
-      } finally {
-        setTrendingLoading(false);
+        setTrendingHasMore(data.hasMore || false);
       }
-    };
-    fetchTrending();
+    } catch (err) {
+      console.error('Failed to fetch trending:', err);
+    } finally {
+      if (!append) setTrendingLoading(false);
+      else setLoadingMore(false);
+    }
   }, [selectedType]);
+
+  useEffect(() => {
+    setPage(1);
+    fetchTrending(1, false);
+  }, [fetchTrending]);
 
   // Debounced search with AbortController
   useEffect(() => {
@@ -79,14 +96,16 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
       setLoading(true);
       try {
         const typeParam = selectedType !== 'ALL' ? `&type=${selectedType}` : '';
-        const res = await fetch(`/api/media/search?q=${encodeURIComponent(trimmed)}${typeParam}&limit=25`, {
+        const res = await fetch(`/api/media/search?q=${encodeURIComponent(trimmed)}${typeParam}&limit=20&page=1`, {
           signal: controller.signal,
         });
         if (controller.signal.aborted) return;
         if (res.ok) {
           const data = await res.json();
           if (!controller.signal.aborted) {
-            setResults(Array.isArray(data) ? data : []);
+            const parsedResults = data.results || data || [];
+            setResults(Array.isArray(parsedResults) ? parsedResults : []);
+            setSearchHasMore(data.hasMore || false);
           }
         }
       } catch (err: any) {
@@ -99,11 +118,62 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
       }
     }, 300);
 
-    return () => {
+    
+
+  return () => {
       clearTimeout(timer);
       controller.abort();
     };
   }, [query, selectedType]);
+
+  
+  const currentHasMore = query.trim().length >= 2 ? searchHasMore : trendingHasMore;
+
+  const handleLoadMore = useCallback(async () => {
+    if (loadingMore || !currentHasMore) return;
+    const nextPage = page + 1;
+    setPage(nextPage);
+    const trimmed = query.trim();
+
+    if (!trimmed) {
+      fetchTrending(nextPage, true);
+    } else {
+      setLoadingMore(true);
+      try {
+        const typeParam = selectedType !== 'ALL' ? `&type=${selectedType}` : '';
+        const res = await fetch(`/api/media/search?q=${encodeURIComponent(trimmed)}${typeParam}&limit=20&page=${nextPage}`);
+        if (res.ok) {
+          const data = await res.json();
+          setResults(prev => {
+            const newItems = [...prev, ...(data.results || data || [])];
+            const unique = Array.from(new Map(newItems.map(item => [`${item.provider}-${item.externalId}-${item.title}`, item])).values());
+            return unique;
+          });
+          setSearchHasMore(data.hasMore || false);
+        }
+      } catch (err) {
+        console.error('Failed to load more:', err);
+      } finally {
+        setLoadingMore(false);
+      }
+    }
+  }, [page, currentHasMore, loadingMore, query, selectedType, fetchTrending]);
+
+  const observerTarget = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0].isIntersecting && currentHasMore && !loadingMore && !loading && !trendingLoading) {
+          handleLoadMore();
+        }
+      },
+      { threshold: 0.1, rootMargin: '200px' }
+    );
+    if (observerTarget.current) {
+      observer.observe(observerTarget.current);
+    }
+    return () => observer.disconnect();
+  }, [currentHasMore, loadingMore, loading, trendingLoading, handleLoadMore]);
 
   const displayList = query.trim() ? results : trending;
 
@@ -308,6 +378,22 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
           </div>
         )}
       </div>
+
+      
+      {/* Intersection Target & Load More Status */}
+      {displayList.length > 0 && (
+        <div ref={observerTarget} className="py-6 flex flex-col items-center justify-center text-center">
+          {loadingMore && (
+            <div className="flex flex-col items-center gap-2 text-zinc-400">
+              <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
+              <span className="text-xs">Загрузка следующих результатов...</span>
+            </div>
+          )}
+          {!currentHasMore && !loadingMore && !loading && !trendingLoading && (
+            <div className="text-xs text-zinc-500 font-medium">Вы просмотрели все доступные результаты.</div>
+          )}
+        </div>
+      )}
 
       {/* Modal */}
       {activeModalItem && (

@@ -38,13 +38,13 @@ export class TMDBProvider implements MediaProvider {
     }
   }
 
-  async search(query: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
+  async search(query: string, credentials?: Record<string, any>, page: number = 1): Promise<import("./types.js").PaginatedResult<MediaSearchResult> | MediaSearchResult[]> {
     const apiKey = credentials?.apiKey;
     if (!apiKey) return [];
 
     try {
       const res = await fetch(
-        `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=ru-RU&include_adult=false`
+        `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=ru-RU&include_adult=false&page=${page}`
       );
       if (!res.ok) return [];
       const data = await res.json();
@@ -297,18 +297,18 @@ export class TMDBProvider implements MediaProvider {
     }
   }
 
-  async getTrending(type: string = 'MOVIE', credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
+  async getTrending(type: string = "MOVIE", credentials?: Record<string, any>, page: number = 1): Promise<import("./types.js").PaginatedResult<MediaSearchResult> | MediaSearchResult[]> {
     const apiKey = credentials?.apiKey;
     if (!apiKey) return [];
 
     try {
       const mediaType = type === 'TV' ? 'tv' : 'movie';
-      const res = await fetch(`https://api.themoviedb.org/3/trending/${mediaType}/week?api_key=${apiKey}&language=ru-RU`);
+      const res = await fetch(`https://api.themoviedb.org/3/trending/${mediaType}/week?api_key=${apiKey}&language=ru-RU&page=${page}`);
       if (!res.ok) return [];
       const data = await res.json();
       const results: MediaSearchResult[] = [];
 
-      for (const item of (data.results || []).slice(0, 15)) {
+      for (const item of (data.results || [])) {
         const isMovie = mediaType === 'movie';
         const title = isMovie ? (item.title || item.original_title) : (item.name || item.original_name);
         const originalTitle = isMovie ? item.original_title : item.original_name;

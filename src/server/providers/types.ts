@@ -113,12 +113,17 @@ export interface ProviderHealthResult {
   details?: string;
 }
 
+export interface PaginatedResult<T> {
+  results: T[];
+  hasMore: boolean;
+}
+
 export interface MediaProvider {
   name: string;
   supportedTypes: string[];
   requiresKey: boolean;
   healthCheck(credentials?: Record<string, any>): Promise<ProviderHealthResult>;
-  search(query: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]>;
+  search(query: string, credentials?: Record<string, any>, page?: number): Promise<PaginatedResult<MediaSearchResult> | MediaSearchResult[]>;
   getDetails?(externalId: string, type?: string, credentials?: Record<string, any>): Promise<(MediaSearchResult & MediaDetailExtended) | null>;
-  getTrending?(type?: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]>;
+  getTrending?(type?: string, credentials?: Record<string, any>, page?: number): Promise<PaginatedResult<MediaSearchResult> | MediaSearchResult[]>;
 }

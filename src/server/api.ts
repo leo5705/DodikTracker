@@ -355,7 +355,7 @@ apiRouter.post('/auth/login', async (req, res) => {
     const found = await db
       .select()
       .from(users)
-      .where(eq(users.username, cleanUsername))
+      .where(or(eq(users.username, cleanUsername), eq(users.email, cleanUsername)))
       .limit(1);
 
     if (found.length === 0) {
@@ -1041,6 +1041,7 @@ const mediaSearchHandler = async (req: any, res: any) => {
     const categoryFilter = rawCategory ? String(rawCategory).toUpperCase() : undefined;
     let typeFilter = req.query.type ? String(req.query.type).toUpperCase() : undefined;
     const limit = Math.min(Math.max(parseInt(String(req.query.limit || '25'), 10) || 25, 1), 50);
+    const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
 
     if (!typeFilter && categoryFilter) {
       if (categoryFilter === 'GAME' || categoryFilter === 'GAMES') typeFilter = 'GAME';
@@ -1098,7 +1099,9 @@ const mediaSearchHandler = async (req: any, res: any) => {
     }));
 
     // 2. Search external active providers (runs in parallel with timeouts)
-    const externalResults = await providerManager.search(query, typeFilter);
+    const searchRes = await providerManager.search(query, typeFilter, page);
+    const externalResults = searchRes.results;
+    const hasMore = searchRes.hasMore;
 
     // Merge without duplicates
     let combined = [...localFormatted, ...externalResults];
@@ -1117,7 +1120,7 @@ const mediaSearchHandler = async (req: any, res: any) => {
     }
 
     // Limit returned results to avoid overloading the UI
-    res.json(combined.slice(0, limit));
+    res.json({ results: combined.slice(0, limit), hasMore: hasMore || externalResults.length >= limit });
   } catch (err: any) {
     console.error('Search error:', err);
     res.status(500).json({ error: 'Ошибка при поиске медиа' });
@@ -1131,8 +1134,9 @@ apiRouter.get('/search', mediaSearchHandler);
 apiRouter.get('/media/trending', async (req, res) => {
   try {
     const type = req.query.type ? String(req.query.type).toUpperCase() : 'MOVIE';
-    const items = await providerManager.getTrending(type);
-    res.json(items);
+    const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
+    const trendingRes = await providerManager.getTrending(type, page);
+    res.json(trendingRes);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1317,7 +1321,8 @@ apiRouter.get('/media/:id', optionalAuth, async (req: AuthRequest, res: Response
     } else {
       // Auto-discover provider ID if not yet linked
       try {
-        const searchResults = await providerManager.search(item.title, item.type);
+        const searchResultsRaw = await providerManager.search(item.title, item.type);
+        const searchResults = searchResultsRaw.results;
         if (searchResults.length > 0) {
           const match = searchResults[0];
           await db.insert(mediaExternalIds).values({
