@@ -43,12 +43,57 @@ export class AniListProvider implements MediaProvider {
     }
   }
 
-  async search(queryText: string, _credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
+  async search(
+    queryText: string,
+    _credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20,
+    filters?: import('./types.ts').UnifiedSearchFilters
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
     try {
       const gql = `
-        query ($search: String) {
-          Page(page: 1, perPage: 15) {
-            media(search: $search) {
+        query (
+          $search: String,
+          $type: MediaType,
+          $format_in: [MediaFormat],
+          $status: MediaStatus,
+          $genre_in: [String],
+          $season: MediaSeason,
+          $seasonYear: Int,
+          $startDate_greater: FuzzyDateInt,
+          $startDate_lesser: FuzzyDateInt,
+          $averageScore_greater: Int,
+          $averageScore_lesser: Int,
+          $episodes_greater: Int,
+          $episodes_lesser: Int,
+          $countryOfOrigin: CountryCode,
+          $sort: [MediaSort],
+          $page: Int,
+          $perPage: Int
+        ) {
+          Page(page: $page, perPage: $perPage) {
+            pageInfo {
+              hasNextPage
+              total
+              currentPage
+            }
+            media(
+              search: $search,
+              type: $type,
+              format_in: $format_in,
+              status: $status,
+              genre_in: $genre_in,
+              season: $season,
+              seasonYear: $seasonYear,
+              startDate_greater: $startDate_greater,
+              startDate_lesser: $startDate_lesser,
+              averageScore_greater: $averageScore_greater,
+              averageScore_lesser: $averageScore_lesser,
+              episodes_greater: $episodes_greater,
+              episodes_lesser: $episodes_lesser,
+              countryOfOrigin: $countryOfOrigin,
+              sort: $sort
+            ) {
               id
               type
               title {
@@ -74,15 +119,95 @@ export class AniListProvider implements MediaProvider {
         }
       `;
 
+      const variables: Record<string, any> = {
+        page,
+        perPage: limit,
+      };
+
+      const trimmedQ = (queryText || '').trim();
+      if (trimmedQ) {
+        variables.search = trimmedQ;
+      }
+
+      // Type
+      const targetType = filters?.type === 'MANGA' || filters?.category === 'MANGA' ? 'MANGA' : 'ANIME';
+      variables.type = targetType;
+
+      // Format (TV, MOVIE, OVA, ONA, SPECIAL, MANGA)
+      if (filters?.animeFormat) {
+        variables.format_in = [filters.animeFormat.toUpperCase()];
+      }
+
+      // Status
+      if (filters?.status) {
+        const s = filters.status.toUpperCase();
+        if (s === 'RELEASING' || s === 'ONGOING') variables.status = 'RELEASING';
+        else if (s === 'FINISHED' || s === 'ENDED') variables.status = 'FINISHED';
+        else if (s === 'NOT_YET_RELEASED' || s === 'ANNOUNCED') variables.status = 'NOT_YET_RELEASED';
+        else if (s === 'CANCELLED') variables.status = 'CANCELLED';
+      }
+
+      // Genres
+      if (filters?.genres && filters.genres.length > 0) {
+        variables.genre_in = filters.genres;
+      }
+
+      // Season & Year
+      if (filters?.season) {
+        variables.season = filters.season.toUpperCase();
+      }
+      if (filters?.seasonYear) {
+        variables.seasonYear = filters.seasonYear;
+      }
+
+      // Year range
+      if (filters?.year) {
+        variables.startDate_greater = filters.year * 10000;
+        variables.startDate_lesser = (filters.year + 1) * 10000;
+      } else {
+        if (filters?.yearFrom) variables.startDate_greater = filters.yearFrom * 10000;
+        if (filters?.yearTo) variables.startDate_lesser = (filters.yearTo + 1) * 10000;
+      }
+
+      // Rating (AniList uses 0-100)
+      if (filters?.ratingFrom !== undefined) variables.averageScore_greater = Math.round(filters.ratingFrom * 10);
+      if (filters?.ratingTo !== undefined) variables.averageScore_lesser = Math.round(filters.ratingTo * 10);
+
+      // Episodes
+      if (filters?.episodesFrom !== undefined) variables.episodes_greater = filters.episodesFrom;
+      if (filters?.episodesTo !== undefined) variables.episodes_lesser = filters.episodesTo;
+
+      // Country (JP, KR, CN, TW)
+      if (filters?.countries && filters.countries.length > 0) {
+        const c = filters.countries[0].toUpperCase();
+        if (['JP', 'KR', 'CN', 'TW'].includes(c)) {
+          variables.countryOfOrigin = c;
+        }
+      }
+
+      // Sort
+      if (filters?.sortBy === 'rating') {
+        variables.sort = filters.sortOrder === 'asc' ? ['SCORE'] : ['SCORE_DESC'];
+      } else if (filters?.sortBy === 'popularity') {
+        variables.sort = filters.sortOrder === 'asc' ? ['POPULARITY'] : ['POPULARITY_DESC'];
+      } else if (filters?.sortBy === 'release_date') {
+        variables.sort = filters.sortOrder === 'asc' ? ['START_DATE'] : ['START_DATE_DESC'];
+      } else if (filters?.sortBy === 'title') {
+        variables.sort = ['TITLE_ROMAJI'];
+      } else if (!trimmedQ) {
+        variables.sort = ['TRENDING_DESC', 'POPULARITY_DESC'];
+      }
+
       const res = await fetch('https://graphql.anilist.co', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ query: gql, variables: { search: queryText } }),
+        body: JSON.stringify({ query: gql, variables }),
       });
 
-      if (!res.ok) return [];
+      if (!res.ok) return { results: [], hasMore: false, page };
       const json = await res.json();
       const mediaList = json.data?.Page?.media || [];
+      const pageInfo = json.data?.Page?.pageInfo;
       const results: MediaSearchResult[] = [];
 
       for (const item of mediaList) {
@@ -104,10 +229,15 @@ export class AniListProvider implements MediaProvider {
         });
       }
 
-      return results;
+      return {
+        results,
+        hasMore: pageInfo?.hasNextPage ?? (results.length >= limit),
+        page,
+        total: pageInfo?.total,
+      };
     } catch (err) {
       console.error('AniList search error:', err);
-      return [];
+      return { results: [], hasMore: false, page };
     }
   }
 
@@ -351,71 +481,13 @@ export class AniListProvider implements MediaProvider {
     }
   }
 
-  async getTrending(type: string = 'ANIME', _credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
-    try {
-      const gql = `
-        query ($type: MediaType) {
-          Page(page: 1, perPage: 12) {
-            media(type: $type, sort: TRENDING_DESC) {
-              id
-              type
-              title {
-                romaji
-                english
-                native
-              }
-              description(asHtml: false)
-              coverImage {
-                large
-              }
-              bannerImage
-              startDate {
-                year
-              }
-              episodes
-              chapters
-              averageScore
-              genres
-            }
-          }
-        }
-      `;
-
-      const mediaType = type === 'MANGA' ? 'MANGA' : 'ANIME';
-      const res = await fetch('https://graphql.anilist.co', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ query: gql, variables: { type: mediaType } }),
-      });
-
-      if (!res.ok) return [];
-      const json = await res.json();
-      const mediaList = json.data?.Page?.media || [];
-      const results: MediaSearchResult[] = [];
-
-      for (const item of mediaList) {
-        const title = item.title.english || item.title.romaji || item.title.native || 'Без названия';
-        const isManga = item.type === 'MANGA';
-        results.push({
-          provider: 'AniList',
-          externalId: String(item.id),
-          type: isManga ? 'MANGA' : 'ANIME',
-          title,
-          originalTitle: item.title.native || item.title.romaji,
-          description: item.description ? item.description.replace(/<[^>]*>/g, '') : undefined,
-          posterUrl: item.coverImage?.large,
-          backdropUrl: item.bannerImage || undefined,
-          year: item.startDate?.year || undefined,
-          rating: item.averageScore ? Math.round(item.averageScore / 10 * 10) / 10 : undefined,
-          totalEpisodes: item.episodes || item.chapters || undefined,
-          genres: item.genres || [],
-        });
-      }
-
-      return results;
-    } catch (err) {
-      console.error('AniList trending error:', err);
-      return [];
-    }
+  async getTrending(
+    type: string = 'ANIME',
+    _credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20,
+    filters?: import('./types.ts').UnifiedSearchFilters
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
+    return this.search('', _credentials, page, limit, { ...filters, type });
   }
 }

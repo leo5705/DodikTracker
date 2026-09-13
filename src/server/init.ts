@@ -1,9 +1,14 @@
 import { db } from '../db/index.ts';
 import { systemSettings, users } from '../db/schema.ts';
 import { eq, count } from 'drizzle-orm';
+import { achievementService } from './achievements/service.ts';
 
 export async function initDbSettings() {
   try {
+    // 1. Initialize and seed Achievements table
+    await achievementService.init();
+
+    // 2. Registration mode
     const setting = await db
       .select()
       .from(systemSettings)

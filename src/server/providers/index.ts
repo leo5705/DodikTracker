@@ -3,6 +3,7 @@ import {
   MediaSearchResult,
   ProviderHealthResult,
   MediaDetailExtended,
+  UnifiedSearchFilters,
 } from './types.ts';
 import { TMDBProvider } from './tmdb.ts';
 import { KinopoiskProvider } from './kinopoisk.ts';
@@ -11,6 +12,7 @@ import { TheGamesDBProvider } from './thegamesdb.ts';
 import { IGDBProvider } from './igdb.ts';
 import { AniListProvider } from './anilist.ts';
 import { OpenLibraryProvider } from './openlibrary.ts';
+import { ITunesProvider } from './itunes.ts';
 import { db } from '../../db/index.ts';
 import { systemIntegrations, apiLogs } from '../../db/schema.ts';
 import { decryptCredentials } from '../../lib/crypto.ts';
@@ -27,6 +29,7 @@ export class ProviderManager {
   private providers: Map<string, MediaProvider> = new Map();
   private detailsCache: Map<string, { data: MediaSearchResult & MediaDetailExtended; expiresAt: number }> = new Map();
   private searchCache: Map<string, { data: {results: MediaSearchResult[], hasMore: boolean}; expiresAt: number }> = new Map();
+  private trendingCache: Map<string, { data: {results: MediaSearchResult[], hasMore: boolean}; expiresAt: number }> = new Map();
 
   constructor() {
     this.register(new TMDBProvider());
@@ -36,6 +39,7 @@ export class ProviderManager {
     this.register(new IGDBProvider());
     this.register(new AniListProvider());
     this.register(new OpenLibraryProvider());
+    this.register(new ITunesProvider());
   }
 
   register(provider: MediaProvider) {
@@ -220,11 +224,41 @@ export class ProviderManager {
     return details;
   }
 
-  async search(query: string, typeFilter?: string, page: number = 1): Promise<{ results: MediaSearchResult[], hasMore: boolean }> {
-    const trimmedQuery = query.trim().toLowerCase();
-    if (!trimmedQuery) return { results: [], hasMore: false };
+  async search(
+    query: string,
+    typeFilter?: string,
+    page: number = 1,
+    limit: number = 20,
+    filters?: UnifiedSearchFilters
+  ): Promise<{ results: MediaSearchResult[]; hasMore: boolean }> {
+    const trimmedQuery = (query || '').trim().toLowerCase();
+    const hasFilterCriteria = Boolean(
+      filters &&
+        (filters.genres?.length ||
+          filters.countries?.length ||
+          filters.platforms?.length ||
+          filters.year ||
+          filters.yearFrom ||
+          filters.yearTo ||
+          filters.ratingFrom ||
+          filters.ratingTo ||
+          filters.votesFrom ||
+          filters.durationFrom ||
+          filters.durationTo ||
+          filters.status ||
+          filters.season ||
+          filters.seasonYear ||
+          filters.animeFormat ||
+          filters.gameMode ||
+          filters.sortBy)
+    );
 
-    const cacheKey = `${typeFilter || 'ALL'}_${trimmedQuery}_${page}`;
+    if (!trimmedQuery && !hasFilterCriteria && (!typeFilter || typeFilter === 'ALL')) {
+      return { results: [], hasMore: false };
+    }
+
+    const filterKey = filters ? JSON.stringify(filters) : '';
+    const cacheKey = `${typeFilter || 'ALL'}_${trimmedQuery}_${page}_${limit}_${filterKey}`;
     const cached = this.searchCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) {
       return cached.data;
@@ -235,8 +269,10 @@ export class ProviderManager {
     // Fetch integration statuses to respect priority and enabled status
     const providerStatuses: Array<{ provider: MediaProvider; priority: number; credentials?: Record<string, any> }> = [];
 
+    const effectiveType = filters?.type || typeFilter;
+
     for (const provider of allProviders) {
-      if (typeFilter && !provider.supportedTypes.includes(typeFilter)) {
+      if (effectiveType && effectiveType !== 'ALL' && !provider.supportedTypes.includes(effectiveType)) {
         continue;
       }
       const { enabled, priority, credentials } = await this.getCredentialsForProvider(provider.name);
@@ -249,34 +285,34 @@ export class ProviderManager {
     // Sort by priority (1 is highest priority)
     providerStatuses.sort((a, b) => a.priority - b.priority);
 
-    // Run searches in parallel with a strict 3.5s timeout per provider
+    // Run searches in parallel with a strict 4.5s timeout per provider
     const searchPromises = providerStatuses.map(async ({ provider, credentials }) => {
       const start = Date.now();
       try {
         const timeoutPromise = new Promise<any>((_, reject) =>
-          setTimeout(() => reject(new Error('Provider search timeout')), 3500)
+          setTimeout(() => reject(new Error('Provider search timeout')), 5000)
         );
 
         const rawItems = await Promise.race([
-          provider.search(query, credentials),
+          provider.search(query, credentials, page, limit, filters),
           timeoutPromise,
         ]);
 
         const latencyMs = Date.now() - start;
         db.insert(apiLogs).values({
           provider: provider.name,
-          endpoint: `search?q=${query}`,
+          endpoint: `search?q=${query}&p=${page}`,
           status: 200,
           latencyMs,
         }).catch(() => {});
 
         const extracted = extractResults(rawItems);
-        return { results: extracted.results.slice(0, 20), hasMore: extracted.hasMore };
+        return { results: extracted.results, hasMore: extracted.hasMore };
       } catch (err: any) {
         const latencyMs = Date.now() - start;
         db.insert(apiLogs).values({
           provider: provider.name,
-          endpoint: `search?q=${query}`,
+          endpoint: `search?q=${query}&p=${page}`,
           status: 500,
           latencyMs,
           error: err.message,
@@ -286,19 +322,33 @@ export class ProviderManager {
     });
 
     const settled = await Promise.allSettled(searchPromises);
-    const results: MediaSearchResult[] = [];
+    const rawResults: MediaSearchResult[] = [];
     let anyHasMore = false;
 
     for (const res of settled) {
       if (res.status === 'fulfilled' && res.value && Array.isArray(res.value.results)) {
-        results.push(...res.value.results);
+        rawResults.push(...res.value.results);
         if (res.value.hasMore) anyHasMore = true;
       }
     }
 
+    // Deduplicate across providers
+    const seen = new Set<string>();
+    const results: MediaSearchResult[] = [];
+    for (const item of rawResults) {
+      const key = `${item.provider}-${item.externalId}`;
+      const titleKey = `${item.type}-${(item.title || '').trim().toLowerCase()}-${item.year || ''}`;
+      if (seen.has(key) || (titleKey.length > 5 && seen.has(titleKey))) {
+        continue;
+      }
+      seen.add(key);
+      seen.add(titleKey);
+      results.push(item);
+    }
+
     // Cache results for 5 minutes
     this.searchCache.set(cacheKey, {
-      data: {results, hasMore: anyHasMore},
+      data: { results, hasMore: anyHasMore },
       expiresAt: Date.now() + 5 * 60 * 1000,
     });
 
@@ -313,13 +363,29 @@ export class ProviderManager {
     return { results, hasMore: anyHasMore };
   }
 
-  async getTrending(type: string = 'MOVIE', page: number = 1): Promise<{ results: MediaSearchResult[], hasMore: boolean }> {
+  async getTrending(
+    type: string = 'MOVIE',
+    page: number = 1,
+    limit: number = 20,
+    filters?: UnifiedSearchFilters
+  ): Promise<{ results: MediaSearchResult[]; hasMore: boolean }> {
+    const filterKey = filters ? JSON.stringify(filters) : '';
+    const cacheKey = `trending_${type}_${page}_${limit}_${filterKey}`;
+    const cached = this.trendingCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.data;
+    }
+
     const allProviders = this.getAllProviders();
-    const results: MediaSearchResult[] = [];
+    const rawResults: MediaSearchResult[] = [];
     let anyHasMore = false;
 
+    const isAll = !type || type === 'ALL';
+
     for (const provider of allProviders) {
-      if (!provider.supportedTypes.includes(type) || !provider.getTrending) {
+      if (!provider.getTrending) continue;
+
+      if (!isAll && !provider.supportedTypes.includes(type)) {
         continue;
       }
 
@@ -329,12 +395,40 @@ export class ProviderManager {
       }
 
       try {
-        const raw = await provider.getTrending(type, credentials, page);
+        const queryType = isAll ? provider.supportedTypes[0] : type;
+        const raw = await provider.getTrending(queryType, credentials, page, limit, filters);
         const extracted = extractResults(raw);
-        results.push(...extracted.results);
+        rawResults.push(...extracted.results);
         if (extracted.hasMore) anyHasMore = true;
       } catch (err) {
         console.error(`Error fetching trending from ${provider.name}:`, err);
+      }
+    }
+
+    // Deduplicate across providers
+    const seen = new Set<string>();
+    const results: MediaSearchResult[] = [];
+    for (const item of rawResults) {
+      const key = `${item.provider}-${item.externalId}`;
+      const titleKey = `${item.type}-${(item.title || '').trim().toLowerCase()}-${item.year || ''}`;
+      if (seen.has(key) || (titleKey.length > 5 && seen.has(titleKey))) {
+        continue;
+      }
+      seen.add(key);
+      seen.add(titleKey);
+      results.push(item);
+    }
+
+    // Cache trending for 5 minutes
+    this.trendingCache.set(cacheKey, {
+      data: { results, hasMore: anyHasMore },
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    });
+
+    if (this.trendingCache.size > 200) {
+      const now = Date.now();
+      for (const [k, v] of this.trendingCache.entries()) {
+        if (now > v.expiresAt) this.trendingCache.delete(k);
       }
     }
 

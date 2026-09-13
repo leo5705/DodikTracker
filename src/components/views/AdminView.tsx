@@ -29,13 +29,15 @@ import {
   Shield,
   FileText,
   Trash2,
+  Trophy,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
+import { AdminAchievementsTab } from '../admin/AdminAchievementsTab.tsx';
 
 export const AdminView: React.FC = () => {
   const { authFetch, dbUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'access' | 'integrations' | 'users' | 'logs'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'achievements' | 'access' | 'integrations' | 'users' | 'logs'>('dashboard');
 
   // Dashboard stats
   const [stats, setStats] = useState<any | null>(null);
@@ -93,10 +95,23 @@ export const AdminView: React.FC = () => {
   const [healthResults, setHealthResults] = useState<Record<string, { ok: boolean; latencyMs: number; error?: string }>>({});
   const [saveStatus, setSaveStatus] = useState<Record<string, string>>({});
 
+  // Message Cleanup Worker State
+  const [cleanupStatus, setCleanupStatus] = useState<{
+    isRunning: boolean;
+    lastRunStartTime: string | null;
+    lastRunEndTime: string | null;
+    lastDurationMs: number | null;
+    lastDeletedCount: number;
+    lastError: string | null;
+    totalRuns: number;
+  } | null>(null);
+  const [triggeringCleanup, setTriggeringCleanup] = useState(false);
+  const [cleanupNotice, setCleanupNotice] = useState<string | null>(null);
+
   const fetchAllAdminData = async () => {
     setLoading(true);
     try {
-      const [statsRes, intRes, usersRes, logsRes, auditRes, modeRes, invitesRes, tgRes] = await Promise.all([
+      const [statsRes, intRes, usersRes, logsRes, auditRes, modeRes, invitesRes, tgRes, cleanupRes] = await Promise.all([
         authFetch('/api/admin/dashboard'),
         authFetch('/api/admin/integrations'),
         authFetch('/api/admin/users'),
@@ -105,6 +120,7 @@ export const AdminView: React.FC = () => {
         authFetch('/api/auth/registration-mode'),
         authFetch('/api/admin/invites'),
         authFetch('/api/admin/telegram-settings'),
+        authFetch('/api/admin/message-cleanup/status'),
       ]);
 
       const parseJsonSafe = async (res: Response) => {
@@ -122,6 +138,9 @@ export const AdminView: React.FC = () => {
 
       const intData = await parseJsonSafe(intRes);
       if (intData) setIntegrations(intData);
+
+      const cleanupData = await parseJsonSafe(cleanupRes);
+      if (cleanupData) setCleanupStatus(cleanupData);
 
       const usersData = await parseJsonSafe(usersRes);
       if (Array.isArray(usersData)) {
@@ -158,6 +177,31 @@ export const AdminView: React.FC = () => {
       console.error('Failed to load admin data:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleTriggerCleanup = async () => {
+    setTriggeringCleanup(true);
+    setCleanupNotice(null);
+    try {
+      const res = await authFetch('/api/admin/message-cleanup/run', {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCleanupNotice(`Очистка завершена: удалено ${data.deletedCount} сообщений за ${data.durationMs}мс`);
+        // Refresh status & audit logs
+        const statusRes = await authFetch('/api/admin/message-cleanup/status');
+        if (statusRes.ok) setCleanupStatus(await statusRes.json());
+        fetchAuditLogs();
+        setTimeout(() => setCleanupNotice(null), 5000);
+      } else {
+        setCleanupNotice(`Ошибка: ${data.error || 'Не удалось выполнить очистку'}`);
+      }
+    } catch (err: any) {
+      setCleanupNotice(`Ошибка сети: ${err.message}`);
+    } finally {
+      setTriggeringCleanup(false);
     }
   };
 
@@ -503,6 +547,7 @@ export const AdminView: React.FC = () => {
       <div className="flex flex-wrap gap-2 border-b border-[#252233] pb-2">
         {[
           { id: 'dashboard', label: 'Обзор системы', icon: Activity },
+          { id: 'achievements', label: 'Достижения', icon: Trophy },
           { id: 'access', label: 'Доступ & Инвайты & Telegram', icon: Ticket },
           { id: 'users', label: 'Пользователи & Роли', icon: Users },
           { id: 'integrations', label: 'Интеграции & API Ключи', icon: Key },
@@ -577,7 +622,80 @@ export const AdminView: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Background Jobs & Automated Message Retention */}
+          <div className="p-6 rounded-3xl bg-[#14131A] border border-[#252233] space-y-5 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#252233] pb-4">
+              <div>
+                <h3 className="text-base font-bold text-[#F3F1F8] flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-[#AC82FF]" />
+                  Автоматическая очистка сообщений чата (7 дней)
+                </h3>
+                <p className="text-xs text-[#9A94AA] mt-0.5">
+                  Фоновый воркер удаляет сообщения старше 7 дней раз в неделю батчами по 500 записей с защитой от параллельного запуска.
+                </p>
+              </div>
+              <button
+                onClick={handleTriggerCleanup}
+                disabled={triggeringCleanup || cleanupStatus?.isRunning}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#252233] hover:bg-[#353147] text-xs font-semibold text-white border border-[#3A344E] transition-all disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {triggeringCleanup || cleanupStatus?.isRunning ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#AC82FF]" />
+                    Очистка выполняется...
+                  </>
+                ) : (
+                  <>
+                    <RotateCw className="w-3.5 h-3.5 text-[#AC82FF]" />
+                    Запустить вручную
+                  </>
+                )}
+              </button>
+            </div>
+
+            {cleanupNotice && (
+              <div className="p-3.5 rounded-xl bg-purple-950/40 border border-purple-800/50 text-xs text-purple-200 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
+                {cleanupNotice}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="p-3.5 rounded-xl bg-[#191724] border border-[#252233] space-y-1">
+                <span className="text-[11px] text-[#9A94AA]">Периодичность</span>
+                <p className="text-xs font-bold text-[#F3F1F8] font-mono">1 раз в 7 дней</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-[#191724] border border-[#252233] space-y-1">
+                <span className="text-[11px] text-[#9A94AA]">Срок хранения (TTL)</span>
+                <p className="text-xs font-bold text-[#AC82FF] font-mono">7 дней</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-[#191724] border border-[#252233] space-y-1">
+                <span className="text-[11px] text-[#9A94AA]">Последний запуск</span>
+                <p className="text-xs font-bold text-[#F3F1F8] font-mono truncate">
+                  {cleanupStatus?.lastRunStartTime
+                    ? new Date(cleanupStatus.lastRunStartTime).toLocaleString('ru-RU')
+                    : 'Ожидание первого цикла'}
+                </p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-[#191724] border border-[#252233] space-y-1">
+                <span className="text-[11px] text-[#9A94AA]">Удалено за последний запуск</span>
+                <p className="text-xs font-bold text-emerald-400 font-mono">
+                  {cleanupStatus ? `${cleanupStatus.lastDeletedCount} сообщений (${cleanupStatus.lastDurationMs ?? 0}мс)` : '0'}
+                </p>
+              </div>
+            </div>
+
+            {cleanupStatus?.lastError && (
+              <div className="p-3 rounded-xl bg-red-950/40 border border-red-800/40 text-xs text-red-300 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>Последняя ошибка: {cleanupStatus.lastError}</span>
+              </div>
+            )}
+          </div>
         </div>
+      ) : activeTab === 'achievements' ? (
+        <AdminAchievementsTab />
       ) : activeTab === 'access' ? (
         /* ACCESS, INVITES & TELEGRAM TAB */
         <div className="space-y-8">

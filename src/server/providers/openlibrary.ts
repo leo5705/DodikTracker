@@ -21,7 +21,7 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
 
 export class OpenLibraryProvider implements MediaProvider {
   name = 'OpenLibrary';
-  supportedTypes = ['BOOK', 'COMIC'];
+  supportedTypes = ['BOOK', 'COMIC', 'BOARD_GAME'];
   requiresKey = false;
 
   private cache = new Map<string, CacheEntry>();
@@ -66,18 +66,45 @@ export class OpenLibraryProvider implements MediaProvider {
     }
   }
 
-  async search(query: string, _credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
-    const cacheKey = `search:${query.toLowerCase().trim()}`;
-    const cached = this.getFromCache<MediaSearchResult[]>(cacheKey);
+  async search(
+    query: string,
+    _credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20,
+    filters?: import('./types.ts').UnifiedSearchFilters
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
+    const trimmedQ = (query || '').trim();
+    const cacheKey = `search:${trimmedQ.toLowerCase()}:${page}:${limit}:${JSON.stringify(filters || {})}`;
+    const cached = this.getFromCache<import('./types.ts').PaginatedResult<MediaSearchResult>>(cacheKey);
     if (cached) return cached;
 
     try {
+      const params = new URLSearchParams({
+        limit: String(limit),
+        page: String(page),
+        fields: 'key,title,author_name,cover_i,first_publish_year,ratings_average,subject,first_sentence',
+      });
+
+      if (trimmedQ) {
+        params.set('q', trimmedQ);
+      } else if (filters?.genres && filters.genres.length > 0) {
+        params.set('subject', filters.genres[0].toLowerCase());
+      } else {
+        params.set('q', 'bestseller');
+      }
+
+      if (filters?.sortBy === 'rating') {
+        params.set('sort', 'rating');
+      } else if (filters?.sortBy === 'release_date') {
+        params.set('sort', filters.sortOrder === 'asc' ? 'old' : 'new');
+      }
+
       const res = await fetchWithTimeout(
-        `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=20&fields=key,title,author_name,cover_i,first_publish_year,ratings_average,subject,first_sentence`,
+        `https://openlibrary.org/search.json?${params.toString()}`,
         { headers: this.headers },
         6000
       );
-      if (!res.ok) return [];
+      if (!res.ok) return { results: [], hasMore: false, page };
       const data = await res.json();
       const results: MediaSearchResult[] = [];
 
@@ -88,7 +115,8 @@ export class OpenLibraryProvider implements MediaProvider {
         const displayTitle = author ? `${title} (${author})` : title;
 
         const subjects: string[] = doc.subject || [];
-        const isComic = subjects.some((s) => /comic|graphic novel|manga|superhero/i.test(s));
+        const isBoardGame = subjects.some((s) => /board game|tabletop|card game/i.test(s));
+        const isComic = !isBoardGame && subjects.some((s) => /comic|graphic novel|manga|superhero/i.test(s));
 
         const description = Array.isArray(doc.first_sentence)
           ? doc.first_sentence[0]
@@ -96,25 +124,36 @@ export class OpenLibraryProvider implements MediaProvider {
             ? doc.first_sentence
             : undefined;
 
+        const rating = doc.ratings_average ? Math.round(doc.ratings_average * 2 * 10) / 10 : undefined;
+        const year = doc.first_publish_year || undefined;
+
+        // Post-filter
+        if (filters?.year && year !== filters.year) continue;
+        if (filters?.yearFrom && year && year < filters.yearFrom) continue;
+        if (filters?.yearTo && year && year > filters.yearTo) continue;
+        if (filters?.ratingFrom !== undefined && rating !== undefined && rating < filters.ratingFrom) continue;
+        if (filters?.ratingTo !== undefined && rating !== undefined && rating > filters.ratingTo) continue;
+
         results.push({
           provider: 'OpenLibrary',
           externalId: doc.key ? doc.key.replace(/^\//, '') : String(doc.cover_i || Math.random()),
-          type: isComic ? 'COMIC' : 'BOOK',
+          type: isBoardGame ? 'BOARD_GAME' : isComic ? 'COMIC' : 'BOOK',
           title: displayTitle,
           originalTitle: doc.title,
           description,
           posterUrl: coverUrl,
-          year: doc.first_publish_year || undefined,
-          rating: doc.ratings_average ? Math.round(doc.ratings_average * 2 * 10) / 10 : undefined,
+          year,
+          rating,
           genres: subjects.slice(0, 4),
         });
       }
 
-      this.setCache(cacheKey, results);
-      return results;
+      const hasMore = (data.start + (data.docs?.length || 0)) < (data.numFound || 0);
+      const paginated = { results, hasMore, page, total: data.numFound };
+      this.setCache(cacheKey, paginated);
+      return paginated;
     } catch (_err) {
-      // Return cached if available, otherwise empty list
-      return cached || [];
+      return cached || { results: [], hasMore: false, page };
     }
   }
 
@@ -182,18 +221,27 @@ export class OpenLibraryProvider implements MediaProvider {
     }
   }
 
-  async getTrending(type?: string, _credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
+  async getTrending(
+    type?: string,
+    _credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
     const isComic = type === 'COMIC';
-    const subject = isComic ? 'graphic_novels' : 'fantasy';
-    const cacheKey = `trending:${subject}`;
-    const cached = this.getFromCache<MediaSearchResult[]>(cacheKey);
+    const isBoardGame = type === 'BOARD_GAME';
+    const subject = isBoardGame ? 'board_games' : isComic ? 'graphic_novels' : 'popular';
+    const offset = Math.max((page - 1) * limit, 0);
+    const cacheKey = `trending:${subject}:${offset}:${limit}`;
+    const cached = this.getFromCache<import('./types.ts').PaginatedResult<MediaSearchResult>>(cacheKey);
     if (cached) return cached;
 
     try {
-      const res = await fetchWithTimeout(`https://openlibrary.org/subjects/${subject}.json?limit=12`, {
-        headers: this.headers,
-      }, 6000);
-      if (!res.ok) return [];
+      const res = await fetchWithTimeout(
+        `https://openlibrary.org/subjects/${subject}.json?limit=${limit}&offset=${offset}`,
+        { headers: this.headers },
+        6000
+      );
+      if (!res.ok) return { results: [], hasMore: false, page };
       const data = await res.json();
       const results: MediaSearchResult[] = [];
 
@@ -206,7 +254,7 @@ export class OpenLibraryProvider implements MediaProvider {
         results.push({
           provider: 'OpenLibrary',
           externalId: work.key ? work.key.replace(/^\//, '') : String(work.cover_id || Math.random()),
-          type: isComic ? 'COMIC' : 'BOOK',
+          type: isBoardGame ? 'BOARD_GAME' : isComic ? 'COMIC' : 'BOOK',
           title: displayTitle,
           originalTitle: work.title,
           posterUrl: coverUrl,
@@ -215,10 +263,12 @@ export class OpenLibraryProvider implements MediaProvider {
         });
       }
 
-      this.setCache(cacheKey, results);
-      return results;
+      const hasMore = (offset + (data.works?.length || 0)) < (data.work_count || 0);
+      const paginated = { results, hasMore, page, total: data.work_count };
+      this.setCache(cacheKey, paginated);
+      return paginated;
     } catch (_err) {
-      return cached || [];
+      return cached || { results: [], hasMore: false, page };
     }
   }
 }

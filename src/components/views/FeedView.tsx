@@ -1,14 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Radio, Heart, MessageSquare, Star, Film, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { formatMediaTypePath } from '../../utils/formatters.ts';
+import { usePresence } from '../../hooks/usePresence.ts';
+import { PresenceIndicator } from '../ui/PresenceIndicator.tsx';
 
 export const FeedView: React.FC = () => {
   const { authFetch, dbUser } = useAuth();
   const { navigate } = useRouter();
   const [feed, setFeed] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const userIds = useMemo(() => {
+    const ids = new Set<number>();
+    feed.forEach(act => {
+      if (act.userId) ids.add(act.userId);
+    });
+    return Array.from(ids);
+  }, [feed]);
+
+  const presenceMap = usePresence(userIds);
 
   const fetchFeed = async () => {
     setLoading(true);
@@ -98,32 +110,49 @@ export const FeedView: React.FC = () => {
             >
               {/* User header */}
               <div className="flex items-center gap-3">
-                {act.avatar ? (
-                  <img
-                    src={act.avatar}
-                    alt={act.username}
-                    referrerPolicy="no-referrer"
-                    onClick={() => navigate(`/u/${act.username}`)}
-                    className="w-9 h-9 rounded-full object-cover ring-2 ring-purple-500/30 cursor-pointer hover:opacity-80 transition-opacity"
-                  />
-                ) : (
-                  <div
-                    onClick={() => navigate(`/u/${act.username}`)}
-                    className="w-9 h-9 rounded-full bg-purple-900/80 flex items-center justify-center text-xs font-bold text-purple-200 cursor-pointer hover:opacity-80 transition-opacity"
-                  >
-                    {act.username.charAt(0).toUpperCase()}
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs text-zinc-200">
-                    <strong
+                <div className="relative shrink-0">
+                  {act.avatar ? (
+                    <img
+                      src={act.avatar}
+                      alt={act.username}
+                      referrerPolicy="no-referrer"
                       onClick={() => navigate(`/u/${act.username}`)}
-                      className="text-purple-300 font-semibold cursor-pointer hover:underline"
+                      className="w-9 h-9 rounded-full object-cover ring-2 ring-purple-500/30 cursor-pointer hover:opacity-80 transition-opacity"
+                    />
+                  ) : (
+                    <div
+                      onClick={() => navigate(`/u/${act.username}`)}
+                      className="w-9 h-9 rounded-full bg-purple-900/80 flex items-center justify-center text-xs font-bold text-purple-200 cursor-pointer hover:opacity-80 transition-opacity"
                     >
-                      @{act.username}
-                    </strong>{' '}
-                    <span className="text-zinc-400">{getActivityLabel(act.type, act.details)}</span>
-                  </p>
+                      {act.username.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  {act.userId && <PresenceIndicator presence={presenceMap[act.userId]} className="absolute -bottom-0.5 -right-0.5" size="sm" />}
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-xs text-zinc-200">
+                      <strong
+                        onClick={() => navigate(`/u/${act.username}`)}
+                        className="text-purple-300 font-semibold cursor-pointer hover:underline"
+                      >
+                        @{act.username}
+                      </strong>{' '}
+                      <span className="text-zinc-400">{getActivityLabel(act.type, act.details)}</span>
+                    </p>
+                    {act.userId && act.userId !== dbUser?.id && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          window.dispatchEvent(new CustomEvent('open_chat', { detail: { id: act.userId, username: act.username, avatar: act.avatar } }));
+                        }}
+                        className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
+                        title="Написать сообщение"
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                   <span className="text-[10px] text-zinc-400 font-mono">
                     {new Date(act.createdAt).toLocaleString('ru-RU', {
                       dateStyle: 'short',

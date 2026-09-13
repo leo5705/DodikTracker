@@ -8,6 +8,52 @@ import {
 } from './types.ts';
 import { GameTranslator } from '../services/gameTranslator.ts';
 
+const RAWG_PLATFORM_MAP: Record<string, number> = {
+  pc: 4,
+  ps5: 187,
+  'playstation 5': 187,
+  ps4: 18,
+  'playstation 4': 18,
+  'xbox series': 186,
+  'xbox series x': 186,
+  'xbox one': 1,
+  'nintendo switch': 7,
+  switch: 7,
+  ios: 3,
+  android: 21,
+  macos: 5,
+  linux: 6,
+};
+
+const RAWG_GENRE_MAP: Record<string, string> = {
+  экшен: 'action',
+  action: 'action',
+  боевик: 'action',
+  приключения: 'adventure',
+  adventure: 'adventure',
+  рпг: 'role-playing-games-rpg',
+  ролевая: 'role-playing-games-rpg',
+  rpg: 'role-playing-games-rpg',
+  стратегия: 'strategy',
+  strategy: 'strategy',
+  шутер: 'shooter',
+  shooter: 'shooter',
+  симулятор: 'simulation',
+  simulation: 'simulation',
+  гонки: 'racing',
+  racing: 'racing',
+  спорт: 'sports',
+  sports: 'sports',
+  хоррор: 'horror',
+  ужасы: 'horror',
+  инди: 'indie',
+  indie: 'indie',
+  головоломка: 'puzzle',
+  puzzle: 'puzzle',
+  платформер: 'platformer',
+  ммо: 'massively-multiplayer',
+};
+
 export class RAWGProvider implements MediaProvider {
   name = 'RAWG';
   supportedTypes = ['GAME'];
@@ -32,13 +78,82 @@ export class RAWGProvider implements MediaProvider {
     }
   }
 
-  async search(query: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
+  async search(
+    query: string,
+    credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20,
+    filters?: import('./types.ts').UnifiedSearchFilters
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
     const apiKey = credentials?.apiKey;
-    if (!apiKey || !query.trim()) return [];
+    if (!apiKey) return { results: [], hasMore: false, page };
 
+    const trimmedQ = (query || '').trim();
     try {
-      const res = await fetch(`https://api.rawg.io/api/games?key=${apiKey}&search=${encodeURIComponent(query)}&page_size=15`);
-      if (!res.ok) return [];
+      const params = new URLSearchParams({
+        key: apiKey,
+        page: String(page),
+        page_size: String(limit),
+      });
+
+      if (trimmedQ) {
+        params.set('search', trimmedQ);
+      }
+
+      // Platforms
+      if (filters?.platforms && filters.platforms.length > 0) {
+        const platformIds = filters.platforms
+          .map((p) => RAWG_PLATFORM_MAP[p.toLowerCase().trim()] || parseInt(p, 10))
+          .filter(Boolean);
+        if (platformIds.length > 0) {
+          params.set('platforms', platformIds.join(','));
+        }
+      }
+
+      // Genres
+      if (filters?.genres && filters.genres.length > 0) {
+        const genreSlugs = filters.genres
+          .map((g) => RAWG_GENRE_MAP[g.toLowerCase().trim()] || g.toLowerCase().trim())
+          .filter(Boolean);
+        if (genreSlugs.length > 0) {
+          params.set('genres', genreSlugs.join(','));
+        }
+      }
+
+      // Dates
+      if (filters?.year) {
+        params.set('dates', `${filters.year}-01-01,${filters.year}-12-31`);
+      } else if (filters?.yearFrom || filters?.yearTo) {
+        const from = filters.yearFrom ? `${filters.yearFrom}-01-01` : '1970-01-01';
+        const to = filters.yearTo ? `${filters.yearTo}-12-31` : '2030-12-31';
+        params.set('dates', `${from},${to}`);
+      }
+
+      // Metacritic / Rating
+      if (filters?.ratingFrom !== undefined || filters?.ratingTo !== undefined) {
+        const from = filters.ratingFrom ? Math.round(filters.ratingFrom * 10) : 0;
+        const to = filters.ratingTo ? Math.round(filters.ratingTo * 10) : 100;
+        params.set('metacritic', `${from},${to}`);
+      }
+
+      // Ordering
+      if (filters?.sortBy === 'rating') {
+        params.set('ordering', filters.sortOrder === 'asc' ? 'rating' : '-rating');
+      } else if (filters?.sortBy === 'release_date') {
+        params.set('ordering', filters.sortOrder === 'asc' ? 'released' : '-released');
+      } else if (filters?.sortBy === 'title') {
+        params.set('ordering', 'name');
+      } else if (!trimmedQ) {
+        params.set('ordering', '-added');
+      }
+
+      // Game modes / tags
+      if (filters?.gameMode) {
+        params.set('tags', filters.gameMode.toLowerCase());
+      }
+
+      const res = await fetch(`https://api.rawg.io/api/games?${params.toString()}`);
+      if (!res.ok) return { results: [], hasMore: false, page };
       const data = await res.json();
       const results: MediaSearchResult[] = [];
 
@@ -64,16 +179,27 @@ export class RAWGProvider implements MediaProvider {
           coverUrl: game.background_image || undefined,
           releaseDate: game.released || undefined,
           year,
-          rating: game.rating ? Math.round(game.rating * 2 * 10) / 10 : undefined, // RAWG is 1-5, normalize to 1-10
+          rating: game.rating ? Math.round(game.rating * 2 * 10) / 10 : undefined,
           genres: translation.genres,
         });
       }
 
-      return results;
+      const hasMore = Boolean(data.next);
+      return { results, hasMore, page, total: data.count };
     } catch (err) {
       console.error('RAWG search error:', err);
-      return [];
+      return { results: [], hasMore: false, page };
     }
+  }
+
+  async getTrending(
+    _type?: string,
+    credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20,
+    filters?: import('./types.ts').UnifiedSearchFilters
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
+    return this.search('', credentials, page, limit, filters);
   }
 
   async getDetails(
@@ -216,50 +342,6 @@ export class RAWGProvider implements MediaProvider {
     } catch (err) {
       console.error('RAWG getDetails error:', err);
       return null;
-    }
-  }
-
-  async getTrending(_type?: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
-    const apiKey = credentials?.apiKey;
-    if (!apiKey) return [];
-
-    try {
-      const res = await fetch(`https://api.rawg.io/api/games?key=${apiKey}&ordering=-rating&page_size=15`);
-      if (!res.ok) return [];
-      const data = await res.json();
-      const results: MediaSearchResult[] = [];
-
-      for (const game of (data.results || [])) {
-        const year = game.released ? parseInt(game.released.split('-')[0], 10) : undefined;
-        const rawGenres = (game.genres || []).map((g: any) => g.name);
-
-        const translation = await GameTranslator.translateGame({
-          provider: 'RAWG',
-          externalId: String(game.id),
-          title: game.name || 'Без названия',
-          genres: rawGenres,
-        });
-
-        results.push({
-          provider: 'RAWG',
-          externalId: String(game.id),
-          type: 'GAME',
-          title: translation.title,
-          originalTitle: game.name || undefined,
-          posterUrl: game.background_image || undefined,
-          backdropUrl: game.background_image || undefined,
-          coverUrl: game.background_image || undefined,
-          releaseDate: game.released || undefined,
-          year,
-          rating: game.rating ? Math.round(game.rating * 2 * 10) / 10 : undefined,
-          genres: translation.genres,
-        });
-      }
-
-      return results;
-    } catch (err) {
-      console.error('RAWG trending error:', err);
-      return [];
     }
   }
 }

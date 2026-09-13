@@ -93,16 +93,22 @@ export class IGDBProvider implements MediaProvider {
     }
   }
 
-  async search(query: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
+  async search(
+    query: string,
+    credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
     const clientId = credentials?.clientId || credentials?.apiKey;
-    if (!clientId || !query.trim()) return [];
+    if (!clientId || !query.trim()) return { results: [], hasMore: false, page };
 
     const token = await this.getAccessToken(credentials);
-    if (!token) return [];
+    if (!token) return { results: [], hasMore: false, page };
 
     try {
+      const offset = Math.max((page - 1) * limit, 0);
       const cleanQ = query.replace(/"/g, '\\"');
-      const body = `search "${cleanQ}"; fields id, name, summary, rating, first_release_date, cover.image_id, genres.name, platforms.name, alternative_names.name; limit 15;`;
+      const body = `search "${cleanQ}"; fields id, name, summary, rating, first_release_date, cover.image_id, genres.name, platforms.name, alternative_names.name; offset ${offset}; limit ${limit};`;
 
       const res = await fetch('https://api.igdb.com/v4/games', {
         method: 'POST',
@@ -114,9 +120,9 @@ export class IGDBProvider implements MediaProvider {
         body,
       });
 
-      if (!res.ok) return [];
+      if (!res.ok) return { results: [], hasMore: false, page };
       const games = await res.json();
-      if (!Array.isArray(games)) return [];
+      if (!Array.isArray(games)) return { results: [], hasMore: false, page };
 
       const results: MediaSearchResult[] = [];
 
@@ -162,10 +168,11 @@ export class IGDBProvider implements MediaProvider {
         });
       }
 
-      return results;
+      const hasMore = games.length >= limit;
+      return { results, hasMore, page };
     } catch (err) {
       console.error('IGDB search error:', err);
-      return [];
+      return { results: [], hasMore: false, page };
     }
   }
 
@@ -283,7 +290,85 @@ export class IGDBProvider implements MediaProvider {
     }
   }
 
-  async getTrending(_type?: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
-    return this.search('Witcher', credentials);
+  async getTrending(
+    _type?: string,
+    credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
+    const clientId = credentials?.clientId || credentials?.apiKey;
+    if (!clientId) return { results: [], hasMore: false, page };
+
+    const token = await this.getAccessToken(credentials);
+    if (!token) return { results: [], hasMore: false, page };
+
+    try {
+      const offset = Math.max((page - 1) * limit, 0);
+      const body = `fields id, name, summary, rating, first_release_date, cover.image_id, genres.name, platforms.name, alternative_names.name; where rating_count > 15 & rating != null; sort rating desc; offset ${offset}; limit ${limit};`;
+
+      const res = await fetch('https://api.igdb.com/v4/games', {
+        method: 'POST',
+        headers: {
+          'Client-ID': clientId,
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'text/plain',
+        },
+        body,
+      });
+
+      if (!res.ok) return { results: [], hasMore: false, page };
+      const games = await res.json();
+      if (!Array.isArray(games)) return { results: [], hasMore: false, page };
+
+      const results: MediaSearchResult[] = [];
+
+      for (const game of games) {
+        const coverId = game.cover?.image_id;
+        const posterUrl = coverId
+          ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${coverId}.jpg`
+          : undefined;
+
+        let year: number | undefined;
+        let releaseDate: string | undefined;
+        if (game.first_release_date) {
+          const d = new Date(game.first_release_date * 1000);
+          year = d.getFullYear();
+          releaseDate = d.toISOString().split('T')[0];
+        }
+
+        const rawGenres = (game.genres || []).map((g: any) => g.name);
+        const alternates = (game.alternative_names || []).map((a: any) => a.name);
+
+        const translation = await GameTranslator.translateGame({
+          provider: 'IGDB',
+          externalId: String(game.id),
+          title: game.name,
+          description: game.summary,
+          genres: rawGenres,
+          alternates,
+        });
+
+        results.push({
+          provider: 'IGDB',
+          externalId: String(game.id),
+          type: 'GAME',
+          title: translation.title,
+          originalTitle: game.name,
+          description: translation.description,
+          posterUrl,
+          backdropUrl: posterUrl,
+          year,
+          releaseDate,
+          rating: game.rating ? Math.round(game.rating) / 10 : undefined,
+          genres: translation.genres,
+        });
+      }
+
+      const hasMore = games.length >= limit;
+      return { results, hasMore, page };
+    } catch (err) {
+      console.error('IGDB trending error:', err);
+      return { results: [], hasMore: false, page };
+    }
   }
 }

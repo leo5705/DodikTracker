@@ -218,12 +218,17 @@ export const tierLists = pgTable('tier_lists', {
 export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  type: text('type').notNull(), // FRIEND_REQUEST, FRIEND_ACCEPTED, COMMENT, COMMENT_REPLY, LIKE, LIST_FOLLOW, LIST_UPDATE, TIERLIST_LIKE, TIERLIST_COMMENT, NEW_RELEASE
+  type: text('type').notNull(), // ACHIEVEMENT_UNLOCKED, FRIEND_REQUEST, FRIEND_ACCEPTED, NEW_MESSAGE, FRIEND_REVIEW, FRIEND_ACTIVITY, NEW_RELEASE, MENTION, SYSTEM, ADMIN_ALERT, LIKE, LIST_INVITE, LIST_FOLLOW
   title: text('title').notNull(),
   body: text('body').notNull(),
+  content: text('content'),
   link: text('link'),
   relatedEntity: text('related_entity'),
   relatedEntityId: text('related_entity_id'),
+  senderId: integer('sender_id').references(() => users.id, { onDelete: 'set null' }),
+  senderAvatar: text('sender_avatar'),
+  senderUsername: text('sender_username'),
+  metadataJson: text('metadata_json'),
   isRead: boolean('is_read').notNull().default(false),
   readAt: timestamp('read_at'),
   createdAt: timestamp('created_at').defaultNow(),
@@ -232,6 +237,22 @@ export const notifications = pgTable('notifications', {
     userIdIdx: index('notifications_user_id_idx').on(table.userId),
     isReadIdx: index('notifications_is_read_idx').on(table.isRead),
     typeIdx: index('notifications_type_idx').on(table.type)
+  };
+});
+
+// Direct Messages Table
+export const directMessages = pgTable('direct_messages', {
+  id: serial('id').primaryKey(),
+  senderId: integer('sender_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  receiverId: integer('receiver_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  content: text('content').notNull(),
+  isRead: boolean('is_read').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => {
+  return {
+    senderIdIdx: index('direct_messages_sender_id_idx').on(table.senderId),
+    receiverIdIdx: index('direct_messages_receiver_id_idx').on(table.receiverId),
+    createdAtIdx: index('direct_messages_created_at_idx').on(table.createdAt),
   };
 });
 
@@ -329,6 +350,37 @@ export const gameTranslations = pgTable('game_translations', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// 27. Unified Game Entity Mappings Table (Mapping external entities across RAWG, GMDB, etc.)
+export const gameEntityMappings = pgTable('game_entity_mappings', {
+  id: serial('id').primaryKey(),
+  entityType: text('entity_type').notNull(), // 'GAME' | 'DEVELOPER' | 'PUBLISHER' | 'SERIES' | 'DLC'
+  internalId: text('internal_id').notNull(),
+  provider: text('provider').notNull(), // 'RAWG' | 'THEGAMESDB' | 'GMDB'
+  externalId: text('external_id').notNull(),
+  confidence: text('confidence').default('HIGH'), // 'HIGH' | 'MEDIUM' | 'LOW'
+  metadata: text('metadata'), // JSON string with matching criteria
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  typeInternalIdx: index('game_mappings_type_internal_idx').on(table.entityType, table.internalId),
+  typeExtIdx: index('game_mappings_type_ext_idx').on(table.entityType, table.provider, table.externalId),
+}));
+
+// 28. Unified Game Data Cache Table
+export const gameEntityCache = pgTable('game_entity_cache', {
+  id: serial('id').primaryKey(),
+  cacheKey: text('cache_key').notNull().unique(),
+  entityType: text('entity_type').notNull(), // 'GAME' | 'DEVELOPER' | 'PUBLISHER' | 'SERIES' | 'DLC' | 'CATALOG'
+  data: text('data').notNull(), // JSON string of UnifiedGame / UnifiedDeveloper etc.
+  providerSources: text('provider_sources'), // JSON string of provenance and fallback diagnostics
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  cacheKeyIdx: uniqueIndex('game_cache_key_idx').on(table.cacheKey),
+  expiresAtIdx: index('game_cache_expires_at_idx').on(table.expiresAt),
+}));
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   userMedia: many(userMedia),
@@ -389,3 +441,81 @@ export const listItemsRelations = relations(listItems, ({ one }) => ({
 export const tierListsRelations = relations(tierLists, ({ one }) => ({
   owner: one(users, { fields: [tierLists.ownerId], references: [users.id] }),
 }));
+
+// 27. Achievements Table
+export const achievements = pgTable('achievements', {
+  id: serial('id').primaryKey(),
+  slug: text('slug').notNull(),
+  title: text('title').notNull(),
+  description: text('description').notNull(),
+  icon: text('icon').notNull().default('Trophy'),
+  rarity: text('rarity').notNull().default('COMMON'), // COMMON | UNCOMMON | RARE | EPIC | LEGENDARY | SECRET
+  status: text('status').notNull().default('ACTIVE'), // DRAFT | ACTIVE | HIDDEN | ARCHIVED
+  badgeStyle: text('badge_style').notNull().default('purple'),
+  isActive: boolean('is_active').notNull().default(true),
+  conditionType: text('condition_type').notNull(),
+  conditionConfig: text('condition_config').notNull().default('{}'), // JSON config
+  isSecret: boolean('is_secret').notNull().default(false),
+  points: integer('points').notNull().default(10),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  slugIdx: index('achievements_slug_idx').on(table.slug),
+  statusIdx: index('achievements_status_idx').on(table.status),
+  conditionTypeIdx: index('achievements_condition_type_idx').on(table.conditionType),
+}));
+
+// 28. User Achievements Table
+export const userAchievements = pgTable('user_achievements', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  achievementId: integer('achievement_id').references(() => achievements.id, { onDelete: 'cascade' }).notNull(),
+  grantType: text('grant_type').notNull().default('AUTOMATIC'), // AUTOMATIC | ADMIN
+  adminId: integer('admin_id').references(() => users.id, { onDelete: 'set null' }),
+  reason: text('reason'),
+  isRevoked: boolean('is_revoked').notNull().default(false),
+  revokedAt: timestamp('revoked_at'),
+  revokedByAdminId: integer('revoked_by_admin_id').references(() => users.id, { onDelete: 'set null' }),
+  revokeReason: text('revoke_reason'),
+  grantedAt: timestamp('granted_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  userAchievementUnq: uniqueIndex('user_achievements_user_id_achievement_id_unq').on(table.userId, table.achievementId),
+  userIdx: index('user_achievements_user_id_idx').on(table.userId),
+  achievementIdx: index('user_achievements_achievement_id_idx').on(table.achievementId),
+}));
+
+// 29. Achievement History (Audit & Issuance History) Table
+export const achievementHistory = pgTable('achievement_history', {
+  id: serial('id').primaryKey(),
+  achievementId: integer('achievement_id').references(() => achievements.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  action: text('action').notNull(), // GRANTED | REVOKED | RE_GRANTED
+  source: text('source').notNull().default('AUTOMATIC'), // AUTOMATIC | ADMIN
+  adminId: integer('admin_id').references(() => users.id, { onDelete: 'set null' }),
+  reason: text('reason'),
+  metadata: text('metadata'), // JSON string
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  userIdx: index('achievement_history_user_id_idx').on(table.userId),
+  achievementIdx: index('achievement_history_achievement_id_idx').on(table.achievementId),
+  actionIdx: index('achievement_history_action_idx').on(table.action),
+}));
+
+export const achievementsRelations = relations(achievements, ({ many }) => ({
+  userAchievements: many(userAchievements),
+  history: many(achievementHistory),
+}));
+
+export const userAchievementsRelations = relations(userAchievements, ({ one }) => ({
+  user: one(users, { fields: [userAchievements.userId], references: [users.id] }),
+  achievement: one(achievements, { fields: [userAchievements.achievementId], references: [achievements.id] }),
+  admin: one(users, { fields: [userAchievements.adminId], references: [users.id] }),
+}));
+
+export const achievementHistoryRelations = relations(achievementHistory, ({ one }) => ({
+  user: one(users, { fields: [achievementHistory.userId], references: [users.id] }),
+  achievement: one(achievements, { fields: [achievementHistory.achievementId], references: [achievements.id] }),
+  admin: one(users, { fields: [achievementHistory.adminId], references: [users.id] }),
+}));
+

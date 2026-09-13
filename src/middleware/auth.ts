@@ -18,11 +18,14 @@ export const requireAuth = async (
   res: Response,
   next: NextFunction
 ) => {
-  // Check cookie first, fallback to Authorization header
+  // Check cookie first, fallback to Authorization header or query param (for SSE)
   let token: string | undefined = req.cookies?.dodik_session;
   const authHeader = req.headers.authorization;
   if (!token && authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.split('Bearer ')[1];
+  }
+  if (!token && req.query.token && typeof req.query.token === 'string') {
+    token = req.query.token;
   }
 
   if (!token) {
@@ -116,6 +119,9 @@ export const optionalAuth = async (
   const authHeader = req.headers.authorization;
   if (!token && authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.split('Bearer ')[1];
+  }
+  if (!token && req.query.token && typeof req.query.token === 'string') {
+    token = req.query.token;
   }
 
   if (token) {

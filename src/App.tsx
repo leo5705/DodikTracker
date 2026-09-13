@@ -2,6 +2,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { RouterProvider, useRouter } from './context/RouterContext.tsx';
+import { NotificationProvider } from './context/NotificationContext.tsx';
 import { Navigation, ActiveTab } from './components/Navigation.tsx';
 import { HomeView } from './components/views/HomeView.tsx';
 import { SearchView } from './components/views/SearchView.tsx';
@@ -14,6 +15,7 @@ import { TierListsView } from './components/views/TierListsView.tsx';
 import { StatisticsView } from './components/views/StatisticsView.tsx';
 import { CalendarView } from './components/views/CalendarView.tsx';
 import { AdminView } from './components/views/AdminView.tsx';
+import { AchievementsView } from './components/views/AchievementsView.tsx';
 import { ProfileView } from './components/views/ProfileView.tsx';
 import { SettingsView } from './components/views/SettingsView.tsx';
 import { NotificationCenterView } from './components/views/NotificationCenterView.tsx';
@@ -22,8 +24,16 @@ import { TierListDetailView } from './components/views/TierListDetailView.tsx';
 import { ListDetailView } from './components/views/ListDetailView.tsx';
 import { LibraryImportView } from './components/views/LibraryImportView.tsx';
 import { LibraryExportView } from './components/views/LibraryExportView.tsx';
+import { GameDetailView } from './components/views/GameDetailView.tsx';
+import { GameCatalogView } from './components/views/GameCatalogView.tsx';
+import { GameDevelopersView } from './components/views/GameDevelopersView.tsx';
+import { GameDeveloperDetailView } from './components/views/GameDeveloperDetailView.tsx';
+import { GamePublishersView } from './components/views/GamePublishersView.tsx';
+import { GamePublisherDetailView } from './components/views/GamePublisherDetailView.tsx';
+import { GameSeriesDetailView } from './components/views/GameSeriesDetailView.tsx';
 import { AuthGatekeeper } from './components/auth/AuthGatekeeper.tsx';
 import { ResetPasswordView } from './components/auth/ResetPasswordView.tsx';
+import { MiniMessenger } from './components/modals/MiniMessenger.tsx';
 import { Loader2 } from 'lucide-react';
 
 function MainApp() {
@@ -60,11 +70,32 @@ function MainApp() {
   // Render view based on route
   const renderView = () => {
     switch (route.name) {
+      case 'game-catalog':
+        return <GameCatalogView />;
+
+      case 'game-detail':
+        return <GameDetailView key={route.params.id} idOrSlug={route.params.id} />;
+
+      case 'game-developers':
+        return <GameDevelopersView />;
+
+      case 'game-developer-detail':
+        return <GameDeveloperDetailView key={route.params.id} developerIdOrSlug={route.params.id} />;
+
+      case 'game-publishers':
+        return <GamePublishersView />;
+
+      case 'game-publisher-detail':
+        return <GamePublisherDetailView key={route.params.id} publisherIdOrSlug={route.params.id} />;
+
+      case 'game-series-detail':
+        return <GameSeriesDetailView key={route.params.id} seriesIdOrSlug={route.params.id} />;
+
       case 'media-detail':
         return (
           <MediaDetailView
             key={`${route.params.type || 'media'}-${route.params.id}`}
-            mediaId={parseInt(route.params.id, 10)}
+            mediaId={isNaN(parseInt(route.params.id, 10)) ? (route.params.id as any) : parseInt(route.params.id, 10)}
             mediaType={route.params.type}
             queryParams={route.params}
           />
@@ -127,6 +158,9 @@ function MainApp() {
       case 'admin':
         return <AdminView />;
 
+      case 'achievements':
+        return <AchievementsView />;
+
       case 'notifications':
         return <NotificationCenterView onNavigate={navigate} />;
       case 'settings':
@@ -168,7 +202,19 @@ function MainApp() {
       <main className="flex-1 min-w-0 pt-16 md:pt-0 pb-20 md:pb-8 px-4 sm:px-6 lg:px-10 max-w-7xl mx-auto w-full">
         <div className="py-6 sm:py-8">{renderView()}</div>
       </main>
+
+      {/* Mini Messenger globally available for authenticated users */}
+      {dbUser && <MiniMessenger />}
     </div>
+  );
+}
+
+function NotificationWrapper({ children }: { children: React.ReactNode }) {
+  const { navigate } = useRouter();
+  return (
+    <NotificationProvider onNavigate={navigate}>
+      {children}
+    </NotificationProvider>
   );
 }
 
@@ -176,7 +222,9 @@ export default function App() {
   return (
     <AuthProvider>
       <RouterProvider>
-        <ErrorBoundary><MainApp /></ErrorBoundary>
+        <NotificationWrapper>
+          <ErrorBoundary><MainApp /></ErrorBoundary>
+        </NotificationWrapper>
       </RouterProvider>
     </AuthProvider>
   );

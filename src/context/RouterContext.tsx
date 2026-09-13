@@ -17,11 +17,19 @@ export interface RouteMatch {
     | 'statistics'
     | 'calendar'
     | 'admin'
+    | 'achievements'
     | 'profile'
     | 'settings'
     | 'notifications'
     | 'media-detail'
-    | 'reset-password';
+    | 'reset-password'
+    | 'game-catalog'
+    | 'game-detail'
+    | 'game-developers'
+    | 'game-developer-detail'
+    | 'game-publishers'
+    | 'game-publisher-detail'
+    | 'game-series-detail';
   params: Record<string, string>;
   pathname: string;
 }
@@ -29,7 +37,7 @@ export interface RouteMatch {
 interface RouterContextType {
   pathname: string;
   route: RouteMatch;
-  navigate: (path: string, options?: { replace?: boolean }) => void;
+  navigate: (path: string, options?: { replace?: boolean; scroll?: boolean }) => void;
   goBack: () => void;
 }
 
@@ -51,8 +59,84 @@ export function parseRoute(rawPathname: string): RouteMatch {
     }
   }
 
+  // Game Routes
+  // Developer detail: /games/developers/:id or /game/developer/:id
+  const devDetailMatch = cleanPath.match(/^\/(?:games\/developers|game\/developer)\/([a-zA-Z0-9_.-]+)$/);
+  if (devDetailMatch) {
+    return {
+      name: 'game-developer-detail',
+      params: { ...queryParams, id: devDetailMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+
+  // Developers list: /games/developers
+  if (cleanPath === '/games/developers') {
+    return { name: 'game-developers', params: queryParams, pathname: cleanPath };
+  }
+
+  // Publisher detail: /games/publishers/:id or /game/publisher/:id
+  const pubDetailMatch = cleanPath.match(/^\/(?:games\/publishers|game\/publisher)\/([a-zA-Z0-9_.-]+)$/);
+  if (pubDetailMatch) {
+    return {
+      name: 'game-publisher-detail',
+      params: { ...queryParams, id: pubDetailMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+
+  // Publishers list: /games/publishers
+  if (cleanPath === '/games/publishers') {
+    return { name: 'game-publishers', params: queryParams, pathname: cleanPath };
+  }
+
+  // Series detail: /games/series/:id or /game/series/:id
+  const seriesDetailMatch = cleanPath.match(/^\/(?:games\/series|game\/series)\/([a-zA-Z0-9_.-]+)$/);
+  if (seriesDetailMatch) {
+    return {
+      name: 'game-series-detail',
+      params: { ...queryParams, id: seriesDetailMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+
+  // Game catalog: /games/catalog or /games
+  if (cleanPath === '/games/catalog' || cleanPath === '/games') {
+    return { name: 'game-catalog', params: queryParams, pathname: cleanPath };
+  }
+
+  // Game detail: /games/:id or /game/:id
+  const gameDetailMatch = cleanPath.match(/^\/(?:games|game)\/([a-zA-Z0-9_.-]+)$/);
+  if (gameDetailMatch) {
+    return {
+      name: 'game-detail',
+      params: { ...queryParams, id: gameDetailMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+
+  // Category-specific Direct Routes: /movies/:id, /anime/:id, /series/:id, /manga/:id, /books/:id, /comics/:id, /music/:id
+  const directCategoryMatch = cleanPath.match(/^\/(movies|movie|series|tv|anime|manga|books|book|comics|comic|music)\/([a-zA-Z0-9_.-]+)$/);
+  if (directCategoryMatch) {
+    const rawCat = directCategoryMatch[1].toLowerCase();
+    let normalizedType = 'movie';
+    if (rawCat === 'series' || rawCat === 'tv') normalizedType = 'tv';
+    else if (rawCat === 'anime') normalizedType = 'anime';
+    else if (rawCat === 'manga') normalizedType = 'manga';
+    else if (rawCat === 'books' || rawCat === 'book') normalizedType = 'book';
+    else if (rawCat === 'comics' || rawCat === 'comic') normalizedType = 'comic';
+    else if (rawCat === 'music') normalizedType = 'music';
+    else if (rawCat === 'movies' || rawCat === 'movie') normalizedType = 'movie';
+
+    return {
+      name: 'media-detail',
+      params: { ...queryParams, type: normalizedType, id: directCategoryMatch[2] },
+      pathname: cleanPath,
+    };
+  }
+
   // 1. Media Detail: /media/:type/:id or /media/:id
-  const mediaWithTypeMatch = cleanPath.match(/^\/media\/([a-zA-Z0-9_-]+)\/(\d+)$/);
+  const mediaWithTypeMatch = cleanPath.match(/^\/media\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)$/);
   if (mediaWithTypeMatch) {
     return {
       name: 'media-detail',
@@ -61,7 +145,7 @@ export function parseRoute(rawPathname: string): RouteMatch {
     };
   }
 
-  const mediaSimpleMatch = cleanPath.match(/^\/media\/(\d+)$/);
+  const mediaSimpleMatch = cleanPath.match(/^\/media\/([a-zA-Z0-9_.-]+)$/);
   if (mediaSimpleMatch) {
     return {
       name: 'media-detail',
@@ -136,6 +220,7 @@ export function parseRoute(rawPathname: string): RouteMatch {
   if (cleanPath === '/statistics') return { name: 'statistics', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/calendar') return { name: 'calendar', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/admin') return { name: 'admin', params: queryParams, pathname: cleanPath };
+  if (cleanPath === '/achievements') return { name: 'achievements', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/settings') return { name: 'settings', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/notifications') return { name: 'notifications', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/profile') return { name: 'profile', params: queryParams, pathname: cleanPath };
@@ -158,7 +243,7 @@ export const RouterProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const navigate = useCallback((path: string, options?: { replace?: boolean }) => {
+  const navigate = useCallback((path: string, options?: { replace?: boolean; scroll?: boolean }) => {
     const target = path.startsWith('/') ? path : `/${path}`;
     const current = (window.location.pathname || '/') + (window.location.search || '');
     if (target === current) return;
@@ -169,7 +254,9 @@ export const RouterProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       window.history.pushState(null, '', target);
     }
     setPathname(target);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (options?.scroll !== false) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   }, []);
 
   const goBack = useCallback(() => {

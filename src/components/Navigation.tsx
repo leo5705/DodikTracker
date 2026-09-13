@@ -23,9 +23,11 @@ import {
   Sparkles,
   ChevronDown,
   Search,
+  Trophy,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useRouter } from '../context/RouterContext.tsx';
+import { useNotifications } from '../context/NotificationContext.tsx';
 
 export type ActiveTab =
   | 'home'
@@ -37,6 +39,7 @@ export type ActiveTab =
   | 'roulette'
   | 'tier-lists'
   | 'statistics'
+  | 'achievements'
   | 'calendar'
   | 'admin'
   | 'profile'
@@ -61,8 +64,8 @@ export const Navigation: React.FC<NavigationProps> = ({
 }) => {
   const { dbUser, login, logout, loading, authFetch } = useAuth();
   const { navigate, route } = useRouter();
+  const { unreadCount } = useNotifications();
   const isAdmin = dbUser?.role === 'ADMIN' || dbUser?.role === 'SUPER_ADMIN';
-  const [unreadCount, setUnreadCount] = useState(0);
 
   // Derive active tab from route name if available
   const effectiveTab: ActiveTab = (() => {
@@ -87,6 +90,8 @@ export const Navigation: React.FC<NavigationProps> = ({
         return 'tier-lists';
       case 'statistics':
         return 'statistics';
+      case 'achievements':
+        return 'achievements';
       case 'calendar':
         return 'calendar';
       case 'admin':
@@ -112,6 +117,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       roulette: '/roulette',
       'tier-lists': '/tier-lists',
       statistics: '/statistics',
+      achievements: '/achievements',
       calendar: '/calendar',
       admin: '/admin',
       profile: dbUser ? `/u/${dbUser.username}` : '/profile',
@@ -124,6 +130,10 @@ export const Navigation: React.FC<NavigationProps> = ({
 
   const handleCategoryClick = (catId: string) => {
     onSelectCategory?.(catId);
+    if (catId === 'GAME') {
+      navigate('/games/catalog');
+      return;
+    }
     setActiveTab('library');
     navigate(`/library?category=${catId}`);
   };
@@ -140,23 +150,6 @@ export const Navigation: React.FC<NavigationProps> = ({
     navigate('/settings');
     onOpenSettings?.();
   };
-
-  useEffect(() => {
-    if (!dbUser) return;
-    const checkNotifs = async () => {
-      try {
-        const res = await authFetch('/api/notifications');
-        if (res.ok) {
-          const data = await res.json();
-          const unread = data.filter((n: any) => !n.isRead).length;
-          setUnreadCount(unread);
-        }
-      } catch (err) {
-        // silent
-      }
-    };
-    checkNotifs();
-  }, [dbUser, activeTab]);
 
   const categories = [
     { id: 'MOVIE', label: 'Фильмы', icon: Film, color: 'text-purple-400' },
@@ -178,6 +171,7 @@ export const Navigation: React.FC<NavigationProps> = ({
     { id: 'roulette', label: 'Рулетка выбора', icon: Dice5 },
     { id: 'tier-lists', label: 'Tier Lists', icon: Layers },
     { id: 'statistics', label: 'Статистика', icon: BarChart3 },
+    { id: 'achievements', label: 'Достижения', icon: Trophy },
     { id: 'calendar', label: 'Календарь релизов', icon: CalendarDays },
   ];
 

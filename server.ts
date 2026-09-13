@@ -7,9 +7,13 @@ import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './src/server/api.ts';
 import { telegramBot } from './src/server/telegram.ts';
 import { initDbSettings } from './src/server/init.ts';
+import { startMessageCleanupCron } from './src/server/services/messageCleanup.ts';
 
 async function startServer() {
   await initDbSettings();
+
+  // Start background services
+  startMessageCleanupCron();
 
   const app = express();
   const PORT = 3000;

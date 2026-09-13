@@ -7,7 +7,50 @@ import {
   MediaCrewMember,
   MediaSeasonInfo,
   SimilarMediaItem,
+  UnifiedSearchFilters,
+  PaginatedResult,
 } from './types.ts';
+
+const TMDB_GENRE_MAP: Record<string, number> = {
+  боевик: 28,
+  action: 28,
+  приключения: 12,
+  adventure: 12,
+  анимация: 16,
+  мультфильм: 16,
+  animation: 16,
+  комедия: 35,
+  comedy: 35,
+  криминал: 80,
+  crime: 80,
+  документальный: 99,
+  documentary: 99,
+  драма: 18,
+  drama: 18,
+  семейный: 10751,
+  family: 10751,
+  фэнтези: 14,
+  fantasy: 14,
+  история: 36,
+  history: 36,
+  ужасы: 27,
+  horror: 27,
+  музыка: 10402,
+  music: 10402,
+  детектив: 9648,
+  mystery: 9648,
+  мелодрама: 10749,
+  romance: 10749,
+  фантастика: 878,
+  'sci-fi': 878,
+  'science fiction': 878,
+  триллер: 53,
+  thriller: 53,
+  военный: 10752,
+  war: 10752,
+  вестерн: 37,
+  western: 37,
+};
 
 export class TMDBProvider implements MediaProvider {
   name = 'TMDB';
@@ -38,27 +81,80 @@ export class TMDBProvider implements MediaProvider {
     }
   }
 
-  async search(query: string, credentials?: Record<string, any>, page: number = 1): Promise<import("./types.js").PaginatedResult<MediaSearchResult> | MediaSearchResult[]> {
+  async search(
+    query: string,
+    credentials?: Record<string, any>,
+    page: number = 1,
+    _limit: number = 20,
+    filters?: UnifiedSearchFilters
+  ): Promise<PaginatedResult<MediaSearchResult>> {
     const apiKey = credentials?.apiKey;
-    if (!apiKey) return [];
+    if (!apiKey) return { results: [], hasMore: false, page };
+
+    const trimmedQ = (query || '').trim();
+    const hasFilters = Boolean(
+      filters &&
+        (filters.genres?.length ||
+          filters.countries?.length ||
+          filters.year ||
+          filters.yearFrom ||
+          filters.yearTo ||
+          filters.ratingFrom ||
+          filters.ratingTo ||
+          filters.votesFrom ||
+          filters.durationFrom ||
+          filters.durationTo ||
+          filters.sortBy ||
+          filters.type)
+    );
 
     try {
-      const res = await fetch(
-        `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=ru-RU&include_adult=false&page=${page}`
-      );
-      if (!res.ok) return [];
+      let url: string;
+      const targetType = filters?.type === 'TV' ? 'tv' : 'movie';
+
+      // If no text query or discover is preferred because of deep criteria
+      if (!trimmedQ && hasFilters) {
+        url = this.buildDiscoverUrl(apiKey, targetType, page, filters!);
+      } else if (trimmedQ) {
+        // Multi search or specific type search
+        if (filters?.type === 'TV') {
+          url = `https://api.themoviedb.org/3/search/tv?api_key=${apiKey}&query=${encodeURIComponent(trimmedQ)}&language=ru-RU&include_adult=false&page=${page}`;
+        } else if (filters?.type === 'MOVIE') {
+          url = `https://api.themoviedb.org/3/search/movie?api_key=${apiKey}&query=${encodeURIComponent(trimmedQ)}&language=ru-RU&include_adult=false&page=${page}`;
+          if (filters?.year) url += `&primary_release_year=${filters.year}`;
+        } else {
+          url = `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&query=${encodeURIComponent(trimmedQ)}&language=ru-RU&include_adult=false&page=${page}`;
+        }
+      } else {
+        return { results: [], hasMore: false, page };
+      }
+
+      const res = await fetch(url);
+      if (!res.ok) return { results: [], hasMore: false, page };
       const data = await res.json();
-      const results: MediaSearchResult[] = [];
+      let results: MediaSearchResult[] = [];
 
       for (const item of (data.results || [])) {
-        if (item.media_type !== 'movie' && item.media_type !== 'tv') continue;
-        const isMovie = item.media_type === 'movie';
+        if (item.media_type === 'person') continue;
+        const isMovie = item.media_type ? item.media_type === 'movie' : targetType === 'movie';
         const title = isMovie ? (item.title || item.original_title) : (item.name || item.original_name);
         const originalTitle = isMovie ? item.original_title : item.original_name;
         const releaseDate = isMovie ? item.release_date : item.first_air_date;
         const year = releaseDate ? parseInt(releaseDate.split('-')[0], 10) : undefined;
         const posterUrl = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : undefined;
         const backdropUrl = item.backdrop_path ? `https://image.tmdb.org/t/p/original${item.backdrop_path}` : undefined;
+        const rating = item.vote_average ? Math.round(item.vote_average * 10) / 10 : undefined;
+        const voteCount = item.vote_count || 0;
+
+        // Post-filter if search endpoint was used
+        if (trimmedQ && filters) {
+          if (filters.year && year !== filters.year) continue;
+          if (filters.yearFrom && year && year < filters.yearFrom) continue;
+          if (filters.yearTo && year && year > filters.yearTo) continue;
+          if (filters.ratingFrom && rating !== undefined && rating < filters.ratingFrom) continue;
+          if (filters.ratingTo && rating !== undefined && rating > filters.ratingTo) continue;
+          if (filters.votesFrom && voteCount < filters.votesFrom) continue;
+        }
 
         results.push({
           provider: 'TMDB',
@@ -71,16 +167,89 @@ export class TMDBProvider implements MediaProvider {
           backdropUrl,
           releaseDate,
           year,
-          rating: item.vote_average ? Math.round(item.vote_average * 10) / 10 : undefined,
-          genres: item.genre_ids ? [] : undefined,
+          rating,
         });
       }
 
-      return results;
+      const hasMore = (data.page || 1) < (data.total_pages || 1);
+      return { results, hasMore, page: data.page || page, total: data.total_results };
     } catch (err) {
       console.error('TMDB search error:', err);
-      return [];
+      return { results: [], hasMore: false, page };
     }
+  }
+
+  private buildDiscoverUrl(
+    apiKey: string,
+    type: 'movie' | 'tv',
+    page: number,
+    filters: UnifiedSearchFilters
+  ): string {
+    const params = new URLSearchParams({
+      api_key: apiKey,
+      language: 'ru-RU',
+      include_adult: 'false',
+      page: String(page),
+    });
+
+    // Genres
+    if (filters.genres && filters.genres.length > 0) {
+      const genreIds = filters.genres
+        .map((g) => TMDB_GENRE_MAP[g.toLowerCase().trim()])
+        .filter(Boolean);
+      if (genreIds.length > 0) {
+        params.set('with_genres', genreIds.join(','));
+      }
+    }
+
+    // Country
+    if (filters.countries && filters.countries.length > 0) {
+      params.set('with_origin_country', filters.countries.join('|'));
+    }
+
+    // Years
+    if (filters.year) {
+      if (type === 'movie') params.set('primary_release_year', String(filters.year));
+      else params.set('first_air_date_year', String(filters.year));
+    } else {
+      if (filters.yearFrom) {
+        const key = type === 'movie' ? 'primary_release_date.gte' : 'first_air_date.gte';
+        params.set(key, `${filters.yearFrom}-01-01`);
+      }
+      if (filters.yearTo) {
+        const key = type === 'movie' ? 'primary_release_date.lte' : 'first_air_date.lte';
+        params.set(key, `${filters.yearTo}-12-31`);
+      }
+    }
+
+    // Rating & Votes
+    if (filters.ratingFrom !== undefined) params.set('vote_average.gte', String(filters.ratingFrom));
+    if (filters.ratingTo !== undefined) params.set('vote_average.lte', String(filters.ratingTo));
+    if (filters.votesFrom !== undefined) params.set('vote_count.gte', String(filters.votesFrom));
+
+    // Runtime
+    if (type === 'movie') {
+      if (filters.durationFrom) params.set('with_runtime.gte', String(filters.durationFrom));
+      if (filters.durationTo) params.set('with_runtime.lte', String(filters.durationTo));
+    }
+
+    // Sort
+    let sortBy = 'popularity.desc';
+    const isAsc = filters.sortOrder === 'asc';
+    if (filters.sortBy === 'rating') sortBy = isAsc ? 'vote_average.asc' : 'vote_average.desc';
+    else if (filters.sortBy === 'votes') sortBy = isAsc ? 'vote_count.asc' : 'vote_count.desc';
+    else if (filters.sortBy === 'release_date') {
+      sortBy = type === 'movie'
+        ? (isAsc ? 'primary_release_date.asc' : 'primary_release_date.desc')
+        : (isAsc ? 'first_air_date.asc' : 'first_air_date.desc');
+    } else if (filters.sortBy === 'title') {
+      sortBy = type === 'movie'
+        ? (isAsc ? 'original_title.asc' : 'original_title.desc')
+        : (isAsc ? 'name.asc' : 'name.desc');
+    }
+    params.set('sort_by', sortBy);
+
+    return `https://api.themoviedb.org/3/discover/${type}?${params.toString()}`;
   }
 
   async getDetails(
@@ -297,19 +466,20 @@ export class TMDBProvider implements MediaProvider {
     }
   }
 
-  async getTrending(type: string = "MOVIE", credentials?: Record<string, any>, page: number = 1): Promise<import("./types.js").PaginatedResult<MediaSearchResult> | MediaSearchResult[]> {
+  async getTrending(type: string = "MOVIE", credentials?: Record<string, any>, page: number = 1): Promise<import("./types.js").PaginatedResult<MediaSearchResult>> {
     const apiKey = credentials?.apiKey;
-    if (!apiKey) return [];
+    if (!apiKey) return { results: [], hasMore: false, page };
 
     try {
-      const mediaType = type === 'TV' ? 'tv' : 'movie';
+      const mediaType = type === 'TV' ? 'tv' : type === 'ALL' ? 'all' : 'movie';
       const res = await fetch(`https://api.themoviedb.org/3/trending/${mediaType}/week?api_key=${apiKey}&language=ru-RU&page=${page}`);
-      if (!res.ok) return [];
+      if (!res.ok) return { results: [], hasMore: false, page };
       const data = await res.json();
       const results: MediaSearchResult[] = [];
 
       for (const item of (data.results || [])) {
-        const isMovie = mediaType === 'movie';
+        if (item.media_type === 'person') continue;
+        const isMovie = item.media_type ? item.media_type === 'movie' : mediaType === 'movie';
         const title = isMovie ? (item.title || item.original_title) : (item.name || item.original_name);
         const originalTitle = isMovie ? item.original_title : item.original_name;
         const releaseDate = isMovie ? item.release_date : item.first_air_date;
@@ -332,10 +502,11 @@ export class TMDBProvider implements MediaProvider {
         });
       }
 
-      return results;
+      const hasMore = (data.page || 1) < (data.total_pages || 1);
+      return { results, hasMore, page: data.page || page, total: data.total_results };
     } catch (err) {
       console.error('TMDB trending error:', err);
-      return [];
+      return { results: [], hasMore: false, page };
     }
   }
 }

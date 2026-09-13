@@ -27,12 +27,20 @@ import {
   reviews,
   inviteCodes,
   passwordResetTokens,
+  directMessages,
 } from '../db/schema.ts';
-import { eq, and, or, desc, asc, sql, inArray, isNull, ilike, gte } from 'drizzle-orm';
+import { eq, and, or, desc, asc, sql, inArray, isNull, ilike, gte, lte } from 'drizzle-orm';
 import { providerManager } from './providers/index.ts';
+import { UnifiedSearchFilters } from './providers/types.ts';
 import { encryptCredentials, decryptCredentials, maskApiKey } from '../lib/crypto.ts';
 import { GameTranslator } from './services/gameTranslator.ts';
 import { telegramAuthCodes, telegramBot } from './telegram.ts';
+import { achievementService } from './achievements/service.ts';
+import { achievementsRouter } from './routes/achievements.ts';
+import { notificationService } from './services/notificationService.ts';
+import { presenceService } from "./services/presenceService.ts";
+import { getCleanupStatus, runMessageCleanupJob } from "./services/messageCleanup.ts";
+import { normalizeNotificationPreferences } from '../types/notification.ts';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -105,34 +113,40 @@ apiRouter.get('/proxy/image', async (req, res) => {
   }
 });
 
-// Helper to create in-app notification and push to Telegram if linked
+// Helper to create in-app notification and push real-time SSE + Telegram queue
 export async function sendAppNotification(
   userId: number,
   notif: {
     type: string;
     title: string;
     body: string;
+    content?: string;
     relatedEntity?: string;
     relatedEntityId?: string;
     link?: string;
+    senderId?: number;
+    senderAvatar?: string;
+    senderUsername?: string;
+    metadata?: Record<string, any>;
   }
 ) {
   try {
-    await db.insert(notifications).values({
+    await notificationService.notifyUser({
       userId,
-      type: notif.type,
+      type: notif.type as any,
       title: notif.title,
       body: notif.body,
+      content: notif.content,
       relatedEntity: notif.relatedEntity,
       relatedEntityId: notif.relatedEntityId,
       link: notif.link,
-    });
-    // Async Telegram delivery
-    telegramBot.sendNotification(userId, notif).catch((err) => {
-      console.warn('[Telegram Notification] Non-fatal send error:', err?.message || err);
+      senderId: notif.senderId,
+      senderAvatar: notif.senderAvatar,
+      senderUsername: notif.senderUsername,
+      metadata: notif.metadata,
     });
   } catch (err) {
-    console.error('Failed to create notification:', err);
+    console.error('Failed to create notification via notificationService:', err);
   }
 }
 
@@ -335,6 +349,9 @@ apiRouter.post('/auth/register', async (req, res) => {
       { expiresIn: '30d' }
     );
 
+    // Trigger registration achievement
+    achievementService.checkAndUnlock(newUser.id, 'USER_REGISTERED').catch(() => {});
+
     setSessionCookie(res, token);
     res.json({ token, user: sanitizeUser(newUser) });
   } catch (err: any) {
@@ -387,6 +404,7 @@ apiRouter.post('/auth/login', async (req, res) => {
     );
 
     setSessionCookie(res, token);
+    achievementService.checkAndUnlock(user.id, 'DAYS_STREAK').catch(() => {});
     res.json({ token, user: sanitizeUser(user) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1034,13 +1052,58 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
 // ==========================================
 
 // Global search across external providers and local catalog
+function parseUnifiedFilters(query: any): UnifiedSearchFilters {
+  const parseList = (val: any): string[] | undefined => {
+    if (!val) return undefined;
+    if (Array.isArray(val)) return val.map(String).map((s) => s.trim()).filter(Boolean);
+    return String(val).split(',').map((s) => s.trim()).filter(Boolean);
+  };
+
+  const num = (val: any): number | undefined => {
+    if (val === undefined || val === null || val === '') return undefined;
+    const n = Number(val);
+    return isNaN(n) ? undefined : n;
+  };
+
+  const q = query.q !== undefined ? String(query.q).trim() : query.query !== undefined ? String(query.query).trim() : undefined;
+
+  return {
+    query: q,
+    type: query.type ? String(query.type).toUpperCase() : undefined,
+    category: query.category ? String(query.category).toUpperCase() : undefined,
+    genres: parseList(query.genres || query.genre),
+    year: num(query.year),
+    yearFrom: num(query.year_from ?? query.yearFrom),
+    yearTo: num(query.year_to ?? query.yearTo),
+    ratingFrom: num(query.rating_from ?? query.ratingFrom),
+    ratingTo: num(query.rating_to ?? query.ratingTo),
+    votesFrom: num(query.votes_from ?? query.votesFrom),
+    durationFrom: num(query.duration_from ?? query.durationFrom),
+    durationTo: num(query.duration_to ?? query.durationTo),
+    episodesFrom: num(query.episodes_from ?? query.episodesFrom),
+    episodesTo: num(query.episodes_to ?? query.episodesTo),
+    countries: parseList(query.countries || query.country),
+    platforms: parseList(query.platforms || query.platform),
+    status: query.status ? String(query.status) : undefined,
+    season: query.season ? String(query.season) : undefined,
+    seasonYear: num(query.season_year ?? query.seasonYear),
+    animeFormat: query.anime_format ? String(query.anime_format) : (query.animeFormat ? String(query.animeFormat) : undefined),
+    gameMode: query.game_mode ? String(query.game_mode) : (query.gameMode ? String(query.gameMode) : undefined),
+    sortBy: query.sort_by ? String(query.sort_by) as any : (query.sortBy as any),
+    sortOrder: (query.sort_order === 'asc' || query.sortOrder === 'asc') ? 'asc' : 'desc',
+    page: num(query.page) || 1,
+    limit: num(query.limit) || 20,
+  };
+}
+
 const mediaSearchHandler = async (req: any, res: any) => {
   try {
-    const query = String(req.query.q || '').trim();
+    const filters = parseUnifiedFilters(req.query);
+    const query = filters.query || '';
     const rawCategory = req.query.category || req.query.listCategory;
     const categoryFilter = rawCategory ? String(rawCategory).toUpperCase() : undefined;
     let typeFilter = req.query.type ? String(req.query.type).toUpperCase() : undefined;
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '25'), 10) || 25, 1), 50);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '20'), 10) || 20, 1), 50);
     const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
 
     if (!typeFilter && categoryFilter) {
@@ -1051,94 +1114,184 @@ const mediaSearchHandler = async (req: any, res: any) => {
       else if (categoryFilter === 'COMIC' || categoryFilter === 'COMICS') typeFilter = 'COMIC';
     }
 
-    if (!query || query.length < 2) {
-      return res.json([]);
+    const hasFilterCriteria = Boolean(
+      (filters.genres && filters.genres.length > 0) ||
+      (filters.countries && filters.countries.length > 0) ||
+      (filters.platforms && filters.platforms.length > 0) ||
+      filters.year !== undefined ||
+      filters.yearFrom !== undefined ||
+      filters.yearTo !== undefined ||
+      filters.ratingFrom !== undefined ||
+      filters.ratingTo !== undefined ||
+      filters.votesFrom !== undefined ||
+      filters.durationFrom !== undefined ||
+      filters.durationTo !== undefined ||
+      filters.status !== undefined ||
+      filters.season !== undefined ||
+      filters.seasonYear !== undefined ||
+      filters.animeFormat !== undefined ||
+      filters.gameMode !== undefined ||
+      filters.sortBy !== undefined ||
+      (typeFilter && typeFilter !== 'ALL') ||
+      (categoryFilter && categoryFilter !== 'ALL')
+    );
+
+    // If neither search query nor filters provided
+    if ((!query || query.length < 1) && !hasFilterCriteria) {
+      return res.json({ results: [], hasMore: false, page, limit });
     }
 
-    // 1. Search local database with direct SQL conditions
-    const localConditions: any[] = [
-      sql`(LOWER(${media.title}) LIKE ${'%' + query.toLowerCase() + '%'} OR LOWER(COALESCE(${media.originalTitle}, '')) LIKE ${'%' + query.toLowerCase() + '%'})`
-    ];
+    // 1. Search local database with direct SQL conditions on first page
+    let localFormatted: any[] = [];
+    if (page === 1) {
+      const localConditions: any[] = [];
 
-    if (typeFilter) {
-      localConditions.push(eq(media.type, typeFilter));
-    } else if (categoryFilter && categoryFilter !== 'ALL') {
-      if (categoryFilter === 'MOVIES_TV' || categoryFilter === 'MOVIE_TV' || categoryFilter === 'FILMS_SERIES') {
-        localConditions.push(or(eq(media.type, 'MOVIE'), eq(media.type, 'TV')));
-      } else if (categoryFilter === 'GAME' || categoryFilter === 'GAMES') {
-        localConditions.push(eq(media.type, 'GAME'));
-      } else if (categoryFilter === 'ANIME') {
-        localConditions.push(eq(media.type, 'ANIME'));
-      } else if (categoryFilter === 'MANGA') {
-        localConditions.push(eq(media.type, 'MANGA'));
-      } else if (categoryFilter === 'BOOK' || categoryFilter === 'BOOKS') {
-        localConditions.push(eq(media.type, 'BOOK'));
-      } else if (categoryFilter === 'COMIC' || categoryFilter === 'COMICS') {
-        localConditions.push(eq(media.type, 'COMIC'));
+      if (query && query.length >= 2) {
+        localConditions.push(
+          sql`(LOWER(${media.title}) LIKE ${'%' + query.toLowerCase() + '%'} OR LOWER(COALESCE(${media.originalTitle}, '')) LIKE ${'%' + query.toLowerCase() + '%'})`
+        );
+      }
+
+      if (typeFilter && typeFilter !== 'ALL') {
+        localConditions.push(eq(media.type, typeFilter));
+      } else if (categoryFilter && categoryFilter !== 'ALL') {
+        if (categoryFilter === 'MOVIES_TV' || categoryFilter === 'MOVIE_TV' || categoryFilter === 'FILMS_SERIES') {
+          localConditions.push(or(eq(media.type, 'MOVIE'), eq(media.type, 'TV')));
+        } else if (categoryFilter === 'GAME' || categoryFilter === 'GAMES') {
+          localConditions.push(eq(media.type, 'GAME'));
+        } else if (categoryFilter === 'ANIME') {
+          localConditions.push(eq(media.type, 'ANIME'));
+        } else if (categoryFilter === 'MANGA') {
+          localConditions.push(eq(media.type, 'MANGA'));
+        } else if (categoryFilter === 'BOOK' || categoryFilter === 'BOOKS') {
+          localConditions.push(eq(media.type, 'BOOK'));
+        } else if (categoryFilter === 'COMIC' || categoryFilter === 'COMICS') {
+          localConditions.push(eq(media.type, 'COMIC'));
+        }
+      }
+
+      // Year filter
+      if (filters.year) {
+        localConditions.push(eq(media.year, filters.year));
+      } else {
+        if (filters.yearFrom) localConditions.push(gte(media.year, filters.yearFrom));
+        if (filters.yearTo) localConditions.push(lte(media.year, filters.yearTo));
+      }
+
+      // Rating filter
+      if (filters.ratingFrom !== undefined) localConditions.push(gte(media.rating, filters.ratingFrom));
+      if (filters.ratingTo !== undefined) localConditions.push(lte(media.rating, filters.ratingTo));
+
+      // Genres
+      if (filters.genres && filters.genres.length > 0) {
+        const genreConditions = filters.genres.map((g) => ilike(media.genres, `%${g}%`));
+        localConditions.push(or(...genreConditions));
+      }
+
+      try {
+        let dbQuery = db.select().from(media);
+        if (localConditions.length > 0) {
+          dbQuery = dbQuery.where(and(...localConditions)) as any;
+        }
+
+        if (filters.sortBy === 'rating') {
+          dbQuery = (filters.sortOrder === 'asc' ? dbQuery.orderBy(asc(media.rating)) : dbQuery.orderBy(desc(media.rating))) as any;
+        } else if (filters.sortBy === 'release_date') {
+          dbQuery = (filters.sortOrder === 'asc' ? dbQuery.orderBy(asc(media.year)) : dbQuery.orderBy(desc(media.year))) as any;
+        } else if (filters.sortBy === 'title') {
+          dbQuery = (filters.sortOrder === 'desc' ? dbQuery.orderBy(desc(media.title)) : dbQuery.orderBy(asc(media.title))) as any;
+        }
+
+        const localItems = await dbQuery.limit(limit);
+
+        localFormatted = localItems.map((item) => ({
+          provider: 'DODIK_DB',
+          externalId: String(item.id),
+          mediaId: item.id,
+          type: item.type,
+          title: item.title,
+          originalTitle: item.originalTitle,
+          description: item.description,
+          posterUrl: item.posterUrl,
+          backdropUrl: item.backdropUrl,
+          year: item.year,
+          rating: item.rating,
+        }));
+      } catch (dbErr) {
+        console.warn('Local DB search error:', dbErr);
       }
     }
 
-    const localItems = await db
-      .select()
-      .from(media)
-      .where(and(...localConditions))
-      .limit(limit);
-
-    const localFormatted = localItems.map((item) => ({
-      provider: 'DODIK_DB',
-      externalId: String(item.id),
-      mediaId: item.id,
-      type: item.type,
-      title: item.title,
-      originalTitle: item.originalTitle,
-      description: item.description,
-      posterUrl: item.posterUrl,
-      backdropUrl: item.backdropUrl,
-      year: item.year,
-      rating: item.rating,
-    }));
-
-    // 2. Search external active providers (runs in parallel with timeouts)
-    const searchRes = await providerManager.search(query, typeFilter, page);
-    const externalResults = searchRes.results;
-    const hasMore = searchRes.hasMore;
+    // 2. Search external active providers with pagination and filters
+    const searchRes = await providerManager.search(query, typeFilter, page, limit, filters);
+    const externalResults = searchRes.results || [];
+    const hasMore = Boolean(searchRes.hasMore);
 
     // Merge without duplicates
-    let combined = [...localFormatted, ...externalResults];
-    
+    let combined = page === 1 ? [...localFormatted, ...externalResults] : [...externalResults];
+
     // Deduplicate by mediaId or provider+externalId or normalized title+type
     const seen = new Set<string>();
     combined = combined.filter((item: any) => {
-      const key = item.mediaId ? `media-${item.mediaId}` : `${item.provider}-${item.externalId}-${item.title}-${item.type}`;
-      if (seen.has(key)) return false;
+      const key = item.mediaId ? `media-${item.mediaId}` : `${item.provider}-${item.externalId}`;
+      const titleKey = `${item.type}-${(item.title || '').trim().toLowerCase()}-${item.year || ''}`;
+      if (seen.has(key) || (titleKey.length > 5 && seen.has(titleKey))) return false;
       seen.add(key);
+      seen.add(titleKey);
       return true;
     });
 
     if (categoryFilter && categoryFilter !== 'ALL') {
-      combined = combined.filter(item => isMediaAllowedForTierCategory(item.type, categoryFilter));
+      combined = combined.filter((item) => isMediaAllowedForTierCategory(item.type, categoryFilter));
     }
 
-    // Limit returned results to avoid overloading the UI
-    res.json({ results: combined.slice(0, limit), hasMore: hasMore || externalResults.length >= limit });
+    // Post-filter on rating and year if specified
+    if (filters.ratingFrom !== undefined) {
+      combined = combined.filter((i) => i.rating === undefined || i.rating >= filters.ratingFrom!);
+    }
+    if (filters.ratingTo !== undefined) {
+      combined = combined.filter((i) => i.rating === undefined || i.rating <= filters.ratingTo!);
+    }
+    if (filters.yearFrom !== undefined) {
+      combined = combined.filter((i) => i.year === undefined || i.year >= filters.yearFrom!);
+    }
+    if (filters.yearTo !== undefined) {
+      combined = combined.filter((i) => i.year === undefined || i.year <= filters.yearTo!);
+    }
+
+    res.json({
+      results: combined,
+      hasMore: hasMore || externalResults.length >= limit,
+      page,
+      limit,
+    });
   } catch (err: any) {
     console.error('Search error:', err);
-    res.status(500).json({ error: 'Ошибка при поиске медиа' });
+    res.status(500).json({ error: 'Ошибка при поиске медиа', results: [], hasMore: false, page: 1 });
   }
 };
 
 apiRouter.get('/media/search', mediaSearchHandler);
 apiRouter.get('/search', mediaSearchHandler);
+apiRouter.get('/media/catalog', mediaSearchHandler);
 
-// Trending items
+// Trending items with pagination and filters
 apiRouter.get('/media/trending', async (req, res) => {
   try {
-    const type = req.query.type ? String(req.query.type).toUpperCase() : 'MOVIE';
+    const rawType = req.query.type ? String(req.query.type).toUpperCase() : 'ALL';
     const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
-    const trendingRes = await providerManager.getTrending(type, page);
-    res.json(trendingRes);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '20'), 10) || 20, 1), 50);
+    const filters = parseUnifiedFilters(req.query);
+
+    const trendingRes = await providerManager.getTrending(rawType, page, limit, filters);
+    res.json({
+      results: trendingRes.results || [],
+      hasMore: Boolean(trendingRes.hasMore),
+      page,
+      limit,
+    });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, results: [], hasMore: false, page: 1 });
   }
 });
 
@@ -1633,6 +1786,60 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
         mediaId,
         details: title ? `Отзыв: "${title}"` : 'Написал(а) отзыв',
       });
+      // Trigger review achievement
+      achievementService.checkAndUnlock(user.id, 'REVIEW_WRITTEN', { reviewId: savedReview.id }).catch(() => {});
+
+      // Dispatch FRIEND_REVIEW notifications to user's friends
+      (async () => {
+        try {
+          const friendsList = await db
+            .select()
+            .from(friendRequests)
+            .where(
+              and(
+                eq(friendRequests.status, 'ACCEPTED'),
+                or(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, user.id))
+              )
+            );
+          const friendIds = friendsList.map((f) => (f.senderId === user.id ? f.receiverId : f.senderId));
+
+          const [targetMedia] = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
+          const mediaTitle = targetMedia?.title || targetMedia?.originalTitle || 'контенту';
+
+          for (const fid of friendIds) {
+            notificationService.notifyFriendReview(
+              { id: user.id, username: user.username, avatar: user.avatar },
+              fid,
+              { id: mediaId, title: mediaTitle, type: targetMedia?.type },
+              title ? `${title}: ${content.slice(0, 70)}` : content.slice(0, 80)
+            ).catch(() => {});
+          }
+
+          // Mention notifications: check for @username in review content
+          const mentions = content.match(/@([a-zA-Z0-9_-]+)/g);
+          if (mentions && mentions.length > 0) {
+            const usernames: string[] = Array.from(new Set(mentions.map((m) => m.slice(1))));
+            if (usernames.length > 0) {
+              const foundUsers = await db
+                .select({ id: users.id, username: users.username })
+                .from(users)
+                .where(inArray(users.username, usernames));
+              for (const u of foundUsers) {
+                if (u.id !== user.id) {
+                  notificationService.notifyMention(
+                    { id: user.id, username: user.username, avatar: user.avatar },
+                    u.id,
+                    content.slice(0, 100),
+                    `/media/${targetMedia?.type?.toLowerCase() || 'any'}/${mediaId}`
+                  ).catch(() => {});
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[Review Notification] Dispatch error:', err);
+        }
+      })();
     }
 
     // Sync rating to userMedia
@@ -1795,6 +2002,8 @@ apiRouter.post('/reviews/:id/like', requireAuth, async (req: AuthRequest, res: R
           body: `@${user.username} оценил(а) вашу рецензию`,
           link: `/media/any/${reviewItem.mediaId}`,
         });
+        // Trigger achievement check for receiving likes
+        achievementService.checkAndUnlock(reviewItem.userId, 'LIKE_RECEIVED').catch(() => {});
       }
       return res.json({ liked: true });
     }
@@ -1971,6 +2180,46 @@ apiRouter.post('/library', requireAuth, async (req: AuthRequest, res: Response) 
       });
     }
 
+    // Trigger achievement checks for media added & completed
+    achievementService.checkAndUnlock(user.id, 'MEDIA_ADDED', { mediaId: targetMediaId }).catch(() => {});
+    if (defaultStatus === 'COMPLETED') {
+      achievementService.checkAndUnlock(user.id, 'MEDIA_COMPLETED', { mediaId: targetMediaId }).catch(() => {});
+    }
+
+    // Dispatch FRIEND_ACTIVITY to friends
+    (async () => {
+      try {
+        const friendsList = await db
+          .select()
+          .from(friendRequests)
+          .where(
+            and(
+              eq(friendRequests.status, 'ACCEPTED'),
+              or(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, user.id))
+            )
+          );
+        const friendIds = friendsList.map((f) => (f.senderId === user.id ? f.receiverId : f.senderId));
+        if (friendIds.length > 0) {
+          const [mItem] = await db.select().from(media).where(eq(media.id, targetMediaId)).limit(1);
+          const mTitle = mItem?.title || mItem?.originalTitle || 'контент';
+          const actText = defaultStatus === 'COMPLETED'
+            ? `завершил(а) просмотр «${mTitle}»`
+            : `добавил(а) «${mTitle}» в список (${defaultStatus})`;
+
+          for (const fid of friendIds) {
+            notificationService.notifyFriendActivity(
+              { id: user.id, username: user.username, avatar: user.avatar },
+              fid,
+              actText,
+              `/media/${mItem?.type?.toLowerCase() || 'any'}/${targetMediaId}`
+            ).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('[Activity Notification] Dispatch error:', err);
+      }
+    })();
+
     res.json(userMediaEntry);
   } catch (err: any) {
     console.error('Add library error:', err);
@@ -2015,6 +2264,9 @@ apiRouter.put('/library/:id', requireAuth, async (req: AuthRequest, res: Respons
 
     // Log status or rating changes
     if (status && status !== prev.status) {
+      if (status === 'COMPLETED') {
+        achievementService.checkAndUnlock(user.id, 'MEDIA_COMPLETED', { mediaId: prev.mediaId }).catch(() => {});
+      }
       await db.insert(mediaHistory).values({
         userId: user.id,
         mediaId: prev.mediaId,
@@ -2323,6 +2575,9 @@ apiRouter.put('/friends/request/:id', requireAuth, async (req: AuthRequest, res:
         body: `@${user.username} принял(а) вашу заявку в друзья`,
         link: `/u/${user.username}`,
       });
+      // Trigger friend achievement for both users
+      achievementService.checkAndUnlock(user.id, 'FRIEND_ADDED').catch(() => {});
+      achievementService.checkAndUnlock(reqFound[0].senderId, 'FRIEND_ADDED').catch(() => {});
     }
 
     res.json(updated);
@@ -2902,6 +3157,9 @@ apiRouter.post('/lists', requireAuth, async (req: AuthRequest, res: Response) =>
       }
     }
 
+    // Trigger list creation achievement
+    achievementService.checkAndUnlock(user.id, 'LIST_CREATED', { listId: newList.id }).catch(() => {});
+
     res.json(newList);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -3131,6 +3389,9 @@ apiRouter.post('/lists/:id/add-media', requireAuth, async (req: AuthRequest, res
         orderIndex: nextOrder,
       })
       .returning();
+
+    // Trigger list item addition achievement
+    achievementService.checkAndUnlock(user.id, 'LIST_ITEM_ADDED', { listId }).catch(() => {});
 
     res.json({ ok: true, item: newItem });
   } catch (err: any) {
@@ -4059,11 +4320,38 @@ apiRouter.post('/lists/:id/comments', requireAuth, async (req: AuthRequest, res:
 
     if (targetList.ownerId !== user.id) {
       await sendAppNotification(targetList.ownerId, {
-        type: 'LIST_COMMENT',
+        type: 'COMMENT',
         title: 'Новый комментарий к списку',
-        body: `${user.username} прокомментировал ваш список "${targetList.title}".`,
+        body: `${user.username} прокомментировал ваш список «${targetList.title}».`,
         link: `/lists/${listId}`,
+        senderId: user.id,
+        senderAvatar: user.avatar,
+        senderUsername: user.username,
       });
+    }
+
+    // Check for @mentions in comment
+    const commentMentions = String(content).match(/@([a-zA-Z0-9_-]+)/g);
+    if (commentMentions && commentMentions.length > 0) {
+      const uNames: string[] = Array.from(new Set(commentMentions.map((m) => m.slice(1))));
+      if (uNames.length > 0) {
+        db.select({ id: users.id, username: users.username })
+          .from(users)
+          .where(inArray(users.username, uNames))
+          .then((found) => {
+            for (const u of found) {
+              if (u.id !== user.id && u.id !== targetList.ownerId) {
+                notificationService.notifyMention(
+                  { id: user.id, username: user.username, avatar: user.avatar },
+                  u.id,
+                  String(content).slice(0, 100),
+                  `/lists/${listId}`
+                ).catch(() => {});
+              }
+            }
+          })
+          .catch(() => {});
+      }
     }
 
     res.json({
@@ -4327,6 +4615,10 @@ apiRouter.post('/tier-lists', requireAuth, async (req: AuthRequest, res: Respons
       })
       .returning();
 
+    // Trigger tier list creation & completion achievements
+    achievementService.checkAndUnlock(user.id, 'TIER_LIST_CREATED', { tierListId: newTierList.id }).catch(() => {});
+    achievementService.checkAndUnlock(user.id, 'TIER_LIST_COMPLETED', { tierListId: newTierList.id }).catch(() => {});
+
     res.json(newTierList);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -4388,6 +4680,9 @@ apiRouter.put('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: Resp
       })
       .where(and(eq(tierLists.id, id), eq(tierLists.ownerId, user.id)))
       .returning();
+
+    // Trigger tier list completion check
+    achievementService.checkAndUnlock(user.id, 'TIER_LIST_COMPLETED', { tierListId: id }).catch(() => {});
 
     res.json(updated);
   } catch (err: any) {
@@ -4992,54 +5287,208 @@ apiRouter.get('/calendar/export.ics', requireAuth, async (req: AuthRequest, res:
 });
 
 // ==========================================
-// 12. NOTIFICATIONS
+// 12. NOTIFICATIONS & REAL-TIME STREAMING
 // ==========================================
 
+// Get user notifications with filtering and pagination
 apiRouter.get('/notifications', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
+    const filter = (req.query.filter as string) || 'all';
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 40, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
+
+    const conditions = [eq(notifications.userId, user.id)];
+
+    if (filter === 'unread') {
+      conditions.push(eq(notifications.isRead, false));
+    } else if (filter === 'achievements') {
+      conditions.push(eq(notifications.type, 'ACHIEVEMENT_UNLOCKED'));
+    } else if (filter === 'social') {
+      conditions.push(
+        or(
+          eq(notifications.type, 'FRIEND_REQUEST'),
+          eq(notifications.type, 'FRIEND_ACCEPTED'),
+          eq(notifications.type, 'NEW_MESSAGE'),
+          eq(notifications.type, 'FRIEND_REVIEW'),
+          eq(notifications.type, 'FRIEND_ACTIVITY'),
+          eq(notifications.type, 'MENTION'),
+          eq(notifications.type, 'LIKE'),
+          eq(notifications.type, 'COMMENT')
+        )!
+      );
+    } else if (filter === 'system') {
+      conditions.push(
+        or(
+          eq(notifications.type, 'SYSTEM'),
+          eq(notifications.type, 'ADMIN_ALERT'),
+          eq(notifications.type, 'NEW_RELEASE')
+        )!
+      );
+    }
+
     const notifs = await db
       .select()
       .from(notifications)
-      .where(eq(notifications.userId, user.id))
+      .where(and(...conditions))
       .orderBy(desc(notifications.createdAt))
-      .limit(30);
+      .limit(limit)
+      .offset(offset);
 
-    res.json(notifs);
+    // Fast unread count
+    const [unreadCountResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+
+    res.json({
+      notifications: notifs,
+      unreadCount: Number(unreadCountResult?.count || 0),
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Fast unread count endpoint
+apiRouter.get('/notifications/unread-count', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+
+    res.json({ unreadCount: Number(countResult?.count || 0) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Issue short-lived authentication token specifically for EventSource/SSE
+apiRouter.get('/notifications/stream-token', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const token = jwt.sign(
+      { userId: user.id, username: user.username, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.json({ token });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// Real-Time SSE Stream for Notifications & Alerts
+apiRouter.get('/notifications/stream', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const sessionId = (req.query.sessionId as string) || Math.random().toString(36).substring(7);
+    const userAgent = req.headers['user-agent'];
+
+    // Set Server-Sent Events headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    notificationService.registerSSEClient(user.id, res);
+    presenceService.registerSSESession(user.id, sessionId, res, userAgent);
+  } catch (err: any) {
+    console.error('[SSE] Failed to establish stream:', err);
+    res.status(500).end();
+  }
+});
+
+apiRouter.post('/presence/heartbeat', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const sessionId = req.query.sessionId as string;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId required' });
+    }
+    const userAgent = req.headers['user-agent'];
+    const presence = presenceService.recordHeartbeat(user.id, sessionId, userAgent);
+    res.json({ ok: true, presence });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/presence/status', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userIdsParam = req.query.userIds as string;
+    if (!userIdsParam) {
+      return res.json({});
+    }
+    const userIds = userIdsParam.split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+    if (userIds.length === 0) {
+      return res.json({});
+    }
+
+    // We fetch `updatedAt` for these users as fallback if not in memory
+    const usersList = await db
+      .select({ id: users.id, updatedAt: users.updatedAt })
+      .from(users)
+      .where(inArray(users.id, userIds));
+
+    const updatedMap = new Map<number, string | Date | null>();
+    usersList.forEach(u => updatedMap.set(u.id, u.updatedAt));
+
+    const statuses = presenceService.getUsersPresence(userIds, updatedMap);
+    res.json(statuses);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark single notification as read
 apiRouter.put('/notifications/:id/read', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
     const id = parseInt(req.params.id, 10);
     await db
       .update(notifications)
-      .set({ isRead: true })
+      .set({ isRead: true, readAt: new Date() })
       .where(and(eq(notifications.id, id), eq(notifications.userId, user.id)));
 
-    res.json({ ok: true });
+    // Recompute and emit updated count via SSE
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+    const unreadCount = Number(countResult?.count || 0);
+
+    notificationService.sendSSEEvent(user.id, 'unread_count', { unreadCount });
+
+    res.json({ ok: true, unreadCount });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Mark all notifications as read
 apiRouter.put('/notifications/read-all', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
     await db
       .update(notifications)
-      .set({ isRead: true })
-      .where(eq(notifications.userId, user.id));
+      .set({ isRead: true, readAt: new Date() })
+      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
 
-    res.json({ ok: true });
+    notificationService.sendSSEEvent(user.id, 'unread_count', { unreadCount: 0 });
+
+    res.json({ ok: true, unreadCount: 0 });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Delete single notification
 apiRouter.delete('/notifications/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
@@ -5048,40 +5497,349 @@ apiRouter.delete('/notifications/:id', requireAuth, async (req: AuthRequest, res
       .delete(notifications)
       .where(and(eq(notifications.id, id), eq(notifications.userId, user.id)));
 
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+    const unreadCount = Number(countResult?.count || 0);
+
+    notificationService.sendSSEEvent(user.id, 'unread_count', { unreadCount });
+
+    res.json({ ok: true, unreadCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear all read notifications
+apiRouter.delete('/notifications/clear-read', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    await db
+      .delete(notifications)
+      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, true)));
+
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Test Telegram notification send
-apiRouter.post('/notifications/test-telegram', requireAuth, async (req: AuthRequest, res: Response) => {
+// Get user notification preferences
+apiRouter.get('/notifications/settings', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
-    const { chatId } = req.body;
-    const targetChatId = chatId || user.telegramChatId;
+    const [userRecord] = await db
+      .select({ notificationSettings: users.notificationSettings, telegramChatId: users.telegramChatId })
+      .from(users)
+      .where(eq(users.id, user.id))
+      .limit(1);
 
-    if (!targetChatId) {
-      return res.status(400).json({ error: 'Chat ID не указан. Сначала привяжите аккаунт или введите Chat ID.' });
+    const prefs = normalizeNotificationPreferences(userRecord?.notificationSettings);
+    res.json({
+      settings: prefs,
+      preferences: prefs,
+      telegramLinked: !!userRecord?.telegramChatId,
+      telegramChatId: userRecord?.telegramChatId || null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update user notification preferences
+apiRouter.put('/notifications/settings', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const settingsPayload = req.body.settings || req.body.preferences;
+
+    if (!settingsPayload || typeof settingsPayload !== 'object') {
+      return res.status(400).json({ error: 'Некорректный формат настроек' });
     }
 
-    const botToken = await telegramBot.getBotToken();
-    if (!botToken) {
-      return res.status(503).json({ error: 'Telegram-бот ещё не настроен администратором (токен не задан).' });
+    const normalized = normalizeNotificationPreferences(settingsPayload);
+    const serialized = JSON.stringify(normalized);
+
+    await db
+      .update(users)
+      .set({ notificationSettings: serialized })
+      .where(eq(users.id, user.id));
+
+    res.json({ ok: true, settings: normalized, preferences: normalized });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Broadcast Notification
+apiRouter.post('/notifications/admin-broadcast', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.dbUser!;
+    const { title, body, link, type, targetUserIds } = req.body;
+
+    if (!title || !body) {
+      return res.status(400).json({ error: 'Заголовок и текст обязательны' });
     }
 
-    const result = await telegramBot.sendMessage(
-      String(targetChatId),
-      `🔔 *Тестовое уведомление Dodik Tracker*\n\nПривет, *${user.username}*! Связь с ботом успешно проверена.`
+    const result = await notificationService.broadcastNotification({
+      type: type || 'ADMIN_ALERT',
+      title: String(title).trim(),
+      body: String(body).trim(),
+      link: link ? String(link).trim() : undefined,
+      senderId: admin.id,
+      targetUserIds: Array.isArray(targetUserIds) && targetUserIds.length > 0 ? targetUserIds : undefined,
+      excludeUserId: admin.id,
+    });
+
+    res.json({ ok: true, deliveredCount: result.deliveredCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Trigger release notification for tracked media (for testing or updates)
+apiRouter.post('/notifications/trigger-release', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { mediaId, title, info } = req.body;
+
+    let mediaTitle = title || 'Новый эпизод';
+    let link = '/calendar';
+
+    if (mediaId) {
+      const [m] = await db.select().from(media).where(eq(media.id, parseInt(mediaId, 10))).limit(1);
+      if (m) {
+        mediaTitle = m.title || m.originalTitle || title || 'Новый релиз';
+        link = `/media/${m.type?.toLowerCase() || 'any'}/${m.id}`;
+      }
+    }
+
+    await notificationService.notifyNewRelease(
+      user.id,
+      mediaTitle,
+      info || 'Новая серия или сезон уже доступны для просмотра!',
+      link
     );
 
-    if (!result || !result.ok) {
-      return res.status(500).json({
-        error: `Бот не смог доставить сообщение: ${result?.description || 'Пользователь не запустил бота или заблокировал его'}. Убедитесь, что вы отправили /start боту.`,
-      });
+    res.json({ ok: true, message: 'Уведомление о релизе успешно отправлено' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// DIRECT MESSAGES & SOCIAL INTERACTION
+// ==========================================
+
+// Get recent dialogues (list of chats)
+apiRouter.get('/messages', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+
+    // We need to find all unique conversations for the user and get the latest message
+    // Since Drizzle lacks a clean 'distinct on' or complex window functions across unions,
+    // we can write a raw query.
+    const query = sql`
+      WITH recent_messages AS (
+        SELECT 
+          m.*,
+          CASE WHEN m.sender_id = ${user.id} THEN m.receiver_id ELSE m.sender_id END as other_user_id
+        FROM direct_messages m
+        WHERE m.sender_id = ${user.id} OR m.receiver_id = ${user.id}
+      ),
+      ranked_messages AS (
+        SELECT 
+          *,
+          ROW_NUMBER() OVER (PARTITION BY other_user_id ORDER BY created_at DESC) as rn
+        FROM recent_messages
+      ),
+      unread_counts AS (
+        SELECT sender_id, COUNT(*) as count
+        FROM direct_messages
+        WHERE receiver_id = ${user.id} AND is_read = false
+        GROUP BY sender_id
+      )
+      SELECT 
+        rm.id, rm.sender_id as "senderId", rm.receiver_id as "receiverId", 
+        rm.content, rm.is_read as "isRead", rm.created_at as "createdAt",
+        rm.other_user_id as "otherUserId",
+        u.username, u.avatar,
+        COALESCE(uc.count, 0) as "unreadCount"
+      FROM ranked_messages rm
+      JOIN users u ON rm.other_user_id = u.id
+      LEFT JOIN unread_counts uc ON rm.other_user_id = uc.sender_id
+      WHERE rm.rn = 1
+      ORDER BY rm.created_at DESC
+    `;
+
+    const result = await db.execute(query);
+
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark messages from a specific user as read
+apiRouter.post('/messages/:otherUserId/read', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const otherUserId = parseInt(req.params.otherUserId, 10);
+    
+    if (!otherUserId || otherUserId === user.id) {
+      return res.status(400).json({ error: 'Некорректный ID собеседника' });
     }
 
-    res.json({ ok: true, message: 'Тестовое уведомление успешно отправлено!' });
+    await db
+      .update(directMessages)
+      .set({ isRead: true })
+      .where(
+        and(
+          eq(directMessages.senderId, otherUserId),
+          eq(directMessages.receiverId, user.id),
+          eq(directMessages.isRead, false)
+        )
+      );
+      
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get conversation messages between current user and friend
+apiRouter.get('/messages/:otherUserId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const otherUserId = parseInt(req.params.otherUserId, 10);
+    const beforeDate = req.query.before as string;
+
+    if (!otherUserId || otherUserId === user.id) {
+      return res.status(400).json({ error: 'Некорректный ID собеседника' });
+    }
+
+    let query = db
+      .select({
+        id: directMessages.id,
+        senderId: directMessages.senderId,
+        receiverId: directMessages.receiverId,
+        content: directMessages.content,
+        isRead: directMessages.isRead,
+        createdAt: directMessages.createdAt,
+      })
+      .from(directMessages)
+      .where(
+        and(
+          or(
+            and(eq(directMessages.senderId, user.id), eq(directMessages.receiverId, otherUserId)),
+            and(eq(directMessages.senderId, otherUserId), eq(directMessages.receiverId, user.id))
+          ),
+          beforeDate ? sql`${directMessages.createdAt} < ${new Date(beforeDate)}` : undefined
+        )
+      )
+      .orderBy(desc(directMessages.createdAt))
+      .limit(50);
+
+    const msgs = await query;
+    // Reverse so the oldest is first
+    msgs.reverse();
+
+    // Automatically mark incoming unread messages as read (only if no 'before' to avoid redundant marking)
+    if (!beforeDate) {
+      await db
+        .update(directMessages)
+        .set({ isRead: true })
+        .where(
+          and(
+            eq(directMessages.senderId, otherUserId),
+            eq(directMessages.receiverId, user.id),
+            eq(directMessages.isRead, false)
+          )
+        );
+      
+      // Tell presence service to notify clients about unread count change if needed
+      // but notificationService handles unread_counts typically.
+    }
+
+    res.json(msgs);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete direct message
+apiRouter.delete('/messages/:messageId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const messageId = parseInt(req.params.messageId, 10);
+
+    const [deleted] = await db
+      .delete(directMessages)
+      .where(and(eq(directMessages.id, messageId), eq(directMessages.senderId, user.id)))
+      .returning();
+
+    if (!deleted) {
+      return res.status(404).json({ error: 'Сообщение не найдено или нет прав' });
+    }
+
+    res.json({ ok: true, deletedId: messageId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Send direct message
+apiRouter.post('/messages', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { receiverId, content } = req.body;
+
+    const rId = parseInt(receiverId, 10);
+    if (!rId || rId === user.id) {
+      return res.status(400).json({ error: 'Некорректный получатель' });
+    }
+
+    const trimmed = String(content || '').trim();
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Сообщение не может быть пустым' });
+    }
+
+    // Check receiver exists
+    const [receiver] = await db
+      .select({ id: users.id, username: users.username, avatar: users.avatar })
+      .from(users)
+      .where(eq(users.id, rId))
+      .limit(1);
+
+    if (!receiver) {
+      return res.status(404).json({ error: 'Получатель не найден' });
+    }
+
+    const [savedMsg] = await db
+      .insert(directMessages)
+      .values({
+        senderId: user.id,
+        receiverId: rId,
+        content: trimmed,
+        isRead: false,
+        createdAt: new Date(),
+      })
+      .returning();
+
+    // Trigger NEW_MESSAGE notification through NotificationService!
+    notificationService.notifyNewMessage(
+      { id: user.id, username: user.username, avatar: user.avatar },
+      rId,
+      trimmed.length > 80 ? trimmed.slice(0, 80) + '...' : trimmed
+    ).catch((err) => {
+      console.warn('[Messages] Notification dispatch error:', err);
+    });
+
+    // Send real-time SSE to both sender and receiver
+    notificationService.sendSSEEvent(rId, 'chat_message', savedMsg);
+    notificationService.sendSSEEvent(user.id, 'chat_message', savedMsg);
+
+    res.json(savedMsg);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -5109,6 +5867,26 @@ apiRouter.get('/admin/dashboard', requireAuth, requireAdmin, async (req: AuthReq
       totalApiRequests: allLogs.length,
       databaseStatus: 'CONNECTED',
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin message cleanup status
+apiRouter.get('/admin/message-cleanup/status', requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
+  try {
+    const cleanupStatus = getCleanupStatus();
+    res.json(cleanupStatus);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin trigger message cleanup manually
+apiRouter.post('/admin/message-cleanup/run', requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
+  try {
+    const result = await runMessageCleanupJob();
+    res.json({ ok: true, ...result });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -5715,4 +6493,8 @@ apiRouter.post('/admin/telegram-test', requireAuth, requireAdmin, async (req: Au
 });
 
 import { importExportRouter } from './routes/importExport.ts';
+import { gamesRouter } from './routes/games.ts';
 apiRouter.use('/library-sync', importExportRouter);
+apiRouter.use('/achievements', achievementsRouter);
+apiRouter.use('/games', gamesRouter);
+

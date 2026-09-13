@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Users, UserPlus, Sparkles, Check, X, Loader2, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Users, UserPlus, Sparkles, Check, X, Loader2, AlertCircle, MessageSquare } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { TasteComparisonModal } from '../modals/TasteComparisonModal.tsx';
+import { usePresence } from '../../hooks/usePresence.ts';
+import { PresenceIndicator } from '../ui/PresenceIndicator.tsx';
 
 export const FriendsView: React.FC = () => {
   const { authFetch, dbUser, login } = useAuth();
@@ -19,6 +21,9 @@ export const FriendsView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [compareFriend, setCompareFriend] = useState<string | null>(null);
+
+  const friendIds = useMemo(() => friends.map(f => f.id), [friends]);
+  const presenceMap = usePresence(friendIds);
 
   const fetchFriendsAndRequests = async () => {
     if (!dbUser) {
@@ -225,30 +230,52 @@ export const FriendsView: React.FC = () => {
                   className="flex items-center gap-3 min-w-0 cursor-pointer group"
                 >
                   {f.avatar ? (
-                    <img
-                      src={f.avatar}
-                      alt={f.username}
-                      referrerPolicy="no-referrer"
-                      className="w-11 h-11 rounded-full object-cover ring-2 ring-purple-500/30 shrink-0 group-hover:ring-purple-400 transition-all"
-                    />
+                    <div className="relative shrink-0">
+                      <img
+                        src={f.avatar}
+                        alt={f.username}
+                        referrerPolicy="no-referrer"
+                        className="w-11 h-11 rounded-full object-cover ring-2 ring-purple-500/30 group-hover:ring-purple-400 transition-all"
+                      />
+                      <PresenceIndicator presence={presenceMap[f.id]} className="absolute bottom-0 right-0" />
+                    </div>
                   ) : (
-                    <div className="w-11 h-11 rounded-full bg-purple-900/80 flex items-center justify-center text-sm font-bold text-purple-200 shrink-0 group-hover:bg-purple-800 transition-colors">
-                      {f.username.charAt(0).toUpperCase()}
+                    <div className="relative shrink-0">
+                      <div className="w-11 h-11 rounded-full bg-purple-900/80 flex items-center justify-center text-sm font-bold text-purple-200 group-hover:bg-purple-800 transition-colors">
+                        {f.username.charAt(0).toUpperCase()}
+                      </div>
+                      <PresenceIndicator presence={presenceMap[f.id]} className="absolute bottom-0 right-0" />
                     </div>
                   )}
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-zinc-100 group-hover:text-purple-300 transition-colors truncate">@{f.username}</p>
+                  <div className="min-w-0 flex flex-col">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-zinc-100 group-hover:text-purple-300 transition-colors truncate">@{f.username}</p>
+                      {presenceMap[f.id]?.statusText && (
+                        <span className="text-[10px] text-zinc-500 font-medium truncate">{presenceMap[f.id].statusText}</span>
+                      )}
+                    </div>
                     {f.bio && <p className="text-xs text-zinc-400 truncate">{f.bio}</p>}
                   </div>
                 </div>
 
-                <button
-                  onClick={() => setCompareFriend(f.username)}
-                  className="px-3 py-1.5 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-800/50 text-purple-300 text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors shadow-sm"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  Сравнить вкусы
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      window.dispatchEvent(new CustomEvent('open_chat', { detail: { id: f.id, username: f.username, avatar: f.avatar } }));
+                    }}
+                    className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
+                    title="Написать сообщение"
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setCompareFriend(f.username)}
+                    className="px-3 py-1.5 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-800/50 text-purple-300 text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors shadow-sm"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Сравнить
+                  </button>
+                </div>
               </div>
             ))}
           </div>

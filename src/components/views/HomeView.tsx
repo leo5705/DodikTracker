@@ -12,6 +12,7 @@ import {
   Star,
   Film,
   Tv,
+  MessageSquare,
   Gamepad2,
   Book,
 } from 'lucide-react';
@@ -67,7 +68,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
     // 2. Fetch trending
     fetch('/api/media/trending?type=MOVIE')
       .then((res) => (res.ok ? res.json() : []))
-      .then((data) => setTrending(data.slice(0, 6)))
+      .then((data) => {
+        const items = Array.isArray(data) ? data : (data.results || []);
+        setTrending(items.slice(0, 6));
+      })
       .catch(() => {});
 
     // 3. Fetch recent activities
@@ -313,15 +317,29 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs text-zinc-200">
-                    <strong
-                      onClick={() => navigate(`/u/${act.username}`)}
-                      className="text-purple-300 hover:text-purple-200 cursor-pointer"
-                    >
-                      @{act.username}
-                    </strong>{' '}
-                    {act.type === 'MEDIA_COMPLETED' ? 'завершил(а)' : 'добавил(а) в библиотеку'}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-1">
+                    <p className="text-xs text-zinc-200">
+                      <strong
+                        onClick={() => navigate(`/u/${act.username}`)}
+                        className="text-purple-300 hover:text-purple-200 cursor-pointer"
+                      >
+                        @{act.username}
+                      </strong>{' '}
+                      {act.type === 'MEDIA_COMPLETED' ? 'завершил(а)' : 'добавил(а) в библиотеку'}
+                    </p>
+                    {act.userId && dbUser && act.userId !== dbUser.id && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          window.dispatchEvent(new CustomEvent('open_chat', { detail: { id: act.userId, username: act.username, avatar: act.avatar } }));
+                        }}
+                        className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
+                        title="Написать сообщение"
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                   <p
                     onClick={() => act.mediaId && navigate(`/media/${formatMediaTypePath(act.mediaType || 'MOVIE')}/${act.mediaId}`)}
                     className="text-xs font-bold text-zinc-100 truncate mt-0.5 hover:text-purple-400 cursor-pointer transition-colors"

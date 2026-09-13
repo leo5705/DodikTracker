@@ -22,11 +22,15 @@ import {
   Loader2,
   CheckCircle2,
   Settings,
+  Trophy,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { MediaCard, formatMediaTypePath } from '../common/MediaCard.tsx';
 import { TasteComparisonModal } from '../modals/TasteComparisonModal.tsx';
+import { AchievementBadge } from '../achievements/AchievementBadge.tsx';
+import { usePresence } from '../../hooks/usePresence.ts';
+import { PresenceIndicator } from '../ui/PresenceIndicator.tsx';
 
 interface ProfileViewProps {
   username?: string;
@@ -48,10 +52,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [profileData, setProfileData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'library' | 'reviews' | 'lists'>('library');
+  const [activeTab, setActiveTab] = useState<'library' | 'reviews' | 'lists' | 'achievements'>('library');
+  const [userAchievements, setUserAchievements] = useState<any[]>([]);
+  const [achievementsStats, setAchievementsStats] = useState<any>(null);
+  const [achievementsLoading, setAchievementsLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [showTasteCompare, setShowTasteCompare] = useState(false);
   const [friendActionLoading, setFriendActionLoading] = useState(false);
+
+  const profileUserId = profileData?.user?.id;
+  const presenceMap = usePresence(profileUserId ? [profileUserId] : []);
 
   const fetchProfile = async () => {
     if (!targetUsername) {
@@ -102,6 +112,29 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       setFriendActionLoading(false);
     }
   };
+
+  const fetchUserAchievements = async () => {
+    if (!targetUsername) return;
+    setAchievementsLoading(true);
+    try {
+      const res = await authFetch(`/api/achievements/user/${targetUsername}`);
+      if (res.ok) {
+        const json = await res.json();
+        setUserAchievements(json.achievements || []);
+        setAchievementsStats(json.stats || null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch user achievements:', err);
+    } finally {
+      setAchievementsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'achievements') {
+      fetchUserAchievements();
+    }
+  }, [activeTab, targetUsername]);
 
   const getCategoryIcon = (type: string) => {
     switch (type) {
@@ -213,6 +246,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   <h1 className="text-xl sm:text-2xl font-black text-[#F3F1F8] font-mono tracking-tight">
                     @{user.username}
                   </h1>
+                  <PresenceIndicator presence={presenceMap[user.id]} showText size="sm" />
                   {user.role === 'SUPER_ADMIN' && (
                     <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-bold border border-purple-500/30 font-mono">
                       FOUNDER
@@ -244,11 +278,39 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               ) : (
                 <>
                   <button
+                    onClick={() => {
+                      window.dispatchEvent(new CustomEvent('open_chat', { detail: { id: user.id, username: user.username, avatar: user.avatar } }));
+                    }}
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-lg shadow-purple-900/40 transition-all"
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    Сообщение
+                  </button>
+                  <button
                     onClick={() => setShowTasteCompare(true)}
                     className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-purple-600/15 hover:bg-purple-600/25 border border-purple-500/30 text-xs font-semibold text-[#AC82FF] transition-colors"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
                     Сравнить вкусы
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      window.dispatchEvent(
+                        new CustomEvent('open_chat', {
+                          detail: {
+                            id: user.id,
+                            username: user.username,
+                            avatar: user.avatar,
+                          },
+                        })
+                      );
+                    }}
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#252233] hover:bg-[#353147] border border-[#3A344E] text-xs font-semibold text-[#F3F1F8] transition-colors"
+                    title="Написать личное сообщение"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5 text-[#AC82FF]" />
+                    Сообщение
                   </button>
 
                   {friendStatus === 'FRIENDS' ? (
@@ -380,6 +442,18 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               >
                 <Layers className="w-3.5 h-3.5" />
                 Списки & Тир-листы ({lists.length + tierLists.length})
+              </button>
+
+              <button
+                onClick={() => setActiveTab('achievements')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                  activeTab === 'achievements'
+                    ? 'bg-[#9B6BFF] text-white shadow-md'
+                    : 'text-[#9A94AA] hover:text-[#F3F1F8] bg-[#14131A] border border-[#252233]'
+                }`}
+              >
+                <Trophy className="w-3.5 h-3.5" />
+                Достижения ({achievementsStats?.unlocked ?? '0'})
               </button>
             </div>
           </div>
@@ -606,6 +680,52 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                         <p className="text-xs text-[#9A94AA] line-clamp-2">{tl.description}</p>
                       )}
                     </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 4: ACHIEVEMENTS */}
+          {activeTab === 'achievements' && (
+            <div className="space-y-4">
+              {/* Stats Bar */}
+              {achievementsStats && (
+                <div className="p-4 rounded-2xl bg-[#14131A] border border-[#252233] flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/40 text-[#AC82FF] flex items-center justify-center">
+                      <Trophy className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#F3F1F8]">Достижения пользователя</h4>
+                      <p className="text-xs text-[#9A94AA]">
+                        Открыто {achievementsStats.unlocked} из {achievementsStats.total} ({achievementsStats.percentage}%)
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="px-3.5 py-1.5 rounded-xl bg-[#1C1A24] border border-[#2F2B42] text-xs font-mono">
+                      <span className="text-[#9A94AA] mr-1.5">Всего очков:</span>
+                      <span className="text-[#AC82FF] font-bold">+{achievementsStats.points} PTS</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {achievementsLoading ? (
+                <div className="py-16 flex flex-col items-center justify-center space-y-2 text-[#9A94AA]">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#AC82FF]" />
+                  <span className="text-xs">Загрузка достижений...</span>
+                </div>
+              ) : userAchievements.length === 0 ? (
+                <div className="py-12 text-center rounded-xl bg-[#14131A] border border-[#252233] p-4 text-xs text-[#9A94AA]">
+                  Пользователь пока не открыл ни одного достижения.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {userAchievements.map((ach) => (
+                    <AchievementBadge key={ach.id} {...ach} />
                   ))}
                 </div>
               )}

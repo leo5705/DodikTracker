@@ -74,23 +74,28 @@ export class TheGamesDBProvider implements MediaProvider {
     }
   }
 
-  async search(query: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
+  async search(
+    query: string,
+    credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
     const apiKey = credentials?.apiKey;
-    if (!apiKey || !query.trim()) return [];
+    if (!apiKey || !query.trim()) return { results: [], hasMore: false, page };
 
     await this.fetchGenres(apiKey);
 
     try {
-      const url = `${BASE_URL}/Games/ByGameName?name=${encodeURIComponent(query.trim())}&apikey=${encodeURIComponent(apiKey)}&fields=players,publishers,genres,overview,last_updated,rating,platform,coop,youtube,alternates&include=boxart,platform`;
+      const url = `${BASE_URL}/Games/ByGameName?name=${encodeURIComponent(query.trim())}&apikey=${encodeURIComponent(apiKey)}&fields=players,publishers,genres,overview,last_updated,rating,platform,coop,youtube,alternates&include=boxart,platform&page=${page}`;
       const res = await fetch(url);
       if (!res.ok) {
         console.error(`TheGamesDB search HTTP ${res.status}`);
-        return [];
+        return { results: [], hasMore: false, page };
       }
 
       const json = await res.json();
       const games = json?.data?.games;
-      if (!Array.isArray(games) || games.length === 0) return [];
+      if (!Array.isArray(games) || games.length === 0) return { results: [], hasMore: false, page };
 
       const boxartData = json?.include?.boxart?.data || {};
       const boxartBase = json?.include?.boxart?.base_url?.medium ||
@@ -105,8 +110,10 @@ export class TheGamesDBProvider implements MediaProvider {
       }
 
       const results: MediaSearchResult[] = [];
+      const startIndex = Math.max((page - 1) * limit, 0);
+      const pagedGames = games.length > limit ? games.slice(startIndex, startIndex + limit) : games;
 
-      for (const game of games.slice(0, 15)) {
+      for (const game of pagedGames) {
         const gameIdStr = String(game.id);
         const gameBoxarts = boxartData[gameIdStr] || [];
         const frontBoxart = gameBoxarts.find((b: any) => b.side === 'front') || gameBoxarts[0];
@@ -156,10 +163,11 @@ export class TheGamesDBProvider implements MediaProvider {
         });
       }
 
-      return results;
+      const hasMore = games.length > limit ? (startIndex + pagedGames.length) < games.length : games.length >= limit;
+      return { results, hasMore, page, total: games.length };
     } catch (err) {
       console.error('TheGamesDB search error:', err);
-      return [];
+      return { results: [], hasMore: false, page };
     }
   }
 
@@ -356,7 +364,12 @@ export class TheGamesDBProvider implements MediaProvider {
     }
   }
 
-  async getTrending(_type?: string, credentials?: Record<string, any>): Promise<MediaSearchResult[]> {
-    return this.search('Witcher', credentials);
+  async getTrending(
+    _type?: string,
+    credentials?: Record<string, any>,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
+    return this.search('Final Fantasy', credentials, page, limit);
   }
 }

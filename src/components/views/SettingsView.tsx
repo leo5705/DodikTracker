@@ -1,6 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { User, Shield, Bell, Send, Check, Loader2, Sparkles, Info } from 'lucide-react';
+import {
+  User,
+  Shield,
+  Bell,
+  Send,
+  Check,
+  Loader2,
+  Sparkles,
+  Info,
+  Volume2,
+  VolumeX,
+  Smartphone,
+  Monitor,
+  Radio,
+  Sliders,
+} from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { useNotifications } from '../../context/NotificationContext.tsx';
+import {
+  NOTIFICATION_TYPE_DEFINITIONS,
+  NotificationPreferences,
+  getDefaultNotificationPreferences,
+  normalizeNotificationPreferences,
+} from '../../types/notification.ts';
 
 interface SettingsViewProps {
   onNavigateProfile: () => void;
@@ -24,8 +46,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
   const [statisticsVisibility, setStatisticsVisibility] = useState('PUBLIC');
 
   // Telegram & Notifications state
+  const { soundEnabled, setSoundEnabled, triggerTestToast } = useNotifications();
   const [telegramChatId, setTelegramChatId] = useState('');
   const [notificationSettings, setNotificationSettings] = useState<Record<string, boolean>>({ friendRequests: true, friendReviews: true, likes: true, comments: true, newReleases: true, lists: true });
+  const [notifPreferences, setNotifPreferences] = useState<NotificationPreferences>(getDefaultNotificationPreferences);
+  const [globalChannels, setGlobalChannels] = useState<{ inApp: boolean; toast: boolean; telegram: boolean }>({
+    inApp: true,
+    toast: true,
+    telegram: true,
+  });
+  const [notifCategoryFilter, setNotifCategoryFilter] = useState<'all' | 'social' | 'content' | 'achievements' | 'system'>('all');
   
   const [testingTelegram, setTestingTelegram] = useState(false);
   const [telegramTestSuccess, setTelegramTestSuccess] = useState<string | null>(null);
@@ -52,8 +82,66 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
       if (dbUser.notificationSettings) {
         setNotificationSettings(dbUser.notificationSettings);
       }
+      // Load unified notification preferences
+      authFetch('/api/notifications/settings')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data) {
+            const rawPrefs = data.preferences || data.settings;
+            if (rawPrefs) setNotifPreferences(normalizeNotificationPreferences(rawPrefs));
+            if (data.channels) setGlobalChannels(data.channels);
+          }
+        })
+        .catch(() => {});
     }
   }, [dbUser]);
+
+  const handleSaveNotificationPreferences = async () => {
+    setSaving(true);
+    setErrorMessage(null);
+    setSaveSuccess(false);
+    try {
+      const res = await authFetch('/api/notifications/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preferences: notifPreferences,
+          settings: notifPreferences,
+          channels: globalChannels,
+        }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Не удалось сохранить настройки уведомлений');
+      }
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Ошибка при сохранении настроек');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleTypeChannel = (type: string, channel: 'inApp' | 'toast' | 'telegram') => {
+    setNotifPreferences((prev) => {
+      const current = prev[type] || { inApp: true, toast: true, telegram: true };
+      return {
+        ...prev,
+        [type]: {
+          ...current,
+          [channel]: !current[channel],
+        },
+      };
+    });
+  };
+
+  const toggleGlobalChannel = (channel: 'inApp' | 'toast' | 'telegram') => {
+    setGlobalChannels((prev) => ({
+      ...prev,
+      [channel]: !prev[channel],
+    }));
+  };
 
   const handleSaveSettings = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -286,46 +374,257 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
       {activeTab === 'notifications' && (
         <div className="space-y-6">
-          {/* Notification Settings Card */}
+          {/* 1. Global Master Channels Card */}
           <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-5">
-            <div className="flex items-center gap-2 pb-2 border-b border-[#252233]">
-              <Bell className="w-4 h-4 text-[#9B6BFF]" />
-              <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono">
-                Настройки уведомлений
-              </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#252233]">
+              <div className="flex items-center gap-2">
+                <Radio className="w-4 h-4 text-[#9B6BFF]" />
+                <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono">
+                  Глобальные каналы доставки
+                </h3>
+              </div>
+              <span className="text-xs text-[#7A748E]">
+                Включение или отключение каналов для всех уведомлений
+              </span>
             </div>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {[
-                { id: 'friendRequests', label: 'Новые заявки в друзья' },
-                { id: 'friendReviews', label: 'Отзывы друзей' },
-                { id: 'likes', label: 'Лайки к вашим записям' },
-                { id: 'comments', label: 'Комментарии и ответы' },
-                { id: 'newReleases', label: 'Новые релизы' },
-                { id: 'lists', label: 'Изменения в списках' },
-              ].map((setting) => (
-                <label key={setting.id} className="flex items-center justify-between p-3 rounded-xl bg-[#191724]/60 border border-[#252233] cursor-pointer hover:border-[#3A344E] transition-colors">
-                  <span className="text-xs text-[#F3F1F8] font-medium">{setting.label}</span>
-                  <div className="relative inline-flex items-center h-5 rounded-full w-9">
-                    <input
-                      type="checkbox"
-                      className="peer sr-only"
-                      checked={notificationSettings[setting.id] ?? true}
-                      onChange={(e) => setNotificationSettings({ ...notificationSettings, [setting.id]: e.target.checked })}
-                    />
-                    <div className="w-9 h-5 bg-[#252233] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#9B6BFF]"></div>
-                  </div>
-                </label>
-              ))}
-            </div>
-            
-            <div className="pt-4">
-              <button
-                onClick={() => handleSaveSettings()}
-                disabled={saving}
-                className="w-full py-2.5 rounded-xl bg-[#F3F1F8] hover:bg-white text-[#0F0E12] font-bold text-sm shadow-[0_0_20px_rgba(243,241,248,0.15)] transition-all disabled:opacity-50"
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* In-App Channel */}
+              <div
+                onClick={() => toggleGlobalChannel('inApp')}
+                className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                  globalChannels.inApp
+                    ? 'bg-[#191724] border-[#9B6BFF]/40 text-white shadow-md shadow-purple-950/20'
+                    : 'bg-[#14131A] border-[#252233] text-[#656075]'
+                }`}
               >
-                {saving ? 'Сохранение...' : 'Применить настройки'}
+                <div className="flex items-center gap-3">
+                  <div className={`p-2.5 rounded-xl border ${globalChannels.inApp ? 'bg-purple-500/20 text-[#AC82FF] border-purple-500/30' : 'bg-[#191724] text-[#656075] border-[#252233]'}`}>
+                    <Bell className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold">In-App (Сайт)</h4>
+                    <p className="text-[11px] text-[#7A748E]">Колокольчик и списки</p>
+                  </div>
+                </div>
+                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.inApp ? 'bg-[#9B6BFF] border-[#9B6BFF] text-white' : 'border-[#3A344E]'}`}>
+                  {globalChannels.inApp && <Check className="w-3 h-3 stroke-[3]" />}
+                </div>
+              </div>
+
+              {/* Toast Channel */}
+              <div
+                onClick={() => toggleGlobalChannel('toast')}
+                className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                  globalChannels.toast
+                    ? 'bg-[#191724] border-sky-500/40 text-white shadow-md shadow-sky-950/20'
+                    : 'bg-[#14131A] border-[#252233] text-[#656075]'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`p-2.5 rounded-xl border ${globalChannels.toast ? 'bg-sky-500/20 text-sky-300 border-sky-500/30' : 'bg-[#191724] text-[#656075] border-[#252233]'}`}>
+                    <Monitor className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold">Toast (Всплывающие)</h4>
+                    <p className="text-[11px] text-[#7A748E]">Окно в углу экрана</p>
+                  </div>
+                </div>
+                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.toast ? 'bg-sky-500 border-sky-500 text-white' : 'border-[#3A344E]'}`}>
+                  {globalChannels.toast && <Check className="w-3 h-3 stroke-[3]" />}
+                </div>
+              </div>
+
+              {/* Telegram Channel */}
+              <div
+                onClick={() => toggleGlobalChannel('telegram')}
+                className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                  globalChannels.telegram
+                    ? 'bg-[#191724] border-emerald-500/40 text-white shadow-md shadow-emerald-950/20'
+                    : 'bg-[#14131A] border-[#252233] text-[#656075]'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`p-2.5 rounded-xl border ${globalChannels.telegram ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-[#191724] text-[#656075] border-[#252233]'}`}>
+                    <Smartphone className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold">Telegram Бот</h4>
+                    <p className="text-[11px] text-[#7A748E]">Мгновенно в мессенджер</p>
+                  </div>
+                </div>
+                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.telegram ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-[#3A344E]'}`}>
+                  {globalChannels.telegram && <Check className="w-3 h-3 stroke-[3]" />}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick sound & Live test options */}
+            <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#252233]">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSoundEnabled(!soundEnabled)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-all ${
+                    soundEnabled
+                      ? 'bg-[#191724] border-[#9B6BFF]/40 text-[#AC82FF]'
+                      : 'bg-[#14131A] border-[#252233] text-[#7A748E]'
+                  }`}
+                >
+                  {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                  <span>{soundEnabled ? 'Звук уведомлений включен' : 'Звук отключен'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={triggerTestToast}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#191724] hover:bg-[#252233] border border-[#2E2A40] text-xs font-semibold text-[#D5D0E3] hover:text-white transition-colors"
+                >
+                  <Sparkles className="w-3 h-3 text-amber-400" />
+                  <span>Проверить Toast</span>
+                </button>
+              </div>
+
+              <span className="text-[11px] text-[#7A748E]">
+                Для Telegram требуется привязка аккаунта ниже
+              </span>
+            </div>
+          </div>
+
+          {/* 2. Granular Notification Types Matrix */}
+          <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#252233]">
+              <div className="flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-[#9B6BFF]" />
+                <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono">
+                  Типы уведомлений
+                </h3>
+              </div>
+
+              {/* Category Filter Tabs */}
+              <div className="flex flex-wrap items-center gap-1">
+                {[
+                  { id: 'all', label: 'Все' },
+                  { id: 'social', label: 'Социальные' },
+                  { id: 'content', label: 'Контент и релизы' },
+                  { id: 'achievements', label: 'Достижения' },
+                  { id: 'system', label: 'Системные' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setNotifCategoryFilter(tab.id as any)}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                      notifCategoryFilter === tab.id
+                        ? 'bg-[#9B6BFF] text-white'
+                        : 'bg-[#191724] text-[#7A748E] hover:text-[#F3F1F8]'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Table / List Header */}
+            <div className="hidden sm:grid sm:grid-cols-12 gap-3 text-[11px] font-mono font-semibold text-[#656075] uppercase px-3">
+              <div className="sm:col-span-6">Событие / Описание</div>
+              <div className="sm:col-span-2 text-center">In-App</div>
+              <div className="sm:col-span-2 text-center">Toast</div>
+              <div className="sm:col-span-2 text-center">Telegram</div>
+            </div>
+
+            {/* Rows */}
+            <div className="space-y-2">
+              {NOTIFICATION_TYPE_DEFINITIONS.filter(
+                (def) => notifCategoryFilter === 'all' || def.category === notifCategoryFilter
+              ).map((def) => {
+                const prefs = notifPreferences[def.type] || def.defaultSettings;
+
+                return (
+                  <div
+                    key={def.type}
+                    className="p-3.5 rounded-xl bg-[#191724]/60 border border-[#252233] hover:border-[#3A344E] transition-colors flex flex-col sm:grid sm:grid-cols-12 gap-3 sm:items-center"
+                  >
+                    <div className="sm:col-span-6 space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-[#F3F1F8]">{def.label}</span>
+                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-[#252233] text-[#7A748E]">
+                          {def.category}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#7A748E] leading-relaxed">
+                        {def.description}
+                      </p>
+                    </div>
+
+                    {/* In-App Toggle */}
+                    <div className="sm:col-span-2 flex sm:justify-center items-center justify-between pt-1 sm:pt-0 border-t sm:border-t-0 border-[#252233]">
+                      <span className="sm:hidden text-xs text-[#9A94AA]">In-App</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleTypeChannel(def.type, 'inApp')}
+                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors ${
+                          prefs.inApp ? 'bg-[#9B6BFF]' : 'bg-[#252233]'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            prefs.inApp ? 'translate-x-4' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Toast Toggle */}
+                    <div className="sm:col-span-2 flex sm:justify-center items-center justify-between pt-1 sm:pt-0">
+                      <span className="sm:hidden text-xs text-[#9A94AA]">Toast (Пуш)</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleTypeChannel(def.type, 'toast')}
+                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors ${
+                          prefs.toast ? 'bg-sky-500' : 'bg-[#252233]'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            prefs.toast ? 'translate-x-4' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Telegram Toggle */}
+                    <div className="sm:col-span-2 flex sm:justify-center items-center justify-between pt-1 sm:pt-0">
+                      <span className="sm:hidden text-xs text-[#9A94AA]">Telegram</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleTypeChannel(def.type, 'telegram')}
+                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors ${
+                          prefs.telegram ? 'bg-emerald-500' : 'bg-[#252233]'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            prefs.telegram ? 'translate-x-4' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="pt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={handleSaveNotificationPreferences}
+                disabled={saving}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#F3F1F8] hover:bg-white text-[#0F0E12] font-bold text-sm shadow-[0_0_20px_rgba(243,241,248,0.15)] transition-all disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                <span>{saving ? 'Сохранение...' : 'Сохранить настройки уведомлений'}</span>
               </button>
             </div>
           </div>
