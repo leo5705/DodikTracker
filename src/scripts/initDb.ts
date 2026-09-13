@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { pool } from '../db/index.ts';
 import { runAutoMigrations } from '../db/autoInit.ts';
 
