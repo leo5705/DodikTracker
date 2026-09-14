@@ -28,6 +28,7 @@ export interface NotificationItem {
   senderAvatar?: string | null;
   senderUsername?: string | null;
   metadataJson?: string | null;
+  metadata?: Record<string, any> | null;
   isRead: boolean;
   readAt?: string | null;
   createdAt: string;

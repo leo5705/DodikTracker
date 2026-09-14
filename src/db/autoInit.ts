@@ -417,6 +417,93 @@ export async function runAutoMigrations(pool: Pool) {
           "metadata" text,
           "created_at" timestamp DEFAULT now()
         );
+
+        -- 32. Release Subscriptions Table
+        CREATE TABLE IF NOT EXISTS "release_subscriptions" (
+          "id" serial PRIMARY KEY,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "media_id" integer NOT NULL REFERENCES "media"("id") ON DELETE CASCADE,
+          "notified" boolean DEFAULT false,
+          "created_at" timestamp DEFAULT now(),
+          CONSTRAINT "uq_user_media_release_sub" UNIQUE ("user_id", "media_id")
+        );
+        CREATE INDEX IF NOT EXISTS "idx_release_sub_user" ON "release_subscriptions"("user_id");
+        CREATE INDEX IF NOT EXISTS "idx_release_sub_media" ON "release_subscriptions"("media_id");
+
+        -- 33. Reports (Moderation Queue) Table
+        CREATE TABLE IF NOT EXISTS "reports" (
+          "id" serial PRIMARY KEY,
+          "reporter_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
+          "target_type" text NOT NULL,
+          "target_id" text NOT NULL,
+          "target_user_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
+          "reason" text NOT NULL,
+          "description" text,
+          "status" text NOT NULL DEFAULT 'PENDING',
+          "moderator_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
+          "moderator_comment" text,
+          "action_taken" text DEFAULT 'NONE',
+          "resolved_at" timestamp,
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "reports_status_idx" ON "reports"("status");
+        CREATE INDEX IF NOT EXISTS "reports_target_type_idx" ON "reports"("target_type");
+        CREATE INDEX IF NOT EXISTS "reports_target_user_id_idx" ON "reports"("target_user_id");
+        CREATE INDEX IF NOT EXISTS "reports_created_at_idx" ON "reports"("created_at");
+
+        -- 34. News (CMS) Table
+        CREATE TABLE IF NOT EXISTS "news" (
+          "id" serial PRIMARY KEY,
+          "slug" text NOT NULL UNIQUE,
+          "title" text NOT NULL,
+          "excerpt" text,
+          "content" text NOT NULL,
+          "cover" text,
+          "author_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
+          "tags" text NOT NULL DEFAULT '[]',
+          "status" text NOT NULL DEFAULT 'DRAFT',
+          "is_pinned" boolean NOT NULL DEFAULT false,
+          "is_featured" boolean NOT NULL DEFAULT false,
+          "published_at" timestamp,
+          "scheduled_at" timestamp,
+          "views_count" integer NOT NULL DEFAULT 0,
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "news_slug_idx" ON "news"("slug");
+        CREATE INDEX IF NOT EXISTS "news_status_idx" ON "news"("status");
+        CREATE INDEX IF NOT EXISTS "news_published_at_idx" ON "news"("published_at");
+
+        -- 35. Announcements Table
+        CREATE TABLE IF NOT EXISTS "announcements" (
+          "id" serial PRIMARY KEY,
+          "title" text NOT NULL,
+          "message" text NOT NULL,
+          "severity" text NOT NULL DEFAULT 'INFO',
+          "target_audience" text NOT NULL DEFAULT 'ALL',
+          "is_active" boolean NOT NULL DEFAULT true,
+          "start_at" timestamp DEFAULT now(),
+          "end_at" timestamp,
+          "show_banner" boolean NOT NULL DEFAULT true,
+          "send_telegram" boolean NOT NULL DEFAULT false,
+          "created_by" integer REFERENCES "users"("id") ON DELETE SET NULL,
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "announcements_is_active_idx" ON "announcements"("is_active");
+        CREATE INDEX IF NOT EXISTS "announcements_severity_idx" ON "announcements"("severity");
+
+        -- 36. Add Missing Columns to existing tables (Idempotent)
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "banned_until" timestamp;
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ban_reason" text;
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "warning_count" integer NOT NULL DEFAULT 0;
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_warning_reason" text;
+        ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "comments" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "tier_lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "reviews" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
       `);
       console.log('[AutoInit] Database tables and indexes verified successfully.');
     } finally {

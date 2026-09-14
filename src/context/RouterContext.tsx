@@ -174,8 +174,17 @@ export function parseRoute(rawPathname: string): RouteMatch {
     };
   }
 
-  // 4. User Profile: /u/:username or /profile/:username
-  const userProfileMatch = cleanPath.match(/^\/(?:u|profile)\/([a-zA-Z0-9_-]+)$/);
+  // 4. User Profile & User Tier Lists: /u/:username, /users/:username, /profile/:username, /users/:username/tier-lists
+  const userTierListsMatch = cleanPath.match(/^\/(?:u|profile|users)\/([a-zA-Z0-9_-]+)\/tier-lists$/);
+  if (userTierListsMatch) {
+    return {
+      name: 'profile',
+      params: { ...queryParams, username: userTierListsMatch[1], tab: 'lists' },
+      pathname: cleanPath,
+    };
+  }
+
+  const userProfileMatch = cleanPath.match(/^\/(?:u|profile|users)\/([a-zA-Z0-9_-]+)$/);
   if (userProfileMatch) {
     return {
       name: 'profile',

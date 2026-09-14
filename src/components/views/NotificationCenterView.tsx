@@ -87,6 +87,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
 
   const [activeFilter, setActiveFilter] = useState<FilterCategory>('ALL');
   const [processingFriendId, setProcessingFriendId] = useState<number | null>(null);
+  const [processingInviteId, setProcessingInviteId] = useState<number | null>(null);
   const [quickReplyTo, setQuickReplyTo] = useState<AppNotification | null>(null);
   const [replyText, setReplyText] = useState('');
   const [sendingReply, setSendingReply] = useState(false);
@@ -104,6 +105,9 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
         return [
           'FRIEND_REQUEST',
           'FRIEND_ACCEPTED',
+          'LIST_INVITE',
+          'LIST_INVITE_ACCEPTED',
+          'LIST_INVITE_DECLINED',
           'NEW_MESSAGE',
           'FRIEND_REVIEW',
           'FRIEND_ACTIVITY',
@@ -173,6 +177,41 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
     }
   };
 
+  // Quick accept/decline list invitation
+  const handleListInviteAction = async (notif: AppNotification, action: 'ACCEPT' | 'DECLINE', e: React.MouseEvent) => {
+    e.stopPropagation();
+    setProcessingInviteId(notif.id);
+    try {
+      let invId = notif.metadata?.invitationId;
+      if (!invId && notif.metadataJson) {
+        try {
+          const parsed = JSON.parse(notif.metadataJson);
+          invId = parsed.invitationId;
+        } catch (_e) {}
+      }
+      const listId = notif.relatedEntityId || notif.metadata?.listId;
+
+      if (invId) {
+        const endpoint = action === 'ACCEPT' ? `/api/list-invitations/${invId}/accept` : `/api/list-invitations/${invId}/decline`;
+        await authFetch(endpoint, { method: 'POST' });
+      } else if (listId) {
+        const endpoint = action === 'ACCEPT' ? `/api/lists/${listId}/invitations/accept` : `/api/lists/${listId}/invitations/decline`;
+        await authFetch(endpoint, { method: 'POST' });
+      }
+
+      await markAsRead(notif.id);
+      await fetchNotifications();
+
+      if (action === 'ACCEPT' && listId && onNavigate) {
+        onNavigate(`/lists/${listId}`);
+      }
+    } catch (err) {
+      console.error('Failed to respond to list invitation:', err);
+    } finally {
+      setProcessingInviteId(null);
+    }
+  };
+
   // Quick send reply to a direct message notification
   const handleSendReply = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -211,9 +250,17 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
       id: 'SOCIAL',
       label: 'Социальные',
       count: notifications.filter((n) =>
-        ['FRIEND_REQUEST', 'FRIEND_ACCEPTED', 'NEW_MESSAGE', 'FRIEND_REVIEW', 'FRIEND_ACTIVITY', 'MENTION'].includes(
-          n.type
-        )
+        [
+          'FRIEND_REQUEST',
+          'FRIEND_ACCEPTED',
+          'LIST_INVITE',
+          'LIST_INVITE_ACCEPTED',
+          'LIST_INVITE_DECLINED',
+          'NEW_MESSAGE',
+          'FRIEND_REVIEW',
+          'FRIEND_ACTIVITY',
+          'MENTION',
+        ].includes(n.type)
       ).length,
     },
     {
@@ -451,6 +498,34 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             type="button"
                             disabled={processingFriendId === notif.id}
                             onClick={(e) => handleFriendAction(notif, 'DECLINE', e)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#252233] hover:bg-red-500/20 hover:text-red-300 text-[#9A94AA] text-xs font-semibold transition-colors disabled:opacity-50"
+                          >
+                            <UserX className="w-3.5 h-3.5" />
+                            Отклонить
+                          </button>
+                        </div>
+                      )}
+
+                      {/* List Invite Actions */}
+                      {notif.type === 'LIST_INVITE' && !notif.isRead && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <button
+                            type="button"
+                            disabled={processingInviteId === notif.id}
+                            onClick={(e) => handleListInviteAction(notif, 'ACCEPT', e)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold shadow transition-colors disabled:opacity-50"
+                          >
+                            {processingInviteId === notif.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <UserCheck className="w-3.5 h-3.5" />
+                            )}
+                            Принять приглашение
+                          </button>
+                          <button
+                            type="button"
+                            disabled={processingInviteId === notif.id}
+                            onClick={(e) => handleListInviteAction(notif, 'DECLINE', e)}
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#252233] hover:bg-red-500/20 hover:text-red-300 text-[#9A94AA] text-xs font-semibold transition-colors disabled:opacity-50"
                           >
                             <UserX className="w-3.5 h-3.5" />

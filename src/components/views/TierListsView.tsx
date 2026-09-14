@@ -48,9 +48,7 @@ export const TierListsView: React.FC = () => {
     setLoading(true);
     try {
       let endpoint = '/api/tier-lists';
-      if (selectedTab === 'MY') {
-        endpoint = '/api/tier-lists/my';
-      } else if (selectedTab !== 'ALL') {
+      if (selectedTab !== 'ALL') {
         endpoint = `/api/tier-lists?category=${encodeURIComponent(selectedTab)}`;
       }
 
@@ -148,10 +146,10 @@ export const TierListsView: React.FC = () => {
             <div className="w-10 h-10 rounded-2xl bg-fuchsia-950/60 border border-fuchsia-800/40 flex items-center justify-center text-fuchsia-400">
               <Layers className="w-5 h-5" />
             </div>
-            TIER LISTS
+            МОИ ТИР-ЛИСТЫ
           </h1>
           <p className="text-xs sm:text-sm text-[#9A94AA] mt-1">
-            Ранжируйте любимые тайтлы по категориям от S-ранга до D-ранга
+            Ваши персональные тир-листы и ранжирование тайтлов по категориям
           </p>
         </div>
 
@@ -174,21 +172,8 @@ export const TierListsView: React.FC = () => {
               : 'bg-[#14131A] text-[#9A94AA] hover:text-[#F3F1F8] border border-[#252233]'
           }`}
         >
-          Все тир-листы
+          Все категории
         </button>
-
-        {dbUser && (
-          <button
-            onClick={() => setSelectedTab('MY')}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold font-mono whitespace-nowrap transition-all ${
-              selectedTab === 'MY'
-                ? 'bg-fuchsia-600 text-white shadow-md shadow-fuchsia-950/30'
-                : 'bg-[#14131A] text-[#9A94AA] hover:text-[#F3F1F8] border border-[#252233]'
-            }`}
-          >
-            👤 Мои тир-листы
-          </button>
-        )}
 
         {TIER_CATEGORIES.map((cat) => {
           const Icon = cat.icon;

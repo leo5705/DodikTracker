@@ -495,6 +495,25 @@ class NotificationService {
       relatedEntity: 'MEDIA',
     });
   }
+
+  public async sendTelegramNotification(text: string, targetChatId?: string) {
+    try {
+      if (targetChatId) {
+        await telegramBot.sendMessage(targetChatId, text);
+        return;
+      }
+      const tgUsers = await db.select({ chatId: users.telegramChatId }).from(users).where(sql`${users.telegramChatId} IS NOT NULL`);
+      for (const u of tgUsers) {
+        if (u.chatId) {
+          try {
+            await telegramBot.sendMessage(u.chatId, text);
+          } catch (_e) {}
+        }
+      }
+    } catch (err) {
+      console.error('[NotificationService] sendTelegramNotification error:', err);
+    }
+  }
 }
 
 export const notificationService = new NotificationService();

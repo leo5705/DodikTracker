@@ -87,15 +87,10 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
   const [deleting, setDeleting] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  // Pointer Event Drag and Drop State
-  const dragContext = useRef<{
-    itemId: number | null;
-    element: HTMLElement | null;
-    clone: HTMLElement | null;
-    startX: number;
-    startY: number;
-    dropZone: string | null;
-  } | null>(null);
+  // Drag and Drop State
+  const [draggedItemId, setDraggedItemId] = useState<number | null>(null);
+  const [dragOverZone, setDragOverZone] = useState<string | null>(null);
+  const [activeColorPickerTierId, setActiveColorPickerTierId] = useState<string | null>(null);
 
   const fetchTierList = async () => {
     setLoading(true);
@@ -176,7 +171,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
     }
   }, [tierListId]);
 
-  const isOwner = dbUser && (dbUser.id === tierList?.ownerId || dbUser.role === 'ADMIN');
+  const isOwner = dbUser && (dbUser.id === tierList?.ownerId || dbUser.role === 'ADMIN' || dbUser.role === 'SUPER_ADMIN');
 
   // Save changes to backend
   const handleSaveChanges = async () => {
@@ -263,142 +258,45 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
     setItems((prev) => prev.filter((it) => it.id !== itemId));
   };
 
-  // Pointer Event Drag and Drop handlers
-  const handlePointerDown = (e: React.PointerEvent, itemId: number) => {
+  // Native HTML5 Drag and Drop handlers
+  const handleDragStart = (e: React.DragEvent, itemId: number) => {
     if (!isEditMode) return;
-    
-    // Do not initiate drag if clicking on a button or its children
-    if ((e.target as HTMLElement).closest('button')) {
-      return;
-    }
-    
-    // Prevent default to stop native drag and text selection
+    setDraggedItemId(itemId);
+    e.dataTransfer.setData('text/plain', String(itemId));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, tierId: string) => {
+    if (!isEditMode) return;
     e.preventDefault();
-    const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
-
-    const rect = target.getBoundingClientRect();
-
-    // Create visual clone
-    const clone = target.cloneNode(true) as HTMLElement;
-    clone.id = `drag-clone-${itemId}`;
-    clone.style.position = 'fixed';
-    clone.style.top = `${rect.top}px`;
-    clone.style.left = `${rect.left}px`;
-    clone.style.width = `${rect.width}px`;
-    clone.style.height = `${rect.height}px`;
-    clone.style.zIndex = '9999';
-    clone.style.pointerEvents = 'none'; // so it doesn't block pointermove
-    clone.style.opacity = '0.9';
-    clone.style.boxShadow = '0 10px 25px rgba(217,70,239,0.4)';
-    clone.style.transform = 'scale(1.05)';
-    clone.style.transition = 'none';
-    clone.style.margin = '0';
-    clone.classList.add('ring-2', 'ring-fuchsia-400');
-    
-    // Hide quick-action buttons on clone
-    const actions = clone.querySelector('.group-hover\\:flex') as HTMLElement;
-    if (actions) actions.style.display = 'none';
-
-    document.body.appendChild(clone);
-
-    // Hide original visually but keep it in flow
-    target.style.opacity = '0.3';
-    target.style.transform = 'scale(0.95)';
-
-    dragContext.current = {
-      itemId,
-      element: target,
-      clone,
-      startX: e.clientX,
-      startY: e.clientY,
-      dropZone: null,
-    };
-  };
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!dragContext.current || !isEditMode) return;
-    
-    const ctx = dragContext.current;
-    const deltaX = e.clientX - ctx.startX;
-    const deltaY = e.clientY - ctx.startY;
-    
-    // Move clone
-    if (ctx.clone) {
-      ctx.clone.style.transform = `translate(${deltaX}px, ${deltaY}px) scale(1.05)`;
-    }
-
-    // Find overlapping zone dynamically to support scrolling while dragging
-    let overZone = null;
-    const dropzoneEls = Array.from(document.querySelectorAll('.tier-dropzone'));
-    for (const el of dropzoneEls) {
-      const rect = el.getBoundingClientRect();
-      if (
-        e.clientX >= rect.left && e.clientX <= rect.right &&
-        e.clientY >= rect.top && e.clientY <= rect.bottom
-      ) {
-        overZone = el.id.replace('dropzone-', '');
-        break;
-      }
-    }
-
-    if (ctx.dropZone !== overZone) {
-      // Clear old visual
-      if (ctx.dropZone) {
-        const oldZone = document.getElementById(`dropzone-${ctx.dropZone}`);
-        if (oldZone) {
-          oldZone.classList.remove('bg-fuchsia-950/40', 'ring-1', 'ring-inset', 'ring-fuchsia-500/50', 'border-fuchsia-500/60');
-        }
-      }
-      
-      ctx.dropZone = overZone;
-      
-      // Highlight new visual
-      if (ctx.dropZone) {
-        const newZone = document.getElementById(`dropzone-${ctx.dropZone}`);
-        if (newZone) {
-          if (ctx.dropZone === 'unranked') {
-            newZone.classList.add('bg-fuchsia-950/40', 'ring-1', 'ring-inset', 'border-fuchsia-500/60', 'ring-fuchsia-500/50');
-          } else {
-            newZone.classList.add('bg-fuchsia-950/40', 'ring-1', 'ring-inset', 'ring-fuchsia-500/50');
-          }
-        }
-      }
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverZone !== tierId) {
+      setDragOverZone(tierId);
     }
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (!dragContext.current || !isEditMode) return;
-    
-    const ctx = dragContext.current;
-    const target = e.currentTarget as HTMLElement;
-    target.releasePointerCapture(e.pointerId);
-
-    // Cleanup clone
-    if (ctx.clone) {
-      ctx.clone.remove();
+  const handleDragLeave = (e: React.DragEvent, tierId: string) => {
+    if (!isEditMode) return;
+    if (dragOverZone === tierId) {
+      setDragOverZone(null);
     }
+  };
 
-    // Restore original
-    if (ctx.element) {
-      ctx.element.style.opacity = '';
-      ctx.element.style.transform = '';
+  const handleDrop = (e: React.DragEvent, targetTierId: string) => {
+    if (!isEditMode) return;
+    e.preventDefault();
+    setDragOverZone(null);
+    const idStr = e.dataTransfer.getData('text/plain');
+    const targetId = idStr ? parseInt(idStr, 10) : draggedItemId;
+    if (targetId) {
+      handleMoveItem(targetId, targetTierId);
     }
+    setDraggedItemId(null);
+  };
 
-    // Cleanup dropzone visual
-    if (ctx.dropZone) {
-      const dropzoneEl = document.getElementById(`dropzone-${ctx.dropZone}`);
-      if (dropzoneEl) {
-        dropzoneEl.classList.remove('bg-fuchsia-950/40', 'ring-1', 'ring-inset', 'ring-fuchsia-500/50', 'border-fuchsia-500/60');
-      }
-    }
-
-    // Apply move if dropped on a valid zone
-    if (ctx.dropZone && ctx.itemId) {
-      handleMoveItem(ctx.itemId, ctx.dropZone);
-    }
-
-    dragContext.current = null;
+  const handleDragEnd = () => {
+    setDraggedItemId(null);
+    setDragOverZone(null);
   };
 
   // Tier operations
@@ -412,6 +310,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
     setTiers((prev) =>
       prev.map((t) => (t.id === tierId ? { ...t, color: newColor } : t))
     );
+    setActiveColorPickerTierId(null);
   };
 
   const handleAddTier = () => {
@@ -714,64 +613,115 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
         <div className="rounded-3xl bg-[#14131A] border border-[#252233] overflow-hidden shadow-2xl divide-y divide-[#252233]">
           {tiers.map((tier, tIdx) => {
             const tierItems = items.filter((it) => it.tierId === tier.id);
+            const isDragOver = dragOverZone === tier.id;
 
             return (
               <div
                 key={tier.id}
                 id={`dropzone-${tier.id}`}
-                className={`tier-dropzone flex flex-col sm:flex-row min-h-[105px] transition-colors duration-150 bg-[#14131A] hover:bg-[#16141F]`}
+                onDragOver={(e) => handleDragOver(e, tier.id)}
+                onDragLeave={(e) => handleDragLeave(e, tier.id)}
+                onDrop={(e) => handleDrop(e, tier.id)}
+                className={`tier-dropzone flex flex-col sm:flex-row min-h-[115px] transition-all duration-150 ${
+                  isDragOver
+                    ? 'bg-fuchsia-950/40 ring-2 ring-inset ring-fuchsia-500/60'
+                    : 'bg-[#14131A] hover:bg-[#171522]'
+                }`}
               >
-                {/* Tier Rank Label / Badge */}
+                {/* Tier Rank Header Column */}
                 <div
-                  className={`w-full sm:w-28 shrink-0 p-3 flex sm:flex-col items-center justify-between sm:justify-center font-black text-2xl select-none uppercase tracking-wider shadow-inner ${tier.color}`}
+                  className={`w-full sm:w-36 md:w-44 shrink-0 p-4 flex sm:flex-col items-center justify-between sm:justify-center text-center shadow-inner relative select-none ${tier.color}`}
                 >
                   {isEditMode ? (
-                    <div className="flex sm:flex-col items-center gap-2 w-full">
+                    <div className="flex sm:flex-col items-center justify-center gap-2 w-full">
                       <input
                         type="text"
                         value={tier.label}
                         onChange={(e) => handleUpdateTierLabel(tier.id, e.target.value)}
-                        className="w-16 sm:w-full text-center font-black font-mono text-xl bg-black/30 text-white rounded-lg px-1 py-0.5 border border-white/20 focus:outline-none focus:border-white"
+                        className="w-20 sm:w-full text-center font-black font-mono text-xl sm:text-2xl bg-black/35 text-white rounded-xl px-2 py-1 border border-white/20 focus:outline-none focus:border-white shadow-inner"
                       />
-                      <div className="flex items-center gap-1">
+
+                      <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                        {/* Color preset toggle */}
+                        <div className="relative">
+                          <button
+                            onClick={() =>
+                              setActiveColorPickerTierId(
+                                activeColorPickerTierId === tier.id ? null : tier.id
+                              )
+                            }
+                            title="Изменить цвет"
+                            className="p-1.5 rounded-lg bg-black/30 hover:bg-black/50 text-white transition-colors"
+                          >
+                            <Palette className="w-3.5 h-3.5" />
+                          </button>
+
+                          {activeColorPickerTierId === tier.id && (
+                            <div className="absolute left-0 sm:left-1/2 sm:-translate-x-1/2 top-full mt-1 z-30 p-2 rounded-2xl bg-[#14131A] border border-[#252233] shadow-2xl flex flex-wrap gap-1.5 w-44">
+                              {TIER_COLOR_PRESETS.map((preset, pIdx) => (
+                                <button
+                                  key={pIdx}
+                                  onClick={() => handleUpdateTierColor(tier.id, preset.value)}
+                                  className={`w-6 h-6 rounded-lg ${preset.value} border border-white/20 hover:scale-110 transition-transform`}
+                                  title={preset.label}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Reorder buttons */}
                         <button
                           onClick={() => handleMoveTierOrder(tIdx, 'up')}
                           disabled={tIdx === 0}
-                          title="Поднять выше"
-                          className="p-1 rounded hover:bg-black/30 disabled:opacity-30"
+                          title="Поднять ранг выше"
+                          className="p-1.5 rounded-lg bg-black/30 hover:bg-black/50 text-white disabled:opacity-20 transition-colors"
                         >
                           <ChevronUp className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleMoveTierOrder(tIdx, 'down')}
                           disabled={tIdx === tiers.length - 1}
-                          title="Опустить ниже"
-                          className="p-1 rounded hover:bg-black/30 disabled:opacity-30"
+                          title="Опустить ранг ниже"
+                          className="p-1.5 rounded-lg bg-black/30 hover:bg-black/50 text-white disabled:opacity-20 transition-colors"
                         >
                           <ChevronDown className="w-3.5 h-3.5" />
                         </button>
+
+                        {/* Delete tier */}
                         <button
                           onClick={() => handleDeleteTier(tier.id)}
                           title="Удалить ранг"
-                          className="p-1 rounded hover:bg-black/30 text-rose-200"
+                          className="p-1.5 rounded-lg bg-black/30 hover:bg-rose-900/60 text-rose-200 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
+
+                      <span className="text-[10px] font-mono opacity-80 mt-0.5">
+                        {tierItems.length} {tierItems.length === 1 ? 'тайтл' : tierItems.length < 5 ? 'тайтла' : 'тайтлов'}
+                      </span>
                     </div>
                   ) : (
-                    <span>{tier.label}</span>
+                    <div className="space-y-1">
+                      <span className="font-black text-2xl sm:text-3xl font-mono tracking-tight block">
+                        {tier.label}
+                      </span>
+                      <span className="text-[10px] font-mono font-medium opacity-80 block">
+                        {tierItems.length} {tierItems.length === 1 ? 'тайтл' : tierItems.length < 5 ? 'тайтла' : 'тайтлов'}
+                      </span>
+                    </div>
                   )}
                 </div>
 
-                {/* Tier Items Container */}
-                <div className="flex-1 p-3 sm:p-4 flex flex-wrap gap-3 items-center min-w-0 bg-[#16151E]/60">
+                {/* Tier Items Container Dropzone */}
+                <div className="flex-1 p-3 sm:p-4 flex flex-wrap gap-3.5 items-center min-w-0 bg-[#161420]/70">
                   {tierItems.length === 0 ? (
-                    <span className="text-xs text-[#6B667B] italic px-2 font-mono select-none pointer-events-none">
+                    <div className="w-full py-4 text-center text-xs text-[#6B667B] italic font-mono select-none pointer-events-none">
                       {isEditMode
-                        ? 'Перетащите тайтлы сюда или выберите ранг на карточке'
+                        ? 'Перетащите тайтлы сюда или кликните ранг на карточке'
                         : 'В этом ранге пока нет тайтлов'}
-                    </span>
+                    </div>
                   ) : (
                     tierItems.map((it) => {
                       const mediaObj = resolvedMediaMap.get(it.id || it.mediaId);
@@ -781,16 +731,18 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                       const targetType = (it.type || mediaObj?.type || 'item')
                         .toLowerCase()
                         .replace(/_/g, '-');
+                      const isBeingDragged = draggedItemId === targetId;
 
                       return (
                         <div
                           key={targetId}
                           id={`drag-item-${targetId}`}
-                          onPointerDown={(e) => handlePointerDown(e, targetId)}
-                          onPointerMove={handlePointerMove}
-                          onPointerUp={handlePointerUp}
-                          onPointerCancel={handlePointerUp}
-                          className={`group relative w-16 sm:w-20 aspect-[2/3] rounded-xl overflow-hidden bg-[#201D2C] border transition-all duration-150 shrink-0 border-[#2E2A40] hover:border-fuchsia-400 shadow-md hover:scale-105 hover:shadow-xl ${isEditMode ? 'cursor-grab active:cursor-grabbing touch-none' : 'cursor-pointer'}`}
+                          draggable={isEditMode}
+                          onDragStart={(e) => handleDragStart(e, targetId)}
+                          onDragEnd={handleDragEnd}
+                          className={`group relative w-20 sm:w-24 aspect-[2/3] rounded-2xl overflow-hidden bg-[#201D2C] border transition-all duration-150 shrink-0 border-[#2E2A40] hover:border-fuchsia-400 shadow-md hover:scale-105 hover:shadow-xl ${
+                            isBeingDragged ? 'opacity-40 scale-95 border-fuchsia-500' : ''
+                          } ${isEditMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
                         >
                           {poster ? (
                             <img
@@ -801,18 +753,18 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                               className="w-full h-full object-cover select-none pointer-events-none"
                             />
                           ) : (
-                            <div className="w-full h-full flex flex-col items-center justify-center p-1.5 text-center bg-zinc-900 select-none pointer-events-none">
-                              <Film className="w-4 h-4 text-zinc-500 mb-1" />
-                              <span className="text-[9px] text-zinc-300 line-clamp-2 leading-tight">
+                            <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center bg-zinc-900 select-none pointer-events-none">
+                              <Film className="w-5 h-5 text-zinc-500 mb-1" />
+                              <span className="text-[10px] text-zinc-300 line-clamp-3 leading-tight font-medium">
                                 {title}
                               </span>
                             </div>
                           )}
 
-                          {/* Hover Overlay */}
-                          <div className="absolute inset-0 bg-black/90 p-1.5 opacity-0 group-hover:opacity-100 flex flex-col justify-between transition-opacity text-left">
+                          {/* Item Hover / Controls Overlay */}
+                          <div className="absolute inset-0 bg-[#0F0E13]/90 backdrop-blur-[2px] p-2 opacity-0 group-hover:opacity-100 flex flex-col justify-between transition-opacity text-left">
                             <div className="flex items-start justify-between gap-1">
-                              <span className="text-[9px] font-bold text-white line-clamp-2 leading-tight">
+                              <span className="text-[10px] font-bold text-white line-clamp-2 leading-tight">
                                 {title}
                               </span>
                               {isEditMode && (
@@ -824,15 +776,15 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                                   className="text-rose-400 hover:text-rose-300 p-0.5"
                                   title="Удалить из тир-листа"
                                 >
-                                  <Trash2 className="w-3 h-3" />
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               )}
                             </div>
 
                             {/* Controls in Edit Mode */}
                             {isEditMode ? (
-                              <div className="space-y-1">
-                                <div className="grid grid-cols-4 gap-0.5">
+                              <div className="space-y-1 pt-1">
+                                <div className="grid grid-cols-4 gap-1">
                                   {tiers.map((t) => (
                                     <button
                                       key={t.id}
@@ -840,10 +792,10 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                                         e.stopPropagation();
                                         handleMoveItem(targetId, t.id);
                                       }}
-                                      className={`text-[8px] font-bold uppercase rounded py-0.5 transition-colors ${
+                                      className={`text-[9px] font-black uppercase rounded py-0.5 transition-all ${
                                         it.tierId === t.id
-                                          ? 'bg-fuchsia-600 text-white font-black'
-                                          : 'bg-zinc-800 text-zinc-200 hover:bg-fuchsia-700'
+                                          ? 'bg-fuchsia-600 text-white ring-1 ring-white/50'
+                                          : 'bg-zinc-800 text-zinc-300 hover:bg-fuchsia-700 hover:text-white'
                                       }`}
                                     >
                                       {t.label.slice(0, 2)}
@@ -855,7 +807,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                                     e.stopPropagation();
                                     handleMoveItem(targetId, 'unranked');
                                   }}
-                                  className="w-full text-[8px] text-zinc-400 hover:text-zinc-200 bg-zinc-900 hover:bg-zinc-800 rounded py-0.5 font-medium transition-colors"
+                                  className="w-full text-[9px] text-zinc-400 hover:text-zinc-100 bg-zinc-900 hover:bg-zinc-800 rounded py-0.5 font-mono font-medium transition-colors text-center"
                                 >
                                   В пул
                                 </button>
@@ -863,10 +815,10 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                             ) : (
                               <button
                                 onClick={() => navigate(`/media/${targetType}/${targetId}`)}
-                                className="inline-flex items-center gap-1 text-[8px] text-fuchsia-300 font-mono hover:text-fuchsia-200"
+                                className="inline-flex items-center gap-1 text-[9px] text-fuchsia-300 font-mono font-semibold hover:text-fuchsia-200 mt-auto"
                               >
                                 <span>Открыть</span>
-                                <ExternalLink className="w-2.5 h-2.5" />
+                                <ExternalLink className="w-3 h-3" />
                               </button>
                             )}
                           </div>
@@ -885,34 +837,41 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
       {(isEditMode || unrankedItems.length > 0) && (
         <div
           id="dropzone-unranked"
-          className={`tier-dropzone p-5 sm:p-6 rounded-3xl bg-[#14131A] border transition-colors duration-150 space-y-4 shadow-xl border-[#252233]`}
+          onDragOver={(e) => handleDragOver(e, 'unranked')}
+          onDragLeave={(e) => handleDragLeave(e, 'unranked')}
+          onDrop={(e) => handleDrop(e, 'unranked')}
+          className={`tier-dropzone p-5 sm:p-6 rounded-3xl bg-[#14131A] border transition-all duration-150 space-y-4 shadow-xl ${
+            dragOverZone === 'unranked'
+              ? 'border-fuchsia-500 bg-fuchsia-950/30 ring-2 ring-inset ring-fuchsia-500/50'
+              : 'border-[#252233]'
+          }`}
         >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2.5">
               <h4 className="text-xs font-bold text-[#F3F1F8] uppercase tracking-wider font-mono">
                 Пул тайтлов без ранга ({unrankedItems.length})
               </h4>
-              <span className="text-[11px] text-[#9A94AA]">
-                • Категория: {tierList.category}
+              <span className="text-[11px] text-[#9A94AA] font-mono">
+                • {tierList.category}
               </span>
             </div>
 
             {isEditMode && (
               <button
                 onClick={() => setShowAddMediaModal(true)}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-bold font-mono shadow-md transition-all"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-bold font-mono shadow-md shadow-fuchsia-950/40 transition-all"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Добавить медиа</span>
+                <span>Добавить тайтлы</span>
               </button>
             )}
           </div>
 
-          <div className="flex flex-wrap gap-3 min-h-[90px] p-3 rounded-2xl bg-[#191724]/70 border border-[#252233]">
+          <div className="flex flex-wrap gap-3.5 min-h-[100px] p-4 rounded-2xl bg-[#191724]/70 border border-[#252233]">
             {unrankedItems.length === 0 ? (
-              <div className="w-full flex items-center justify-center text-xs text-[#6B667B] font-mono py-4 select-none pointer-events-none">
+              <div className="w-full flex items-center justify-center text-xs text-[#6B667B] font-mono py-6 select-none pointer-events-none">
                 {isEditMode
-                  ? 'Все добавленные тайтлы расставлены по рангам! Нажмите «Добавить медиа», чтобы найти еще.'
+                  ? 'Все добавленные тайтлы распределены по рангам! Нажмите «Добавить тайтлы», чтобы найти еще медиа.'
                   : 'Все тайтлы уже распределены по рангам'}
               </div>
             ) : (
@@ -924,16 +883,18 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                 const targetType = (it.type || mediaObj?.type || 'item')
                   .toLowerCase()
                   .replace(/_/g, '-');
+                const isBeingDragged = draggedItemId === targetId;
 
                 return (
                   <div
                     key={targetId}
                     id={`drag-item-${targetId}`}
-                    onPointerDown={(e) => handlePointerDown(e, targetId)}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onPointerCancel={handlePointerUp}
-                    className={`group relative w-16 sm:w-20 aspect-[2/3] rounded-xl overflow-hidden bg-[#201D2C] border transition-all duration-150 shrink-0 border-[#2E2A40] hover:border-fuchsia-400 shadow-md hover:scale-105 hover:shadow-xl ${isEditMode ? 'cursor-grab active:cursor-grabbing touch-none' : 'cursor-pointer'}`}
+                    draggable={isEditMode}
+                    onDragStart={(e) => handleDragStart(e, targetId)}
+                    onDragEnd={handleDragEnd}
+                    className={`group relative w-20 sm:w-24 aspect-[2/3] rounded-2xl overflow-hidden bg-[#201D2C] border transition-all duration-150 shrink-0 border-[#2E2A40] hover:border-fuchsia-400 shadow-md hover:scale-105 hover:shadow-xl ${
+                      isBeingDragged ? 'opacity-40 scale-95 border-fuchsia-500' : ''
+                    } ${isEditMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
                   >
                     {poster ? (
                       <img
@@ -944,18 +905,18 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                         className="w-full h-full object-cover select-none pointer-events-none"
                       />
                     ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center p-1.5 text-center bg-zinc-900 select-none pointer-events-none">
-                        <Film className="w-4 h-4 text-zinc-500 mb-1" />
-                        <span className="text-[9px] text-zinc-300 line-clamp-2 leading-tight">
+                      <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center bg-zinc-900 select-none pointer-events-none">
+                        <Film className="w-5 h-5 text-zinc-500 mb-1" />
+                        <span className="text-[10px] text-zinc-300 line-clamp-3 leading-tight font-medium">
                           {title}
                         </span>
                       </div>
                     )}
 
                     {/* Hover Overlay */}
-                    <div className="absolute inset-0 bg-black/90 p-1.5 opacity-0 group-hover:opacity-100 flex flex-col justify-between transition-opacity text-left">
+                    <div className="absolute inset-0 bg-[#0F0E13]/90 backdrop-blur-[2px] p-2 opacity-0 group-hover:opacity-100 flex flex-col justify-between transition-opacity text-left">
                       <div className="flex items-start justify-between gap-1">
-                        <span className="text-[9px] font-bold text-white line-clamp-2 leading-tight">
+                        <span className="text-[10px] font-bold text-white line-clamp-2 leading-tight">
                           {title}
                         </span>
                         {isEditMode && (
@@ -967,13 +928,13 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                             className="text-rose-400 hover:text-rose-300 p-0.5"
                             title="Удалить"
                           >
-                            <Trash2 className="w-3 h-3" />
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
 
                       {isEditMode ? (
-                        <div className="grid grid-cols-3 gap-0.5">
+                        <div className="grid grid-cols-3 gap-1 pt-1">
                           {tiers.map((t) => (
                             <button
                               key={t.id}
@@ -981,7 +942,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                                 e.stopPropagation();
                                 handleMoveItem(targetId, t.id);
                               }}
-                              className="text-[8px] font-bold uppercase rounded py-0.5 bg-zinc-800 text-zinc-200 hover:bg-fuchsia-600 transition-colors"
+                              className="text-[9px] font-black uppercase rounded py-0.5 bg-zinc-800 text-zinc-300 hover:bg-fuchsia-600 hover:text-white transition-colors text-center"
                             >
                               {t.label.slice(0, 2)}
                             </button>
@@ -990,10 +951,10 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                       ) : (
                         <button
                           onClick={() => navigate(`/media/${targetType}/${targetId}`)}
-                          className="inline-flex items-center gap-1 text-[8px] text-fuchsia-300 font-mono hover:text-fuchsia-200"
+                          className="inline-flex items-center gap-1 text-[9px] text-fuchsia-300 font-mono font-semibold hover:text-fuchsia-200 mt-auto"
                         >
                           <span>Открыть</span>
-                          <ExternalLink className="w-2.5 h-2.5" />
+                          <ExternalLink className="w-3 h-3" />
                         </button>
                       )}
                     </div>

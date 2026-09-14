@@ -16,7 +16,7 @@ export async function initDbSettings() {
     const setting = await db
       .select()
       .from(systemSettings)
-      .where(eq(systemSettings.key, 'registration_mode'))
+      .where(eq(systemSettings.key, 'site_access_mode'))
       .limit(1);
 
     if (setting.length === 0) {
@@ -26,7 +26,7 @@ export async function initDbSettings() {
       const initialMode = userCount > 0 ? 'INVITE_ONLY' : 'OPEN';
 
       await db.insert(systemSettings).values({
-        key: 'registration_mode',
+        key: 'site_access_mode',
         value: initialMode,
         description: 'Режим доступа к регистрации в проекте',
       });

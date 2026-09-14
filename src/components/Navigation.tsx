@@ -28,6 +28,8 @@ import {
 import { useAuth } from '../context/AuthContext.tsx';
 import { useRouter } from '../context/RouterContext.tsx';
 import { useNotifications } from '../context/NotificationContext.tsx';
+import { FeedbackModal } from "./modals/FeedbackModal.tsx";
+import { MessageSquare } from "lucide-react";
 
 export type ActiveTab =
   | 'home'
@@ -65,7 +67,9 @@ export const Navigation: React.FC<NavigationProps> = ({
   const { dbUser, login, logout, loading, authFetch } = useAuth();
   const { navigate, route } = useRouter();
   const { unreadCount } = useNotifications();
-  const isAdmin = dbUser?.role === 'ADMIN' || dbUser?.role === 'SUPER_ADMIN';
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const isStaff = ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR'].includes(dbUser?.role || '');
+  const isAdmin = isStaff;
 
   // Derive active tab from route name if available
   const effectiveTab: ActiveTab = (() => {
@@ -353,8 +357,23 @@ export const Navigation: React.FC<NavigationProps> = ({
               Войти через Google
             </button>
           )}
+
+          {/* Feedback Button */}
+          <button
+            onClick={() => setIsFeedbackModalOpen(true)}
+            className="w-full mt-2 flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#191724] hover:bg-[#252233] text-[#9A94AA] hover:text-[#F3F1F8] border border-[#252233] text-xs font-semibold transition-colors"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            Обратная связь
+          </button>
         </div>
       </aside>
+
+      {/* Modals */}
+      <FeedbackModal 
+        isOpen={isFeedbackModalOpen}
+        onClose={() => setIsFeedbackModalOpen(false)}
+      />
 
       {/* Mobile Top Bar */}
       <header className="md:hidden fixed top-0 left-0 right-0 h-14 bg-[#0F0E12]/95 backdrop-blur-md border-b border-[#252233] px-4 flex items-center justify-between z-40">
@@ -381,6 +400,12 @@ export const Navigation: React.FC<NavigationProps> = ({
                 {unreadCount > 0 && (
                   <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500 border border-[#0F0E12]" />
                 )}
+              </button>
+              <button
+                onClick={() => setIsFeedbackModalOpen(true)}
+                className="p-1.5 text-[#9A94AA] hover:text-white"
+              >
+                <MessageSquare className="w-4 h-4" />
               </button>
               <button
                 onClick={handleSettingsClick}

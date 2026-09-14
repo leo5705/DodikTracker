@@ -20,13 +20,32 @@ export function encryptCredentials(data: Record<string, any>): string {
   return `${iv.toString('hex')}:${authTag}:${encrypted}`;
 }
 
-export function decryptCredentials<T = Record<string, any>>(encryptedPayload: string): T {
+export function decryptCredentials<T = Record<string, any>>(encryptedPayload: string | null | undefined): T {
+  if (!encryptedPayload || typeof encryptedPayload !== 'string' || !encryptedPayload.trim()) {
+    return {} as T;
+  }
+
+  const trimmed = encryptedPayload.trim();
+
+  // If already stored as plain JSON (fallback/unencrypted), parse directly
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      return JSON.parse(trimmed) as T;
+    } catch {
+      // Continue to decrypt
+    }
+  }
+
   try {
-    const parts = encryptedPayload.split(':');
+    const parts = trimmed.split(':');
     if (parts.length !== 3) {
-      throw new Error('Invalid encrypted payload format');
+      return {} as T;
     }
     const [ivHex, authTagHex, cipherHex] = parts;
+    if (!ivHex || !authTagHex || !cipherHex) {
+      return {} as T;
+    }
+
     const key = getSecretKey();
     const iv = Buffer.from(ivHex, 'hex');
     const authTag = Buffer.from(authTagHex, 'hex');
@@ -38,7 +57,7 @@ export function decryptCredentials<T = Record<string, any>>(encryptedPayload: st
     decrypted += decipher.final('utf8');
     return JSON.parse(decrypted);
   } catch (err) {
-    console.error('Failed to decrypt credentials:', err);
+    console.warn('[crypto] Unable to decrypt credentials payload, using empty defaults:', (err as Error)?.message || err);
     return {} as T;
   }
 }

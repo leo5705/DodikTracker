@@ -14,6 +14,7 @@ export interface MediaSearchResult {
   rating?: number;
   totalSeasons?: number;
   totalEpisodes?: number;
+  platforms?: string[];
 }
 
 export interface MediaCastMember {

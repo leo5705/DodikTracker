@@ -14,7 +14,7 @@ export interface DbUser {
   username: string;
   avatar: string | null;
   bio: string | null;
-  role: 'USER' | 'MODERATOR' | 'ADMIN' | 'SUPER_ADMIN';
+  role: 'USER' | 'MODERATOR' | 'ADMIN' | 'SUPER_ADMIN' | 'CONTENT_MANAGER' | 'NEWS_EDITOR';
   profileVisibility: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   libraryVisibility: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   ratingVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';

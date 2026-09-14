@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
-import { ListOrdered, Plus, Loader2, Globe, Users, Lock, X, Search, ShieldCheck, Eye, Trash2 } from 'lucide-react';
+import { ListOrdered, Plus, Loader2, Globe, Users, Lock, X, Search, ShieldCheck, Eye, Trash2, Clock, UserCheck, UserX, Check } from 'lucide-react';
 
 const LIST_CATEGORIES = [
   { id: 'MOVIES_TV', label: 'Фильмы и сериалы' },
@@ -25,6 +25,8 @@ export const ListsView: React.FC = () => {
 
   const [lists, setLists] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingInvitations, setPendingInvitations] = useState<any[]>([]);
+  const [respondingInviteId, setRespondingInviteId] = useState<number | null>(null);
 
   // Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -38,6 +40,19 @@ export const ListsView: React.FC = () => {
   const [searchingUsers, setSearchingUsers] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  const fetchInvitations = async () => {
+    if (!dbUser) return;
+    try {
+      const res = await authFetch('/api/user/list-invitations');
+      if (res.ok) {
+        const data = await res.json();
+        setPendingInvitations(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch list invitations:', err);
+    }
+  };
 
   const fetchLists = async () => {
     if (!dbUser) return;
@@ -57,10 +72,40 @@ export const ListsView: React.FC = () => {
   useEffect(() => {
     if (dbUser) {
       fetchLists();
+      fetchInvitations();
     } else {
       setLoading(false);
     }
   }, [dbUser]);
+
+  const handleAcceptInvitation = async (invId: number, listId: number) => {
+    setRespondingInviteId(invId);
+    try {
+      const res = await authFetch(`/api/list-invitations/${invId}/accept`, { method: 'POST' });
+      if (res.ok) {
+        await Promise.all([fetchInvitations(), fetchLists()]);
+        navigate(`/lists/${listId}`);
+      }
+    } catch (err) {
+      console.error('Failed to accept invitation:', err);
+    } finally {
+      setRespondingInviteId(null);
+    }
+  };
+
+  const handleDeclineInvitation = async (invId: number) => {
+    setRespondingInviteId(invId);
+    try {
+      const res = await authFetch(`/api/list-invitations/${invId}/decline`, { method: 'POST' });
+      if (res.ok) {
+        await fetchInvitations();
+      }
+    } catch (err) {
+      console.error('Failed to decline invitation:', err);
+    } finally {
+      setRespondingInviteId(null);
+    }
+  };
 
   // Debounced search for users
   useEffect(() => {
@@ -194,6 +239,63 @@ export const ListsView: React.FC = () => {
         </button>
       </div>
 
+      {/* Incoming Invitations Banner */}
+      {pendingInvitations.length > 0 && (
+        <div className="p-4 sm:p-5 rounded-3xl bg-[#191724] border border-[#9B6BFF]/40 shadow-xl space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-[#F3F1F8] flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-400" />
+              Приглашения в совместные списки ({pendingInvitations.length})
+            </h2>
+            <span className="text-[11px] text-zinc-400 font-mono">Требуется ваше решение</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {pendingInvitations.map((inv) => {
+              const isResponding = respondingInviteId === inv.id;
+              return (
+                <div
+                  key={inv.id}
+                  className="p-3.5 rounded-2xl bg-[#14131A] border border-[#2E2A40] space-y-3 flex flex-col justify-between"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#9B6BFF]/20 text-[#AC82FF] border border-[#9B6BFF]/30 font-mono font-medium">
+                        {inv.permission === 'EDITOR' ? 'Редактор' : 'Читатель'}
+                      </span>
+                      <span className="text-[10px] text-zinc-500 font-mono">от @{inv.inviterUsername}</span>
+                    </div>
+                    <h3 className="text-xs font-bold text-white line-clamp-1">{inv.listTitle}</h3>
+                    {inv.listDescription && (
+                      <p className="text-[11px] text-zinc-400 line-clamp-2">{inv.listDescription}</p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      onClick={() => handleAcceptInvitation(inv.id, inv.listId)}
+                      disabled={isResponding}
+                      className="flex-1 py-1.5 px-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                    >
+                      {isResponding ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserCheck className="w-3.5 h-3.5" />}
+                      <span>Принять</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeclineInvitation(inv.id)}
+                      disabled={isResponding}
+                      className="py-1.5 px-2.5 rounded-xl bg-[#1F1C2E] hover:bg-rose-950/40 border border-[#2E2A40] hover:border-rose-800/50 text-zinc-400 hover:text-rose-300 text-xs font-semibold flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                    >
+                      <UserX className="w-3.5 h-3.5" />
+                      <span>Отклонить</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="py-20 flex flex-col items-center justify-center space-y-3">
           <Loader2 className="w-8 h-8 text-[#AC82FF] animate-spin" />
@@ -213,7 +315,8 @@ export const ListsView: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {catLists.map((lst) => {
                     const isOwner = dbUser?.id === lst.ownerId;
-                    const isCollaborator = !isOwner && lst.userRole;
+                    const userRole = lst.role || lst.userRole;
+                    const isCollaborator = !isOwner && userRole && userRole !== 'OWNER';
 
                     return (
                       <div
@@ -237,7 +340,7 @@ export const ListsView: React.FC = () => {
 
                           {isCollaborator && (
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#9B6BFF]/20 text-[#AC82FF] border border-[#9B6BFF]/40 font-mono">
-                              {lst.userRole === 'EDITOR' ? 'Соавтор (Редактор)' : 'Читатель'}
+                              {userRole === 'EDITOR' ? 'Соавтор (Редактор)' : 'Читатель'}
                             </span>
                           )}
 
@@ -391,12 +494,17 @@ export const ListsView: React.FC = () => {
               {/* Соавторы / Участники совместного списка */}
               <div className="space-y-2 pt-2 border-t border-[#252233]">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-[#D5D0E3] flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-[#AC82FF]" />
-                    Соавторы и участники
-                  </label>
-                  <span className="text-[10px] text-[#9A94AA]">
-                    {collaborators.length > 0 ? `${collaborators.length} добавлены` : 'Необязательно'}
+                  <div>
+                    <label className="text-xs font-semibold text-[#D5D0E3] flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-[#AC82FF]" />
+                      Пригласить соавторов
+                    </label>
+                    <p className="text-[10px] text-[#9A94AA] mt-0.5">
+                      Пользователи получат приглашение и смогут принять участие
+                    </p>
+                  </div>
+                  <span className="text-[10px] text-[#AC82FF] font-mono">
+                    {collaborators.length > 0 ? `${collaborators.length} в списке` : 'Необязательно'}
                   </span>
                 </div>
 

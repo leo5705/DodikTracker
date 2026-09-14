@@ -113,7 +113,8 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
         if (res.ok) {
           const data = await res.json();
           if (!controller.signal.aborted) {
-            setSearchResults(Array.isArray(data) ? data : []);
+            const list = Array.isArray(data) ? data : data.results || [];
+            setSearchResults(Array.isArray(list) ? list : []);
           }
         } else {
           if (!controller.signal.aborted) {

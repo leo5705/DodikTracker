@@ -46,13 +46,21 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onNavigateUser,
 }) => {
   const { authFetch, dbUser, login } = useAuth();
-  const { navigate } = useRouter();
+  const { navigate, route } = useRouter();
   const targetUsername = username || dbUser?.username;
 
   const [profileData, setProfileData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'library' | 'reviews' | 'lists' | 'achievements'>('library');
+  const [activeTab, setActiveTab] = useState<'library' | 'reviews' | 'lists' | 'achievements'>(
+    (route.params?.tab as any) || 'library'
+  );
+
+  useEffect(() => {
+    if (route.params?.tab && ['library', 'reviews', 'lists', 'achievements'].includes(route.params.tab)) {
+      setActiveTab(route.params.tab as any);
+    }
+  }, [route.params?.tab]);
   const [userAchievements, setUserAchievements] = useState<any[]>([]);
   const [achievementsStats, setAchievementsStats] = useState<any>(null);
   const [achievementsLoading, setAchievementsLoading] = useState(false);
@@ -294,24 +302,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     Сравнить вкусы
                   </button>
 
-                  <button
-                    onClick={() => {
-                      window.dispatchEvent(
-                        new CustomEvent('open_chat', {
-                          detail: {
-                            id: user.id,
-                            username: user.username,
-                            avatar: user.avatar,
-                          },
-                        })
-                      );
-                    }}
-                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#252233] hover:bg-[#353147] border border-[#3A344E] text-xs font-semibold text-[#F3F1F8] transition-colors"
-                    title="Написать личное сообщение"
-                  >
-                    <MessageSquare className="w-3.5 h-3.5 text-[#AC82FF]" />
-                    Сообщение
-                  </button>
+
 
                   {friendStatus === 'FRIENDS' ? (
                     <span className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-semibold">

@@ -181,6 +181,7 @@ export class RAWGProvider implements MediaProvider {
           year,
           rating: game.rating ? Math.round(game.rating * 2 * 10) / 10 : undefined,
           genres: translation.genres,
+          platforms: (game.platforms || []).map((p: any) => p.platform?.name).filter(Boolean),
         });
       }
 

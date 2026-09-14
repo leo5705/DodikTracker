@@ -12,6 +12,10 @@ export const users = pgTable('users', {
   bio: text('bio'),
   role: text('role').notNull().default('USER'), // 'USER' | 'MODERATOR' | 'ADMIN' | 'SUPER_ADMIN'
   isBlocked: boolean('is_blocked').notNull().default(false),
+  bannedUntil: timestamp('banned_until'),
+  banReason: text('ban_reason'),
+  warningCount: integer('warning_count').notNull().default(0),
+  lastWarningReason: text('last_warning_reason'),
   invitesLeft: integer('invites_left').notNull().default(3),
   profileVisibility: text('profile_visibility').notNull().default('PUBLIC'), // 'PUBLIC' | 'FRIENDS' | 'PRIVATE'
   libraryVisibility: text('library_visibility').notNull().default('PUBLIC'),
@@ -45,6 +49,7 @@ export const media = pgTable('media', {
   totalSeasons: integer('total_seasons').default(0),
   totalEpisodes: integer('total_episodes').default(0),
   totalDurationMinutes: integer('total_duration_minutes'),
+  isHidden: boolean('is_hidden').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -151,6 +156,7 @@ export const comments = pgTable('comments', {
   targetId: integer('target_id').notNull(),
   parentId: integer('parent_id'),
   content: text('content').notNull(),
+  isHidden: boolean('is_hidden').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -163,6 +169,7 @@ export const lists = pgTable('lists', {
   category: text('category').notNull().default('MOVIES_TV'), // 'MOVIE' | 'TV' | 'ANIME' | 'MANGA' | 'GAME' | 'BOOK' | 'COMIC'
   cover: text('cover'),
   visibility: text('visibility').notNull().default('PUBLIC'), // PUBLIC, FRIENDS, PRIVATE
+  isHidden: boolean('is_hidden').notNull().default(false),
   ownerId: integer('owner_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
@@ -200,6 +207,25 @@ export const listFollowers = pgTable('list_followers', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// 16b. List Invitations Table
+export const listInvitations = pgTable('list_invitations', {
+  id: serial('id').primaryKey(),
+  listId: integer('list_id').references(() => lists.id, { onDelete: 'cascade' }).notNull(),
+  inviterId: integer('inviter_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  inviteeId: integer('invitee_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  permission: text('permission').notNull().default('EDITOR'), // 'EDITOR' | 'VIEWER'
+  status: text('status').notNull().default('PENDING'), // 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'REVOKED' | 'EXPIRED'
+  createdAt: timestamp('created_at').defaultNow(),
+  expiresAt: timestamp('expires_at'),
+  respondedAt: timestamp('responded_at'),
+}, (table) => {
+  return {
+    listIdIdx: index('list_invitations_list_id_idx').on(table.listId),
+    inviteeIdIdx: index('list_invitations_invitee_id_idx').on(table.inviteeId),
+    statusIdx: index('list_invitations_status_idx').on(table.status),
+  };
+});
+
 // 17. Tier Lists Table
 export const tierLists = pgTable('tier_lists', {
   id: serial('id').primaryKey(),
@@ -207,6 +233,7 @@ export const tierLists = pgTable('tier_lists', {
   description: text('description'),
   category: text('category').default('ALL'), // MOVIE, GAME, ANIME, etc.
   visibility: text('visibility').notNull().default('PUBLIC'), // PUBLIC, FRIENDS, PRIVATE
+  isHidden: boolean('is_hidden').notNull().default(false),
   ownerId: integer('owner_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   tiersJson: text('tiers_json').notNull(), // JSON of tiers [{id: 's', name: 'S', color: '#ef4444'}]
   itemsJson: text('items_json').notNull().default('[]'), // JSON of [{mediaId: 1, tierId: 's', order: 0}]
@@ -310,6 +337,7 @@ export const reviews = pgTable('reviews', {
   content: text('content').notNull(),
   containsSpoilers: boolean('contains_spoilers').default(false),
   likesCount: integer('likes_count').default(0),
+  isHidden: boolean('is_hidden').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -517,5 +545,104 @@ export const achievementHistoryRelations = relations(achievementHistory, ({ one 
   user: one(users, { fields: [achievementHistory.userId], references: [users.id] }),
   achievement: one(achievements, { fields: [achievementHistory.achievementId], references: [achievements.id] }),
   admin: one(users, { fields: [achievementHistory.adminId], references: [users.id] }),
+}));
+
+// 32. Release Subscriptions Table
+export const releaseSubscriptions = pgTable('release_subscriptions', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  mediaId: integer('media_id').references(() => media.id, { onDelete: 'cascade' }).notNull(),
+  notified: boolean('notified').default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  userIdx: index('release_sub_user_id_idx').on(table.userId),
+  mediaIdx: index('release_sub_media_id_idx').on(table.mediaId),
+  userMediaUnq: uniqueIndex('release_sub_user_media_unq').on(table.userId, table.mediaId),
+}));
+
+export const releaseSubscriptionsRelations = relations(releaseSubscriptions, ({ one }) => ({
+  user: one(users, { fields: [releaseSubscriptions.userId], references: [users.id] }),
+  media: one(media, { fields: [releaseSubscriptions.mediaId], references: [media.id] }),
+}));
+
+// 33. Reports (Moderation Queue) Table
+export const reports = pgTable('reports', {
+  id: serial('id').primaryKey(),
+  reporterId: integer('reporter_id').references(() => users.id, { onDelete: 'set null' }),
+  targetType: text('target_type').notNull(), // 'REVIEW' | 'COMMENT' | 'MESSAGE' | 'USER' | 'LIST' | 'TIER_LIST' | 'MEDIA'
+  targetId: text('target_id').notNull(),
+  targetUserId: integer('target_user_id').references(() => users.id, { onDelete: 'set null' }),
+  reason: text('reason').notNull(), // 'SPAM' | 'HARASSMENT' | 'FRAUD' | 'NSFW' | 'RULES_VIOLATION' | 'OTHER'
+  description: text('description'),
+  status: text('status').notNull().default('PENDING'), // 'PENDING' | 'IN_REVIEW' | 'RESOLVED' | 'REJECTED' | 'DISMISSED'
+  moderatorId: integer('moderator_id').references(() => users.id, { onDelete: 'set null' }),
+  moderatorComment: text('moderator_comment'),
+  actionTaken: text('action_taken').default('NONE'), // 'NONE' | 'DELETE' | 'HIDE' | 'WARN_USER' | 'TEMP_BAN' | 'BAN' | 'DISMISS'
+  resolvedAt: timestamp('resolved_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  statusIdx: index('reports_status_idx').on(table.status),
+  targetTypeIdx: index('reports_target_type_idx').on(table.targetType),
+  targetUserIdIdx: index('reports_target_user_id_idx').on(table.targetUserId),
+  createdAtIdx: index('reports_created_at_idx').on(table.createdAt),
+}));
+
+export const reportsRelations = relations(reports, ({ one }) => ({
+  reporter: one(users, { fields: [reports.reporterId], references: [users.id], relationName: 'reportedReports' }),
+  targetUser: one(users, { fields: [reports.targetUserId], references: [users.id], relationName: 'targetedReports' }),
+  moderator: one(users, { fields: [reports.moderatorId], references: [users.id], relationName: 'moderatedReports' }),
+}));
+
+// 34. News (CMS) Table
+export const news = pgTable('news', {
+  id: serial('id').primaryKey(),
+  slug: text('slug').notNull().unique(),
+  title: text('title').notNull(),
+  excerpt: text('excerpt'),
+  content: text('content').notNull(),
+  cover: text('cover'),
+  authorId: integer('author_id').references(() => users.id, { onDelete: 'set null' }),
+  tags: text('tags').notNull().default('[]'), // JSON string array
+  status: text('status').notNull().default('DRAFT'), // 'DRAFT' | 'SCHEDULED' | 'PUBLISHED' | 'ARCHIVED'
+  isPinned: boolean('is_pinned').notNull().default(false),
+  isFeatured: boolean('is_featured').notNull().default(false),
+  publishedAt: timestamp('published_at'),
+  scheduledAt: timestamp('scheduled_at'),
+  viewsCount: integer('views_count').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  slugIdx: uniqueIndex('news_slug_idx').on(table.slug),
+  statusIdx: index('news_status_idx').on(table.status),
+  publishedAtIdx: index('news_published_at_idx').on(table.publishedAt),
+}));
+
+export const newsRelations = relations(news, ({ one }) => ({
+  author: one(users, { fields: [news.authorId], references: [users.id] }),
+}));
+
+// 35. Announcements (System Banners & Broadcasts) Table
+export const announcements = pgTable('announcements', {
+  id: serial('id').primaryKey(),
+  title: text('title').notNull(),
+  message: text('message').notNull(),
+  severity: text('severity').notNull().default('INFO'), // 'INFO' | 'SUCCESS' | 'WARNING' | 'CRITICAL'
+  targetAudience: text('target_audience').notNull().default('ALL'), // 'ALL' | 'USERS' | 'ADMINS'
+  isActive: boolean('is_active').notNull().default(true),
+  startAt: timestamp('start_at').defaultNow(),
+  endAt: timestamp('end_at'),
+  showBanner: boolean('show_banner').notNull().default(true),
+  sendTelegram: boolean('send_telegram').notNull().default(false),
+  createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  isActiveIdx: index('announcements_is_active_idx').on(table.isActive),
+  severityIdx: index('announcements_severity_idx').on(table.severity),
+}));
+
+export const announcementsRelations = relations(announcements, ({ one }) => ({
+  creator: one(users, { fields: [announcements.createdBy], references: [users.id] }),
 }));
 

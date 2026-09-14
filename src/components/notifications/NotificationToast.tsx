@@ -14,6 +14,7 @@ import {
   MessageCircle,
   X,
   ExternalLink,
+  ListOrdered,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppNotification } from '../../types/notification.ts';
@@ -119,6 +120,30 @@ export const getNotificationVisuals = (type: string) => {
         borderColor: 'border-cyan-500/40',
         gradient: 'from-cyan-950/40 to-[#14131A]',
         categoryName: 'Комментарий',
+      };
+    case 'LIST_INVITE':
+      return {
+        icon: ListOrdered,
+        badgeColor: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
+        borderColor: 'border-purple-500/40',
+        gradient: 'from-purple-950/40 to-[#14131A]',
+        categoryName: 'Приглашение в список',
+      };
+    case 'LIST_INVITE_ACCEPTED':
+      return {
+        icon: UserCheck,
+        badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+        borderColor: 'border-emerald-500/40',
+        gradient: 'from-emerald-950/40 to-[#14131A]',
+        categoryName: 'Приглашение принято',
+      };
+    case 'LIST_INVITE_DECLINED':
+      return {
+        icon: X,
+        badgeColor: 'bg-rose-500/20 text-rose-300 border-rose-500/30',
+        borderColor: 'border-rose-500/40',
+        gradient: 'from-rose-950/40 to-[#14131A]',
+        categoryName: 'Приглашение отклонено',
       };
     default:
       return {
