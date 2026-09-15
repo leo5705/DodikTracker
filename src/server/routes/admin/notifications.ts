@@ -34,7 +34,7 @@ adminNotificationsRouter.post('/notifications/send', requireAuth, requireStaff('
       recipientCount = Number(usersCountRes?.val || 0);
 
       if (sendTelegram) {
-        await notificationService.sendTelegramNotification(
+        notificationService.sendTelegramNotification(
           `📢 *${title.trim()}*\n\n${body.trim()}${link ? `\n\n🔗 ${link}` : ''}`
         );
       }
@@ -78,7 +78,7 @@ adminNotificationsRouter.post('/notifications/send', requireAuth, requireStaff('
       recipientCount = 1;
 
       if (sendTelegram && targetUser.telegramChatId) {
-        await notificationService.sendTelegramNotification(
+        notificationService.sendTelegramNotification(
           `🔔 *${title.trim()}*\n\n${body.trim()}${link ? `\n\n🔗 ${link}` : ''}`
         );
       }

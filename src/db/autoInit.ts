@@ -528,6 +528,24 @@ export async function runAutoMigrations(pool: Pool) {
         ALTER TABLE "tier_lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "reviews" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "invite_codes" ADD COLUMN IF NOT EXISTS "is_active" boolean NOT NULL DEFAULT true;
+
+        -- 37. Deduplicate existing records before applying unique constraints
+        UPDATE "tier_lists" SET visibility = 'FRIENDS' WHERE visibility = 'FRIENDS_ONLY';
+        UPDATE "lists" SET visibility = 'FRIENDS' WHERE visibility = 'FRIENDS_ONLY';
+
+        DELETE FROM "friend_requests" a USING "friend_requests" b
+        WHERE a.id < b.id AND a.sender_id = b.sender_id AND a.receiver_id = b.receiver_id;
+
+        DELETE FROM "user_media" a USING "user_media" b
+        WHERE a.id < b.id AND a.user_id = b.user_id AND a.media_id = b.media_id;
+
+        DELETE FROM "likes" a USING "likes" b
+        WHERE a.id < b.id AND a.user_id = b.user_id AND a.target_type = b.target_type AND a.target_id = b.target_id;
+
+        -- Apply unique indexes
+        CREATE UNIQUE INDEX IF NOT EXISTS "friend_requests_sender_receiver_unq" ON "friend_requests"("sender_id", "receiver_id");
+        CREATE UNIQUE INDEX IF NOT EXISTS "user_media_user_media_unq" ON "user_media"("user_id", "media_id");
+        CREATE UNIQUE INDEX IF NOT EXISTS "likes_user_target_unq" ON "likes"("user_id", "target_type", "target_id");
       `);
       console.log('[AutoInit] Database tables and indexes verified successfully.');
     } finally {

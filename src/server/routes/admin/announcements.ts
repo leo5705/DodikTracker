@@ -146,7 +146,7 @@ announcementsRouter.post('/announcements', requireAuth, requireStaff('MANAGE_ANN
 
     if (sendTelegram && isPublished && finalIsActive) {
       const severityEmoji = finalPriority === 'CRITICAL' ? '🚨' : finalPriority === 'IMPORTANT' ? '⚠️' : '📢';
-      await notificationService.sendTelegramNotification(
+      notificationService.sendTelegramNotification(
         `${severityEmoji} *${created.title}*\n\n${textBody}`
       );
     }

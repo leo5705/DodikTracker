@@ -47,14 +47,92 @@ import { normalizeNotificationPreferences } from '../types/notification.ts';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import rateLimit from 'express-rate-limit';
+import dns from 'dns';
+import { promisify } from 'util';
+
+const lookupAsync = promisify(dns.lookup);
 
 export const apiRouter = Router();
+
+// ==========================================
+// SYSTEM & HEALTH (No auth required)
+// ==========================================
+import fs from 'fs';
+import path from 'path';
+
+apiRouter.get('/health/live', (req, res) => {
+  res.status(200).json({ status: 'UP' });
+});
+
+apiRouter.get('/health/ready', async (req, res) => {
+  try {
+    await db.execute(sql`SELECT 1`);
+    res.status(200).json({ status: 'UP', database: 'connected' });
+  } catch (error) {
+    res.status(503).json({ status: 'DOWN', database: 'disconnected', error: String(error) });
+  }
+});
+
+apiRouter.get('/system/version', async (req, res) => {
+  try {
+    const manifestPath = path.resolve('release-manifest.json');
+    let manifest = null;
+    if (fs.existsSync(manifestPath)) {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    }
+
+    const { rows: tableExists } = await db.execute(sql`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_name = '__drizzle_migrations'
+      );
+    `);
+
+    let appliedMigrations = 0;
+    if (tableExists[0]?.exists) {
+      const countRes = await db.execute(sql`SELECT count(*) FROM "__drizzle_migrations"`);
+      appliedMigrations = parseInt(countRes[0]?.count || '0', 10);
+    }
+
+    let pendingMigrations = 0;
+    const journalPath = path.resolve('drizzle/meta/_journal.json');
+    if (fs.existsSync(journalPath)) {
+      const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+      pendingMigrations = Math.max(0, (journal.entries?.length || 0) - appliedMigrations);
+    }
+
+    res.status(200).json({
+      appVersion: process.env.APP_VERSION || manifest?.version || '1.0.0',
+      manifest,
+      database: {
+        appliedMigrations,
+        pendingMigrations,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // limit each IP to 20 requests per windowMs
+  message: { error: 'Слишком много попыток входа/регистрации. Попробуйте позже.' }
+});
+
+const messageLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30, // limit each IP to 30 messages per minute
+  message: { error: 'Слишком частая отправка сообщений. Подождите немного.' }
+});
 
 export function setSessionCookie(res: Response, token: string) {
   res.cookie('dodik_session', token, {
     httpOnly: true,
-    secure: true,
-    sameSite: 'none',
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
     path: '/',
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   });
@@ -63,6 +141,8 @@ export function setSessionCookie(res: Response, token: string) {
 export function clearSessionCookie(res: Response) {
   res.clearCookie('dodik_session', {
     httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
     path: '/',
   });
 }
@@ -79,59 +159,101 @@ export function sanitizeUser(user: any) {
 // ==========================================
 // UNIFIED IMAGE PROXY (CORS / Hotlinking bypass)
 // ==========================================
+function isSafeIp(ip: string): boolean {
+  if (ip === '0.0.0.0' || ip === '255.255.255.255' || ip === '127.0.0.1' || ip === '::1') return false;
+  if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('169.254.')) return false;
+  if (ip.startsWith('172.')) {
+    const parts = ip.split('.');
+    if (parts.length > 1) {
+      const second = parseInt(parts[1], 10);
+      if (second >= 16 && second <= 31) return false;
+    }
+  }
+  // IPv6 simplified checks
+  if (ip.includes(':')) {
+    const lower = ip.toLowerCase();
+    if (lower.startsWith('fd') || lower.startsWith('fc') || lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')) return false;
+    // Check IPv6-mapped IPv4
+    if (lower.startsWith('::ffff:')) {
+      const v4Part = lower.substring(7);
+      return isSafeIp(v4Part);
+    }
+  }
+  return true;
+}
+
+async function fetchSafeImage(url: string, depth = 0): Promise<globalThis.Response> {
+  if (depth > 3) throw new Error('Слишком много редиректов');
+  
+  const urlObj = new URL(url);
+  const ips = await lookupAsync(urlObj.hostname, { all: true });
+  for (const record of ips) {
+    if (!isSafeIp(record.address)) {
+      throw new Error('Forbidden IP Address');
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+
+  const res = await fetch(url, {
+    signal: controller.signal,
+    redirect: 'manual',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      Referer: urlObj.origin,
+    },
+  });
+  clearTimeout(timeout);
+
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get('location');
+    if (!location) throw new Error('Redirect without location');
+    const nextUrl = new URL(location, url).toString();
+    return fetchSafeImage(nextUrl, depth + 1);
+  }
+
+  return res;
+}
+
 apiRouter.get('/proxy/image', async (req, res) => {
   const imageUrl = req.query.url as string;
-if (!imageUrl || !imageUrl.startsWith('http')) {
+  if (!imageUrl || !imageUrl.startsWith('http')) {
     return res.status(400).send('Некорректный URL изображения');
   }
   
   try {
-    const urlObj = new URL(imageUrl);
-    const hostname = urlObj.hostname;
-    // Basic SSRF protection
-    if (
-      hostname === 'localhost' || 
-      hostname === '127.0.0.1' || 
-      hostname.startsWith('10.') || 
-      hostname.startsWith('192.168.') || 
-      hostname.startsWith('172.') ||
-      hostname.startsWith('169.254.') ||
-      hostname.includes('::') || 
-      hostname.includes('unix')
-    ) {
-      return res.status(403).send('Доступ к локальным адресам запрещен');
-    }
-  } catch (err) {
-    return res.status(400).send('Невалидный URL');
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 7000);
-
-    const upstreamRes = await fetch(imageUrl, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        Referer: new URL(imageUrl).origin,
-      },
-    });
-    clearTimeout(timeout);
+    const upstreamRes = await fetchSafeImage(imageUrl);
 
     if (!upstreamRes.ok) {
       return res.status(upstreamRes.status).send('Ошибка загрузки удаленного изображения');
     }
 
-    const contentType = upstreamRes.headers.get('content-type') || 'image/jpeg';
+    const contentType = upstreamRes.headers.get('content-type') || '';
+    if (!contentType.startsWith('image/')) {
+      return res.status(400).send('URL не указывает на изображение');
+    }
+
+    const contentLengthStr = upstreamRes.headers.get('content-length');
+    if (contentLengthStr) {
+      const len = parseInt(contentLengthStr, 10);
+      if (len > 15 * 1024 * 1024) { // 15MB limit
+        return res.status(400).send('Изображение слишком большое (лимит 15МБ)');
+      }
+    }
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
 
     const arrayBuffer = await upstreamRes.arrayBuffer();
+    if (arrayBuffer.byteLength > 15 * 1024 * 1024) {
+      return res.status(400).send('Изображение слишком большое');
+    }
+
     return res.send(Buffer.from(arrayBuffer));
-  } catch (_err) {
-    return res.status(502).send('Ошибка проксирования изображения');
+  } catch (err: any) {
+    return res.status(400).send(err.message || 'Ошибка обработки изображения');
   }
 });
 
@@ -325,7 +447,7 @@ apiRouter.put('/admin/registration-mode', requireAuth, requireStaff('MANAGE_SETT
 
 // Register with username & password (+ optional or required invite code)
 // Email is NOT required (Requirements 14)
-apiRouter.post('/auth/register', async (req, res) => {
+apiRouter.post('/auth/register', authLimiter, async (req, res) => {
   try {
     const { username, password, inviteCode } = req.body;
 
@@ -460,7 +582,7 @@ apiRouter.post('/auth/register', async (req, res) => {
 });
 
 // Login with username ONLY & password (Requirement 15)
-apiRouter.post('/auth/login', async (req, res) => {
+apiRouter.post('/auth/login', authLimiter, async (req, res) => {
   try {
     const { login, password } = req.body;
     if (!login || !password) {
@@ -1279,6 +1401,14 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
       statisticsVisibility,
       notificationSettings,
       } = req.body;
+
+    // Validation
+    if (bio && String(bio).length > 500) {
+      return res.status(400).json({ error: 'Биография слишком длинная (максимум 500 символов)' });
+    }
+    if (username && String(username).length > 30) {
+      return res.status(400).json({ error: 'Имя пользователя слишком длинное' });
+    }
 
     // Validate username uniqueness if changed
     if (username && username !== user.username) {
@@ -2255,11 +2385,16 @@ apiRouter.post('/reviews/:id/like', requireAuth, async (req: AuthRequest, res: R
         .where(eq(reviews.id, id));
       return res.json({ liked: false });
     } else {
-      await db.insert(likes).values({
-        userId: user.id,
-        targetType: 'REVIEW',
-        targetId: id,
-      });
+      try {
+        await db.insert(likes).values({
+          userId: user.id,
+          targetType: 'REVIEW',
+          targetId: id,
+        });
+      } catch (err: any) {
+        if (err.code === '23505') return res.json({ liked: true });
+        throw err;
+      }
       await db
         .update(reviews)
         .set({ likesCount: sql`${reviews.likesCount} + 1` })
@@ -2426,17 +2561,27 @@ apiRouter.post('/library', requireAuth, async (req: AuthRequest, res: Response) 
         .where(eq(userMedia.id, existing[0].id))
         .returning();
     } else {
-      [userMediaEntry] = await db
-        .insert(userMedia)
-        .values({
-          userId: user.id,
-          mediaId: targetMediaId,
-          status: defaultStatus,
-          rating: rating || null,
-          isFavorite: !!isFavorite,
-          notes: notes || null,
-        })
-        .returning();
+      try {
+        const [inserted] = await db
+          .insert(userMedia)
+          .values({
+            userId: user.id,
+            mediaId: targetMediaId,
+            status: defaultStatus,
+            rating: rating || null,
+            isFavorite: !!isFavorite,
+            notes: notes || null,
+          })
+          .returning();
+        userMediaEntry = inserted;
+      } catch (err: any) {
+        if (err.code === '23505') { // postgres unique violation
+           const [reExisting] = await db.select().from(userMedia).where(and(eq(userMedia.userId, user.id), eq(userMedia.mediaId, targetMediaId))).limit(1);
+           userMediaEntry = reExisting;
+        } else {
+           throw err;
+        }
+      }
 
       // Log History
       await db.insert(mediaHistory).values({
@@ -2982,11 +3127,18 @@ apiRouter.post('/social/like', requireAuth, async (req: AuthRequest, res: Respon
       await db.delete(likes).where(eq(likes.id, existing[0].id));
       return res.json({ liked: false });
     } else {
-      await db.insert(likes).values({
-        userId: user.id,
-        targetType,
-        targetId,
-      });
+      try {
+        await db.insert(likes).values({
+          userId: user.id,
+          targetType,
+          targetId,
+        });
+      } catch (err: any) {
+        if (err.code === '23505') {
+          return res.json({ liked: true }); // already liked
+        }
+        throw err;
+      }
 
       // Send notification if liking an activity
       if (targetType === 'ACTIVITY') {
@@ -3118,14 +3270,23 @@ apiRouter.post('/friends/request', requireAuth, async (req: AuthRequest, res: Re
       return res.status(400).json({ error: 'Заявка уже существует' });
     }
 
-    const [reqRecord] = await db
-      .insert(friendRequests)
-      .values({
-        senderId: user.id,
-        receiverId: targetUser.id,
-        status: 'PENDING',
-      })
-      .returning();
+    let reqRecord;
+    try {
+      const [inserted] = await db
+        .insert(friendRequests)
+        .values({
+          senderId: user.id,
+          receiverId: targetUser.id,
+          status: 'PENDING',
+        })
+        .returning();
+      reqRecord = inserted;
+    } catch (err: any) {
+      if (err.code === '23505') { // Postgres unique violation
+        return res.status(400).json({ error: 'Заявка уже отправлена' });
+      }
+      throw err;
+    }
 
     // Notification
     await sendAppNotification(targetUser.id, {
@@ -3451,19 +3612,35 @@ apiRouter.get('/users/:username', optionalAuth, async (req: AuthRequest, res: Re
     // Fetch user lists if visible
     let userLists: any[] = [];
     if (canViewLists) {
+      let conditions = [eq(lists.ownerId, profileUser.id)];
+      if (!isOwner) {
+        if (isFriend) {
+          conditions.push(inArray(lists.visibility, ['PUBLIC', 'FRIENDS']));
+        } else {
+          conditions.push(eq(lists.visibility, 'PUBLIC'));
+        }
+      }
       userLists = await db
         .select()
         .from(lists)
-        .where(and(eq(lists.ownerId, profileUser.id), eq(lists.visibility, 'PUBLIC')))
+        .where(and(...conditions))
         .limit(10);
     }
 
     let userTierLists: any[] = [];
     if (canViewLists) {
+      let conditions = [eq(tierLists.ownerId, profileUser.id)];
+      if (!isOwner) {
+        if (isFriend) {
+          conditions.push(inArray(tierLists.visibility, ['PUBLIC', 'FRIENDS']));
+        } else {
+          conditions.push(eq(tierLists.visibility, 'PUBLIC'));
+        }
+      }
       userTierLists = await db
         .select()
         .from(tierLists)
-        .where(and(eq(tierLists.ownerId, profileUser.id), eq(tierLists.visibility, 'PUBLIC')))
+        .where(and(...conditions))
         .limit(10);
     }
 
@@ -3689,67 +3866,75 @@ apiRouter.get('/lists', optionalAuth, async (req: AuthRequest, res: Response) =>
       );
     }
 
-    const enriched = await Promise.all(
-      filtered.map(async (l) => {
-        const items = await db
-          .select({
-            id: listItems.id,
-            mediaId: listItems.mediaId,
-            title: media.title,
-            posterUrl: media.posterUrl,
-            type: media.type,
-          })
-          .from(listItems)
-          .innerJoin(media, eq(listItems.mediaId, media.id))
-          .where(eq(listItems.listId, l.id))
-          .orderBy(listItems.orderIndex)
-          .limit(4);
+    const listIds = filtered.map((l) => l.id);
+    let itemsCounts: Record<number, number> = {};
+    let followersCounts: Record<number, number> = {};
+    let likesCounts: Record<number, number> = {};
+    let isFollowedSet = new Set<number>();
+    let isLikedSet = new Set<number>();
+    let previewItemsMap: Record<number, any[]> = {};
 
-        const totalItemsCount = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(listItems)
-          .where(eq(listItems.listId, l.id));
+    if (listIds.length > 0) {
+      // 1. Batch total items count
+      const allItems = await db.select({ listId: listItems.listId, count: count() })
+        .from(listItems).where(inArray(listItems.listId, listIds)).groupBy(listItems.listId);
+      allItems.forEach(i => itemsCounts[i.listId] = Number(i.count));
 
-        const followersCount = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(listFollowers)
-          .where(eq(listFollowers.listId, l.id));
+      // 2. Batch followers count
+      const allFollowers = await db.select({ listId: listFollowers.listId, count: count() })
+        .from(listFollowers).where(inArray(listFollowers.listId, listIds)).groupBy(listFollowers.listId);
+      allFollowers.forEach(f => followersCounts[f.listId] = Number(f.count));
 
-        const likesCount = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(likes)
-          .where(and(eq(likes.targetType, 'LIST'), eq(likes.targetId, l.id)));
+      // 3. Batch likes count
+      const allLikes = await db.select({ targetId: likes.targetId, count: count() })
+        .from(likes).where(and(eq(likes.targetType, 'LIST'), inArray(likes.targetId, listIds))).groupBy(likes.targetId);
+      allLikes.forEach(l => likesCounts[l.targetId] = Number(l.count));
 
-        let isFollowed = false;
-        let isLiked = false;
+      // 4. Batch user states
+      if (user) {
+        const userFollows = await db.select({ listId: listFollowers.listId }).from(listFollowers)
+          .where(and(eq(listFollowers.userId, user.id), inArray(listFollowers.listId, listIds)));
+        userFollows.forEach(f => isFollowedSet.add(f.listId));
 
-        if (user) {
-          const followRow = await db
-            .select()
-            .from(listFollowers)
-            .where(and(eq(listFollowers.listId, l.id), eq(listFollowers.userId, user.id)))
-            .limit(1);
-          isFollowed = followRow.length > 0;
+        const userLikesList = await db.select({ targetId: likes.targetId }).from(likes)
+          .where(and(eq(likes.userId, user.id), eq(likes.targetType, 'LIST'), inArray(likes.targetId, listIds)));
+        userLikesList.forEach(l => isLikedSet.add(l.targetId));
+      }
 
-          const likeRow = await db
-            .select()
-            .from(likes)
-            .where(and(eq(likes.targetType, 'LIST'), eq(likes.targetId, l.id), eq(likes.userId, user.id)))
-            .limit(1);
-          isLiked = likeRow.length > 0;
-        }
+      // 5. Batch preview items using ROW_NUMBER
+      const previewsQuery = await db.execute(sql`
+        SELECT li.list_id as "listId", li.id, li.media_id as "mediaId", m.title, m.poster_url as "posterUrl", m.type
+        FROM (
+          SELECT id, media_id, list_id, ROW_NUMBER() OVER(PARTITION BY list_id ORDER BY order_index) as rn
+          FROM list_items
+          WHERE list_id = ANY(ARRAY[${sql.join(listIds, sql`,`)}]::int[])
+        ) li
+        INNER JOIN media m ON li.media_id = m.id
+        WHERE li.rn <= 4
+      `);
+      
+      const rows = Array.isArray(previewsQuery) ? previewsQuery : (previewsQuery as any).rows || previewsQuery;
+      rows.forEach((row: any) => {
+        if (!previewItemsMap[row.listId]) previewItemsMap[row.listId] = [];
+        previewItemsMap[row.listId].push({
+          id: row.id,
+          mediaId: row.mediaId,
+          title: row.title,
+          posterUrl: row.posterUrl,
+          type: row.type,
+        });
+      });
+    }
 
-        return {
-          ...l,
-          itemCount: Number(totalItemsCount[0]?.count || 0),
-          previewItems: items,
-          followersCount: Number(followersCount[0]?.count || 0),
-          likesCount: Number(likesCount[0]?.count || 0),
-          isFollowed,
-          isLiked,
-        };
-      })
-    );
+    const enriched = filtered.map((l) => ({
+      ...l,
+      itemCount: itemsCounts[l.id] || 0,
+      previewItems: previewItemsMap[l.id] || [],
+      followersCount: followersCounts[l.id] || 0,
+      likesCount: likesCounts[l.id] || 0,
+      isFollowed: isFollowedSet.has(l.id),
+      isLiked: isLikedSet.has(l.id),
+    }));
 
     if (sort === 'popular') {
       enriched.sort((a, b) => b.likesCount + b.followersCount - (a.likesCount + a.followersCount));
@@ -5356,11 +5541,19 @@ apiRouter.post('/lists/:id/like', requireAuth, async (req: AuthRequest, res: Res
         .where(and(eq(likes.targetType, 'LIST'), eq(likes.targetId, listId)));
       return res.json({ liked: false, likesCount: Number(count[0]?.count || 0) });
     } else {
-      await db.insert(likes).values({
-        targetType: 'LIST',
-        targetId: listId,
-        userId: user.id,
-      });
+      try {
+        await db.insert(likes).values({
+          targetType: 'LIST',
+          targetId: listId,
+          userId: user.id,
+        });
+      } catch (err: any) {
+        if (err.code === '23505') {
+          const count = await db.select({ count: sql<number>`count(*)` }).from(likes).where(and(eq(likes.targetType, 'LIST'), eq(likes.targetId, listId)));
+          return res.json({ liked: true, likesCount: Number(count[0]?.count || 0) });
+        }
+        throw err;
+      }
 
       const count = await db
         .select({ count: sql<number>`count(*)` })
@@ -7007,7 +7200,7 @@ apiRouter.put('/notifications/settings', requireAuth, async (req: AuthRequest, r
 });
 
 // Admin Broadcast Notification
-apiRouter.post('/notifications/admin-broadcast', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+apiRouter.post('/notifications/admin-broadcast', requireAuth, requireStaff('MANAGE_NOTIFICATIONS'), async (req: AuthRequest, res: Response) => {
   try {
     const admin = req.dbUser!;
     const { title, body, link, type, targetUserIds } = req.body;
@@ -7224,7 +7417,7 @@ apiRouter.delete('/messages/:messageId', requireAuth, async (req: AuthRequest, r
 });
 
 // Send direct message
-apiRouter.post('/messages', requireAuth, async (req: AuthRequest, res: Response) => {
+apiRouter.post('/messages', requireAuth, messageLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
     const { receiverId, content } = req.body;

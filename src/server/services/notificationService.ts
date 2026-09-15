@@ -496,23 +496,27 @@ class NotificationService {
     });
   }
 
-  public async sendTelegramNotification(text: string, targetChatId?: string) {
-    try {
-      if (targetChatId) {
-        await telegramBot.sendMessage(targetChatId, text);
-        return;
-      }
-      const tgUsers = await db.select({ chatId: users.telegramChatId }).from(users).where(sql`${users.telegramChatId} IS NOT NULL`);
-      for (const u of tgUsers) {
-        if (u.chatId) {
-          try {
-            await telegramBot.sendMessage(u.chatId, text);
-          } catch (_e) {}
+  public sendTelegramNotification(text: string, targetChatId?: string) {
+    (async () => {
+      try {
+        if (targetChatId) {
+          await telegramBot.sendMessage(targetChatId, text);
+          return;
         }
+        const tgUsers = await db.select({ chatId: users.telegramChatId }).from(users).where(sql`${users.telegramChatId} IS NOT NULL`);
+        for (const u of tgUsers) {
+          if (u.chatId) {
+            try {
+              await telegramBot.sendMessage(u.chatId, text);
+              // Sleep 50ms to respect rate limits
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            } catch (_e) {}
+          }
+        }
+      } catch (err) {
+        console.error('[NotificationService] sendTelegramNotification error:', err);
       }
-    } catch (err) {
-      console.error('[NotificationService] sendTelegramNotification error:', err);
-    }
+    })();
   }
 }
 

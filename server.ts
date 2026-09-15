@@ -5,6 +5,8 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { apiRouter } from './src/server/api.ts';
 import { telegramBot } from './src/server/telegram.ts';
 import { initDbSettings } from './src/server/init.ts';
@@ -20,8 +22,24 @@ async function startServer() {
   const PORT = 3000;
   const httpServer = http.createServer(app);
 
+  // Security Headers (configured to allow Vite in dev and external images)
+  app.use(helmet({
+    contentSecurityPolicy: false, // Disabled to prevent breaking Vite HMR and inline styles/scripts without complex setup
+    crossOriginEmbedderPolicy: false,
+  }));
+
+  // General Rate Limiter (very lenient)
+  const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000, // Limit each IP to 1000 requests per windowMs
+    message: { error: 'Too many requests, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use('/api', generalLimiter);
+
   app.use(cookieParser());
-  app.use(express.json({ limit: '50mb' }));
+  app.use(express.json({ limit: '2mb' }));
 
   // Health check
   app.get('/api/health', (_req, res) => {

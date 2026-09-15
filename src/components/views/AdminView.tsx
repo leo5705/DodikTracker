@@ -31,6 +31,7 @@ import { AdminIntegrationsTab } from '../admin/AdminIntegrationsTab.tsx';
 import { AdminAuditTab } from '../admin/AdminAuditTab.tsx';
 import { AdminSettingsTab } from '../admin/AdminSettingsTab.tsx';
 import { AdminInvitesTab } from '../admin/AdminInvitesTab.tsx';
+import { AdminUpdatesTab } from '../admin/AdminUpdatesTab.tsx';
 
 export type AdminTabType =
   | 'dashboard'
@@ -45,7 +46,8 @@ export type AdminTabType =
   | 'integrations'
   | 'audit'
   | 'invites'
-  | 'settings';
+  | 'settings'
+  | 'updates';
 
 interface TabDefinition {
   id: AdminTabType;
@@ -148,6 +150,12 @@ export const AdminView: React.FC = () => {
         icon: Settings,
         canAccess: isAdmin,
       },
+      {
+        id: 'updates',
+        label: 'Обновления',
+        icon: ShieldCheck, // or Server if it was imported, but ShieldCheck works
+        canAccess: isAdmin,
+      }
     ];
   }, [isStaff, isModerator, isContentManager, isNewsEditor, isAdmin]);
 
@@ -263,6 +271,7 @@ export const AdminView: React.FC = () => {
         {currentTab === 'audit' && <AdminAuditTab />}
         {currentTab === 'invites' && <AdminInvitesTab />}
         {currentTab === 'settings' && <AdminSettingsTab />}
+        {currentTab === 'updates' && <AdminUpdatesTab />}
       </div>
     </div>
   );

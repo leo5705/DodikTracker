@@ -105,7 +105,9 @@ export const userMedia = pgTable('user_media', {
   rewatchCount: integer('rewatch_count').default(0),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
-});
+}, (t) => ({
+  unqUserMedia: uniqueIndex('user_media_user_media_unq').on(t.userId, t.mediaId),
+}));
 
 // 8. Media History Table
 export const mediaHistory = pgTable('media_history', {
@@ -125,7 +127,9 @@ export const friendRequests = pgTable('friend_requests', {
   status: text('status').notNull().default('PENDING'), // PENDING, ACCEPTED, DECLINED, BLOCKED
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
-});
+}, (t) => ({
+  unqRequest: uniqueIndex('friend_requests_sender_receiver_unq').on(t.senderId, t.receiverId),
+}));
 
 // 10. Social Activities Table
 export const activities = pgTable('activities', {
@@ -146,7 +150,9 @@ export const likes = pgTable('likes', {
   targetType: text('target_type').notNull(), // ACTIVITY, LIST, TIERLIST, COMMENT
   targetId: integer('target_id').notNull(),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => ({
+  unqLike: uniqueIndex('likes_user_target_unq').on(t.userId, t.targetType, t.targetId),
+}));
 
 // 12. Comments Table
 export const comments = pgTable('comments', {

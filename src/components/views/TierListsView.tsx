@@ -228,7 +228,7 @@ export const TierListsView: React.FC = () => {
                     <span className="flex items-center gap-1 text-[11px] text-[#9A94AA] font-mono">
                       {tl.visibility === 'PUBLIC' ? (
                         <Globe className="w-3 h-3 text-emerald-400" />
-                      ) : tl.visibility === 'FRIENDS_ONLY' ? (
+                      ) : tl.visibility === 'FRIENDS' ? (
                         <Users className="w-3 h-3 text-amber-400" />
                       ) : (
                         <Lock className="w-3 h-3 text-rose-400" />
@@ -446,9 +446,9 @@ export const TierListsView: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => setVisibility('FRIENDS_ONLY')}
+                    onClick={() => setVisibility('FRIENDS')}
                     className={`flex flex-col items-center justify-center p-3 rounded-2xl border text-center transition-all ${
-                      visibility === 'FRIENDS_ONLY'
+                      visibility === 'FRIENDS'
                         ? 'bg-fuchsia-950/60 border-fuchsia-500 text-white shadow-md'
                         : 'bg-[#191724] border-[#252233] text-[#9A94AA] hover:text-[#F3F1F8]'
                     }`}

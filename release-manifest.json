@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0",
+  "releaseDate": "2026-09-15",
+  "notes": "Initial Release after Full Technical Audit",
+  "changes": {
+    "added": [
+      "Health check endpoints (/health/live, /health/ready)",
+      "Database migrations pipeline (drizzle-kit + runner)",
+      "Update dashboard in Admin panel",
+      "Backup scripts and Update documentation"
+    ],
+    "changed": [
+      "Dodik Tracker architecture secured and optimized"
+    ],
+    "fixed": [
+      "SSRF vulnerabilities in image proxy",
+      "N+1 performance bottlenecks in lists view",
+      "Database unique constraints for likes and friends",
+      "Visibility logic leaks in user profiles",
+      "Telegram blocking HTTP requests via async dispatch"
+    ]
+  },
+  "migrations": ["0000_overconfident_terrax"]
+}

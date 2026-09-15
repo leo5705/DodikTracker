@@ -8,6 +8,9 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "db:init": "tsx src/scripts/initDb.ts",
+    "db:status": "tsx src/scripts/dbStatus.ts",
+    "db:migrate": "tsx src/scripts/migrate.ts",
+    "db:generate": "drizzle-kit generate",
     "make-admin": "tsx src/scripts/makeAdmin.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
@@ -26,8 +29,10 @@
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.7.0",
     "firebase": "^12.19.0",
     "firebase-admin": "^14.4.0",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
@@ -47,7 +52,7 @@
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.13",
     "typescript": "~5.8.2"
   }
 }

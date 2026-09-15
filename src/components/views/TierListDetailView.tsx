@@ -515,7 +515,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
                 <Globe className="w-3 h-3 text-emerald-400" />
                 <span>Публичный</span>
               </>
-            ) : tierList.visibility === 'FRIENDS_ONLY' ? (
+            ) : tierList.visibility === 'FRIENDS' ? (
               <>
                 <Users className="w-3 h-3 text-amber-400" />
                 <span>Для друзей</span>

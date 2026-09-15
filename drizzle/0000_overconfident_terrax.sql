@@ -1,4 +1,4 @@
-CREATE TABLE "achievement_history" (
+CREATE TABLE IF NOT EXISTS "achievement_history" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"achievement_id" integer NOT NULL,
 	"user_id" integer NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE "achievement_history" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "achievements" (
+CREATE TABLE IF NOT EXISTS "achievements" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"slug" text NOT NULL,
 	"title" text NOT NULL,
@@ -29,7 +29,7 @@ CREATE TABLE "achievements" (
 	CONSTRAINT "achievements_slug_unique" UNIQUE("slug")
 );
 --> statement-breakpoint
-CREATE TABLE "activities" (
+CREATE TABLE IF NOT EXISTS "activities" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"type" text NOT NULL,
@@ -40,7 +40,7 @@ CREATE TABLE "activities" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "admin_audit_logs" (
+CREATE TABLE IF NOT EXISTS "admin_audit_logs" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer,
 	"action" text NOT NULL,
@@ -49,7 +49,7 @@ CREATE TABLE "admin_audit_logs" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "api_logs" (
+CREATE TABLE IF NOT EXISTS "api_logs" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"provider" text NOT NULL,
 	"endpoint" text NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE "api_logs" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "comments" (
+CREATE TABLE IF NOT EXISTS "comments" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"target_type" text NOT NULL,
@@ -70,7 +70,7 @@ CREATE TABLE "comments" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "episodes" (
+CREATE TABLE IF NOT EXISTS "episodes" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"season_id" integer NOT NULL,
 	"episode_number" integer NOT NULL,
@@ -78,7 +78,7 @@ CREATE TABLE "episodes" (
 	"air_date" text
 );
 --> statement-breakpoint
-CREATE TABLE "friend_requests" (
+CREATE TABLE IF NOT EXISTS "friend_requests" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"sender_id" integer NOT NULL,
 	"receiver_id" integer NOT NULL,
@@ -87,7 +87,7 @@ CREATE TABLE "friend_requests" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "game_translations" (
+CREATE TABLE IF NOT EXISTS "game_translations" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"provider" text NOT NULL,
 	"external_id" text NOT NULL,
@@ -101,7 +101,7 @@ CREATE TABLE "game_translations" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "invite_codes" (
+CREATE TABLE IF NOT EXISTS "invite_codes" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"code" text NOT NULL,
 	"creator_id" integer,
@@ -112,7 +112,7 @@ CREATE TABLE "invite_codes" (
 	CONSTRAINT "invite_codes_code_unique" UNIQUE("code")
 );
 --> statement-breakpoint
-CREATE TABLE "likes" (
+CREATE TABLE IF NOT EXISTS "likes" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"target_type" text NOT NULL,
@@ -120,14 +120,14 @@ CREATE TABLE "likes" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "list_followers" (
+CREATE TABLE IF NOT EXISTS "list_followers" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"list_id" integer NOT NULL,
 	"user_id" integer NOT NULL,
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "list_items" (
+CREATE TABLE IF NOT EXISTS "list_items" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"list_id" integer NOT NULL,
 	"media_id" integer NOT NULL,
@@ -137,7 +137,7 @@ CREATE TABLE "list_items" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "list_members" (
+CREATE TABLE IF NOT EXISTS "list_members" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"list_id" integer NOT NULL,
 	"user_id" integer NOT NULL,
@@ -145,7 +145,7 @@ CREATE TABLE "list_members" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "lists" (
+CREATE TABLE IF NOT EXISTS "lists" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"title" text NOT NULL,
 	"description" text,
@@ -157,7 +157,7 @@ CREATE TABLE "lists" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "media" (
+CREATE TABLE IF NOT EXISTS "media" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"type" text NOT NULL,
 	"title" text NOT NULL,
@@ -176,14 +176,14 @@ CREATE TABLE "media" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "media_external_ids" (
+CREATE TABLE IF NOT EXISTS "media_external_ids" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"media_id" integer NOT NULL,
 	"provider" text NOT NULL,
 	"external_id" text NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "media_history" (
+CREATE TABLE IF NOT EXISTS "media_history" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"media_id" integer NOT NULL,
@@ -192,7 +192,7 @@ CREATE TABLE "media_history" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "notifications" (
+CREATE TABLE IF NOT EXISTS "notifications" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"type" text NOT NULL,
@@ -206,7 +206,7 @@ CREATE TABLE "notifications" (
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "password_reset_tokens" (
+CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"token_hash" text NOT NULL,
@@ -216,7 +216,7 @@ CREATE TABLE "password_reset_tokens" (
 	CONSTRAINT "password_reset_tokens_token_hash_unique" UNIQUE("token_hash")
 );
 --> statement-breakpoint
-CREATE TABLE "reviews" (
+CREATE TABLE IF NOT EXISTS "reviews" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"media_id" integer NOT NULL,
@@ -229,7 +229,7 @@ CREATE TABLE "reviews" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "seasons" (
+CREATE TABLE IF NOT EXISTS "seasons" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"media_id" integer NOT NULL,
 	"season_number" integer NOT NULL,
@@ -237,7 +237,7 @@ CREATE TABLE "seasons" (
 	"episode_count" integer DEFAULT 0
 );
 --> statement-breakpoint
-CREATE TABLE "system_integrations" (
+CREATE TABLE IF NOT EXISTS "system_integrations" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"provider" text NOT NULL,
 	"enabled" boolean DEFAULT false NOT NULL,
@@ -251,7 +251,7 @@ CREATE TABLE "system_integrations" (
 	CONSTRAINT "system_integrations_provider_unique" UNIQUE("provider")
 );
 --> statement-breakpoint
-CREATE TABLE "system_settings" (
+CREATE TABLE IF NOT EXISTS "system_settings" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"key" text NOT NULL,
 	"value" text NOT NULL,
@@ -260,7 +260,7 @@ CREATE TABLE "system_settings" (
 	CONSTRAINT "system_settings_key_unique" UNIQUE("key")
 );
 --> statement-breakpoint
-CREATE TABLE "tier_lists" (
+CREATE TABLE IF NOT EXISTS "tier_lists" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"title" text NOT NULL,
 	"description" text,
@@ -273,7 +273,7 @@ CREATE TABLE "tier_lists" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "user_achievements" (
+CREATE TABLE IF NOT EXISTS "user_achievements" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"achievement_id" integer NOT NULL,
@@ -288,7 +288,7 @@ CREATE TABLE "user_achievements" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "user_episodes" (
+CREATE TABLE IF NOT EXISTS "user_episodes" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"episode_id" integer NOT NULL,
@@ -296,7 +296,7 @@ CREATE TABLE "user_episodes" (
 	"watched_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "user_media" (
+CREATE TABLE IF NOT EXISTS "user_media" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
 	"media_id" integer NOT NULL,
@@ -313,7 +313,7 @@ CREATE TABLE "user_media" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "users" (
+CREATE TABLE IF NOT EXISTS "users" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"uid" text NOT NULL,
 	"email" text,
@@ -380,17 +380,17 @@ ALTER TABLE "user_episodes" ADD CONSTRAINT "user_episodes_user_id_users_id_fk" F
 ALTER TABLE "user_episodes" ADD CONSTRAINT "user_episodes_episode_id_episodes_id_fk" FOREIGN KEY ("episode_id") REFERENCES "public"."episodes"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_media" ADD CONSTRAINT "user_media_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_media" ADD CONSTRAINT "user_media_media_id_media_id_fk" FOREIGN KEY ("media_id") REFERENCES "public"."media"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "achievement_history_user_id_idx" ON "achievement_history" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "achievement_history_achievement_id_idx" ON "achievement_history" USING btree ("achievement_id");--> statement-breakpoint
-CREATE INDEX "achievement_history_action_idx" ON "achievement_history" USING btree ("action");--> statement-breakpoint
-CREATE INDEX "achievements_slug_idx" ON "achievements" USING btree ("slug");--> statement-breakpoint
-CREATE INDEX "achievements_status_idx" ON "achievements" USING btree ("status");--> statement-breakpoint
-CREATE INDEX "achievements_condition_type_idx" ON "achievements" USING btree ("condition_type");--> statement-breakpoint
-CREATE UNIQUE INDEX "list_items_list_id_media_id_unq" ON "list_items" USING btree ("list_id","media_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "list_members_list_id_user_id_unq" ON "list_members" USING btree ("list_id","user_id");--> statement-breakpoint
-CREATE INDEX "notifications_user_id_idx" ON "notifications" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "notifications_is_read_idx" ON "notifications" USING btree ("is_read");--> statement-breakpoint
-CREATE INDEX "notifications_type_idx" ON "notifications" USING btree ("type");--> statement-breakpoint
-CREATE UNIQUE INDEX "user_achievements_user_id_achievement_id_unq" ON "user_achievements" USING btree ("user_id","achievement_id");--> statement-breakpoint
-CREATE INDEX "user_achievements_user_id_idx" ON "user_achievements" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "user_achievements_achievement_id_idx" ON "user_achievements" USING btree ("achievement_id");
+CREATE INDEX IF NOT EXISTS "achievement_history_user_id_idx" ON "achievement_history" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "achievement_history_achievement_id_idx" ON "achievement_history" USING btree ("achievement_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "achievement_history_action_idx" ON "achievement_history" USING btree ("action");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "achievements_slug_idx" ON "achievements" USING btree ("slug");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "achievements_status_idx" ON "achievements" USING btree ("status");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "achievements_condition_type_idx" ON "achievements" USING btree ("condition_type");--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "list_items_list_id_media_id_unq" ON "list_items" USING btree ("list_id","media_id");--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "list_members_list_id_user_id_unq" ON "list_members" USING btree ("list_id","user_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "notifications_user_id_idx" ON "notifications" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "notifications_is_read_idx" ON "notifications" USING btree ("is_read");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "notifications_type_idx" ON "notifications" USING btree ("type");--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "user_achievements_user_id_achievement_id_unq" ON "user_achievements" USING btree ("user_id","achievement_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "user_achievements_user_id_idx" ON "user_achievements" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "user_achievements_achievement_id_idx" ON "user_achievements" USING btree ("achievement_id");

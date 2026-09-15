@@ -330,12 +330,12 @@ export const ListsView: React.FC = () => {
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#1F1C2E] text-[#AC82FF] border border-[#3A344E] font-mono flex items-center gap-1">
                             {lst.visibility === 'PUBLIC' ? (
                               <Globe className="w-3 h-3 text-emerald-400" />
-                            ) : lst.visibility === 'FRIENDS' || lst.visibility === 'FRIENDS_ONLY' ? (
+                            ) : lst.visibility === 'FRIENDS' || lst.visibility === 'FRIENDS' ? (
                               <Users className="w-3 h-3 text-amber-400" />
                             ) : (
                               <Lock className="w-3 h-3 text-rose-400" />
                             )}
-                            {lst.visibility === 'PUBLIC' ? 'Публичный' : (lst.visibility === 'FRIENDS' || lst.visibility === 'FRIENDS_ONLY') ? 'Для друзей' : 'Приватный'}
+                            {lst.visibility === 'PUBLIC' ? 'Публичный' : (lst.visibility === 'FRIENDS' || lst.visibility === 'FRIENDS') ? 'Для друзей' : 'Приватный'}
                           </span>
 
                           {isCollaborator && (

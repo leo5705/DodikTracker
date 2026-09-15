@@ -561,7 +561,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                 <Globe className="w-3 h-3 text-emerald-400" />
                 <span>Публичный</span>
               </>
-            ) : listData.visibility === 'FRIENDS' || listData.visibility === 'FRIENDS_ONLY' ? (
+            ) : listData.visibility === 'FRIENDS' || listData.visibility === 'FRIENDS' ? (
               <>
                 <Users className="w-3 h-3 text-amber-400" />
                 <span>Для друзей</span>
