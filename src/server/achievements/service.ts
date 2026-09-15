@@ -6,6 +6,7 @@ import {
   achievementHistory,
   adminAuditLogs,
   users,
+  activities,
 } from '../../db/schema.ts';
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import {
@@ -290,14 +291,37 @@ export class AchievementService {
       createdAt: now,
     });
 
-    // 3. Create System Notification for user
+    // 3. Create System Notification for user & Social Activity
     const [ach] = await db
-      .select({ title: achievements.title, description: achievements.description })
+      .select({
+        id: achievements.id,
+        title: achievements.title,
+        description: achievements.description,
+        icon: achievements.icon,
+        rarity: achievements.rarity,
+        points: achievements.points,
+      })
       .from(achievements)
       .where(eq(achievements.id, achievementId))
       .limit(1);
 
     if (ach) {
+      // Social Activity Feed event
+      await db.insert(activities).values({
+        userId,
+        type: 'ACHIEVEMENT_UNLOCKED',
+        details: JSON.stringify({
+          achievementId: ach.id,
+          title: ach.title,
+          description: ach.description,
+          icon: ach.icon || 'Trophy',
+          rarity: ach.rarity,
+          points: ach.points,
+        }),
+      }).catch((err) => {
+        console.warn('[Achievements] Activity insert error:', err);
+      });
+
       sendAppNotification(userId, {
         type: 'ACHIEVEMENT_UNLOCKED',
         title: '🏆 Достижение разблокировано!',

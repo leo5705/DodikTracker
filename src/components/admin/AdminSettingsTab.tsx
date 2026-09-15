@@ -57,13 +57,16 @@ export const AdminSettingsTab: React.FC = () => {
 
     try {
       const res = await authFetch('/api/admin/settings', {
-        method: 'POST',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Ошибка сохранения настроек');
 
+      if (data.settings) {
+        setSettings(data.settings);
+      }
       setSuccess('Настройки системы успешно сохранены и применены!');
       setTimeout(() => setSuccess(null), 4000);
     } catch (err: any) {

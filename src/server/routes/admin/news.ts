@@ -29,7 +29,7 @@ function slugify(text: string): string {
 newsRouter.get('/news', requireAuth, requireStaff('MANAGE_NEWS'), async (req: AuthRequest, res: Response) => {
   try {
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10));
-    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '20'), 10)));
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10)));
     const offset = (page - 1) * limit;
 
     const statusFilter = (req.query.status as string || 'ALL').toUpperCase();
@@ -54,6 +54,7 @@ newsRouter.get('/news', requireAuth, requireStaff('MANAGE_NEWS'), async (req: Au
         slug: news.slug,
         title: news.title,
         excerpt: news.excerpt,
+        content: news.content,
         cover: news.cover,
         tags: news.tags,
         status: news.status,
@@ -64,7 +65,9 @@ newsRouter.get('/news', requireAuth, requireStaff('MANAGE_NEWS'), async (req: Au
         viewsCount: news.viewsCount,
         createdAt: news.createdAt,
         updatedAt: news.updatedAt,
+        authorId: news.authorId,
         authorUsername: users.username,
+        authorAvatar: users.avatar,
       })
       .from(news)
       .leftJoin(users, eq(news.authorId, users.id))
@@ -90,7 +93,32 @@ newsRouter.get('/news', requireAuth, requireStaff('MANAGE_NEWS'), async (req: Au
 newsRouter.get('/news/:id', requireAuth, requireStaff('MANAGE_NEWS'), async (req: AuthRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const [article] = await db.select().from(news).where(eq(news.id, id)).limit(1);
+    const [article] = await db
+      .select({
+        id: news.id,
+        slug: news.slug,
+        title: news.title,
+        excerpt: news.excerpt,
+        content: news.content,
+        cover: news.cover,
+        tags: news.tags,
+        status: news.status,
+        isPinned: news.isPinned,
+        isFeatured: news.isFeatured,
+        publishedAt: news.publishedAt,
+        scheduledAt: news.scheduledAt,
+        viewsCount: news.viewsCount,
+        createdAt: news.createdAt,
+        updatedAt: news.updatedAt,
+        authorId: news.authorId,
+        authorUsername: users.username,
+        authorAvatar: users.avatar,
+      })
+      .from(news)
+      .leftJoin(users, eq(news.authorId, users.id))
+      .where(eq(news.id, id))
+      .limit(1);
+
     if (!article) {
       return res.status(404).json({ error: 'Новость не найдена' });
     }
@@ -109,12 +137,14 @@ newsRouter.post('/news', requireAuth, requireStaff('MANAGE_NEWS'), async (req: A
       excerpt,
       content,
       cover,
+      coverImage,
       tags,
       status,
       isPinned,
       isFeatured,
       scheduledAt,
       broadcastNotification,
+      sendNotification,
     } = req.body;
     const actor = req.dbUser!;
 
@@ -129,9 +159,21 @@ newsRouter.post('/news', requireAuth, requireStaff('MANAGE_NEWS'), async (req: A
       finalSlug = `${finalSlug}-${Math.floor(Math.random() * 899 + 100)}`;
     }
 
-    const currentStatus = status || 'DRAFT';
+    const currentStatus = (status || 'DRAFT').toUpperCase();
     const isPublished = currentStatus === 'PUBLISHED';
     const publishedAt = isPublished ? new Date() : null;
+    const finalCover = cover || coverImage || null;
+
+    let finalTags = '[]';
+    if (Array.isArray(tags)) {
+      finalTags = JSON.stringify(tags.map(t => String(t).trim()).filter(Boolean));
+    } else if (typeof tags === 'string') {
+      if (tags.startsWith('[') && tags.endsWith(']')) {
+        finalTags = tags;
+      } else {
+        finalTags = JSON.stringify(tags.split(',').map(t => t.trim()).filter(Boolean));
+      }
+    }
 
     const [created] = await db
       .insert(news)
@@ -140,12 +182,12 @@ newsRouter.post('/news', requireAuth, requireStaff('MANAGE_NEWS'), async (req: A
         title: title.trim(),
         excerpt: excerpt ? excerpt.trim() : null,
         content: content.trim(),
-        cover: cover || null,
+        cover: finalCover,
         authorId: actor.id,
-        tags: Array.isArray(tags) ? JSON.stringify(tags) : typeof tags === 'string' ? tags : '[]',
+        tags: finalTags,
         status: currentStatus,
-        isPinned: !!isPinned,
-        isFeatured: !!isFeatured,
+        isPinned: Boolean(isPinned),
+        isFeatured: Boolean(isFeatured),
         publishedAt,
         scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
       })
@@ -154,11 +196,12 @@ newsRouter.post('/news', requireAuth, requireStaff('MANAGE_NEWS'), async (req: A
     await logAdminAction({
       userId: actor.id,
       action: 'CREATE_NEWS',
-      details: `Создана новость: «${created.title}» (${created.status})`,
+      details: `Создана новость #${created.id}: «${created.title}» (${created.status})`,
       ip: req.ip,
     });
 
-    if (broadcastNotification && isPublished) {
+    const shouldNotify = Boolean(broadcastNotification ?? sendNotification);
+    if (shouldNotify && isPublished) {
       await notificationService.broadcastNotification({
         type: 'SYSTEM',
         title: `📢 Новая публикация: ${created.title}`,
@@ -184,12 +227,15 @@ newsRouter.put('/news/:id', requireAuth, requireStaff('MANAGE_NEWS'), async (req
       excerpt,
       content,
       cover,
+      coverImage,
       tags,
       status,
       isPinned,
       isFeatured,
       scheduledAt,
+      publishedAt: customPublishedAt,
       broadcastNotification,
+      sendNotification,
     } = req.body;
     const actor = req.dbUser!;
 
@@ -211,9 +257,33 @@ newsRouter.put('/news/:id', requireAuth, requireStaff('MANAGE_NEWS'), async (req
       }
     }
 
+    const newStatus = status ? status.toUpperCase() : existing.status;
     const wasPublished = existing.status === 'PUBLISHED';
-    const willBePublished = status === 'PUBLISHED';
-    const publishedAt = willBePublished && !wasPublished ? new Date() : existing.publishedAt;
+    const willBePublished = newStatus === 'PUBLISHED';
+
+    let publishedAt = existing.publishedAt;
+    if (customPublishedAt !== undefined) {
+      publishedAt = customPublishedAt ? new Date(customPublishedAt) : null;
+    } else if (willBePublished && !wasPublished) {
+      publishedAt = new Date();
+    } else if (!willBePublished && newStatus !== 'SCHEDULED') {
+      // If unpublished / archived, keep or reset
+    }
+
+    const finalCover = cover !== undefined ? cover : (coverImage !== undefined ? coverImage : existing.cover);
+
+    let finalTags = existing.tags;
+    if (tags !== undefined) {
+      if (Array.isArray(tags)) {
+        finalTags = JSON.stringify(tags.map(t => String(t).trim()).filter(Boolean));
+      } else if (typeof tags === 'string') {
+        if (tags.startsWith('[') && tags.endsWith(']')) {
+          finalTags = tags;
+        } else {
+          finalTags = JSON.stringify(tags.split(',').map(t => t.trim()).filter(Boolean));
+        }
+      }
+    }
 
     const [updated] = await db
       .update(news)
@@ -222,11 +292,11 @@ newsRouter.put('/news/:id', requireAuth, requireStaff('MANAGE_NEWS'), async (req
         slug: finalSlug,
         excerpt: excerpt !== undefined ? (excerpt ? excerpt.trim() : null) : existing.excerpt,
         content: content !== undefined ? content.trim() : existing.content,
-        cover: cover !== undefined ? cover : existing.cover,
-        tags: tags !== undefined ? (Array.isArray(tags) ? JSON.stringify(tags) : tags) : existing.tags,
-        status: status || existing.status,
-        isPinned: isPinned !== undefined ? !!isPinned : existing.isPinned,
-        isFeatured: isFeatured !== undefined ? !!isFeatured : existing.isFeatured,
+        cover: finalCover,
+        tags: finalTags,
+        status: newStatus,
+        isPinned: isPinned !== undefined ? Boolean(isPinned) : existing.isPinned,
+        isFeatured: isFeatured !== undefined ? Boolean(isFeatured) : existing.isFeatured,
         publishedAt,
         scheduledAt: scheduledAt !== undefined ? (scheduledAt ? new Date(scheduledAt) : null) : existing.scheduledAt,
         updatedAt: new Date(),
@@ -241,7 +311,8 @@ newsRouter.put('/news/:id', requireAuth, requireStaff('MANAGE_NEWS'), async (req
       ip: req.ip,
     });
 
-    if (broadcastNotification && willBePublished && !wasPublished) {
+    const shouldNotify = Boolean(broadcastNotification ?? sendNotification);
+    if (shouldNotify && willBePublished && !wasPublished) {
       await notificationService.broadcastNotification({
         type: 'SYSTEM',
         title: `📢 Новая публикация: ${updated.title}`,
@@ -257,7 +328,49 @@ newsRouter.put('/news/:id', requireAuth, requireStaff('MANAGE_NEWS'), async (req
   }
 });
 
-// 5. Admin Delete News Article
+// 5. Admin Quick Change Status (Publish / Unpublish / Draft / Archive)
+newsRouter.patch('/news/:id/status', requireAuth, requireStaff('MANAGE_NEWS'), async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { status } = req.body;
+    if (!status) {
+      return res.status(400).json({ error: 'Укажите новый статус' });
+    }
+
+    const [existing] = await db.select().from(news).where(eq(news.id, id)).limit(1);
+    if (!existing) {
+      return res.status(404).json({ error: 'Новость не найдена' });
+    }
+
+    const normalizedStatus = status.toUpperCase();
+    const willBePublished = normalizedStatus === 'PUBLISHED';
+    const publishedAt = willBePublished ? (existing.publishedAt || new Date()) : existing.publishedAt;
+
+    const [updated] = await db
+      .update(news)
+      .set({
+        status: normalizedStatus,
+        publishedAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(news.id, id))
+      .returning();
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: 'UPDATE_NEWS_STATUS',
+      details: `Изменён статус новости #${id} («${existing.title}») на ${normalizedStatus}`,
+      ip: req.ip,
+    });
+
+    res.json(updated);
+  } catch (err: any) {
+    console.error('[News] Status change error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Admin Delete News Article
 newsRouter.delete('/news/:id', requireAuth, requireStaff('MANAGE_NEWS'), async (req: AuthRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -288,7 +401,7 @@ newsRouter.delete('/news/:id', requireAuth, requireStaff('MANAGE_NEWS'), async (
 
 export const publicNewsRouter = Router();
 
-// Public list of published news
+// Public list of published news only
 publicNewsRouter.get('/news', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10));
@@ -298,6 +411,7 @@ publicNewsRouter.get('/news', async (req, res) => {
     const tagFilter = req.query.tag as string;
     const searchQuery = (req.query.q as string || '').trim();
 
+    // STRICT CHECK: Only PUBLISHED articles where scheduledAt is null or in the past
     const conditions: any[] = [
       eq(news.status, 'PUBLISHED'),
       or(sql`${news.scheduledAt} IS NULL`, sql`${news.scheduledAt} <= NOW()`),
@@ -321,11 +435,15 @@ publicNewsRouter.get('/news', async (req, res) => {
         slug: news.slug,
         title: news.title,
         excerpt: news.excerpt,
+        content: news.content,
         cover: news.cover,
         tags: news.tags,
+        status: news.status,
         isPinned: news.isPinned,
         isFeatured: news.isFeatured,
         publishedAt: news.publishedAt,
+        createdAt: news.createdAt,
+        updatedAt: news.updatedAt,
         viewsCount: news.viewsCount,
         authorUsername: users.username,
         authorAvatar: users.avatar,
@@ -333,7 +451,7 @@ publicNewsRouter.get('/news', async (req, res) => {
       .from(news)
       .leftJoin(users, eq(news.authorId, users.id))
       .where(whereClause)
-      .orderBy(desc(news.isPinned), desc(news.publishedAt))
+      .orderBy(desc(news.isPinned), desc(news.publishedAt), desc(news.createdAt))
       .limit(limit)
       .offset(offset);
 
@@ -350,10 +468,16 @@ publicNewsRouter.get('/news', async (req, res) => {
   }
 });
 
-// Public single article by slug
+// Public single article by slug or ID
 publicNewsRouter.get('/news/:slug', async (req, res) => {
   try {
     const slug = req.params.slug;
+    const isNumeric = /^\d+$/.test(slug);
+
+    const condition = isNumeric
+      ? and(eq(news.id, parseInt(slug, 10)), eq(news.status, 'PUBLISHED'), or(sql`${news.scheduledAt} IS NULL`, sql`${news.scheduledAt} <= NOW()`))
+      : and(eq(news.slug, slug), eq(news.status, 'PUBLISHED'), or(sql`${news.scheduledAt} IS NULL`, sql`${news.scheduledAt} <= NOW()`));
+
     const [article] = await db
       .select({
         id: news.id,
@@ -363,20 +487,23 @@ publicNewsRouter.get('/news/:slug', async (req, res) => {
         content: news.content,
         cover: news.cover,
         tags: news.tags,
+        status: news.status,
         isPinned: news.isPinned,
         isFeatured: news.isFeatured,
         publishedAt: news.publishedAt,
+        createdAt: news.createdAt,
+        updatedAt: news.updatedAt,
         viewsCount: news.viewsCount,
         authorUsername: users.username,
         authorAvatar: users.avatar,
       })
       .from(news)
       .leftJoin(users, eq(news.authorId, users.id))
-      .where(and(eq(news.slug, slug), eq(news.status, 'PUBLISHED')))
+      .where(condition)
       .limit(1);
 
     if (!article) {
-      return res.status(404).json({ error: 'Статья не найдена' });
+      return res.status(404).json({ error: 'Статья не найдена или не опубликована' });
     }
 
     // Increment views count asynchronously

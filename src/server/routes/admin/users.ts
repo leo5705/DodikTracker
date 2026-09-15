@@ -13,6 +13,7 @@ import {
   reports,
   adminAuditLogs,
   passwordResetTokens,
+  inviteCodes,
 } from '../../../db/schema.ts';
 import { eq, or, and, sql, desc, ilike, count, inArray } from 'drizzle-orm';
 import { logAdminAction } from './auditHelper.ts';
@@ -34,22 +35,34 @@ usersRouter.get('/users', requireAuth, requireStaff('MANAGE_USERS'), async (req:
     const conditions: any[] = [];
 
     if (searchQuery) {
-      conditions.push(
-        or(
-          ilike(users.username, `%${searchQuery}%`),
-          ilike(users.email, `%${searchQuery}%`)
-        )
-      );
+      const isNum = /^\d+$/.test(searchQuery.replace('#', ''));
+      const numId = isNum ? parseInt(searchQuery.replace('#', ''), 10) : null;
+
+      const searchConditions = [
+        ilike(users.username, `%${searchQuery}%`),
+        ilike(users.email, `%${searchQuery}%`),
+        ilike(users.telegramUsername, `%${searchQuery}%`),
+      ];
+
+      if (numId !== null) {
+        searchConditions.push(eq(users.id, numId));
+      }
+
+      conditions.push(or(...searchConditions));
     }
 
     if (roleFilter !== 'ALL') {
-      conditions.push(eq(users.role, roleFilter));
+      if (roleFilter === 'STAFF') {
+        conditions.push(inArray(users.role, ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR']));
+      } else {
+        conditions.push(eq(users.role, roleFilter));
+      }
     }
 
     if (statusFilter === 'BLOCKED') {
       conditions.push(eq(users.isBlocked, true));
     } else if (statusFilter === 'TEMP_BANNED') {
-      conditions.push(sql`${users.bannedUntil} > NOW()`);
+      conditions.push(and(eq(users.isBlocked, false), sql`${users.bannedUntil} > NOW()`));
     } else if (statusFilter === 'ACTIVE') {
       conditions.push(and(eq(users.isBlocked, false), or(sql`${users.bannedUntil} IS NULL`, sql`${users.bannedUntil} <= NOW()`)));
     }
@@ -76,8 +89,30 @@ usersRouter.get('/users', requireAuth, requireStaff('MANAGE_USERS'), async (req:
         telegramChatId: users.telegramChatId,
         telegramUsername: users.telegramUsername,
         createdAt: users.createdAt,
-        mediaCount: sql<number>`COALESCE((SELECT COUNT(*) FROM user_media WHERE user_media.user_id = ${users.id}), 0)::int`,
-        reviewsCount: sql<number>`COALESCE((SELECT COUNT(*) FROM reviews WHERE reviews.user_id = ${users.id}), 0)::int`,
+        mediaCount: sql<number>`COALESCE((SELECT COUNT(*) FROM user_media WHERE user_media.user_id = "users"."id"), 0)::int`,
+        reviewsCount: sql<number>`COALESCE((SELECT COUNT(*) FROM reviews WHERE reviews.user_id = "users"."id"), 0)::int`,
+        invitedByUserId: sql<number | null>`(
+          SELECT ic.creator_id FROM invite_codes ic WHERE ic.used_by_id = "users"."id" LIMIT 1
+        )`,
+        invitedByUsername: sql<string | null>`(
+          SELECT u_inv.username FROM invite_codes ic 
+          LEFT JOIN users u_inv ON u_inv.id = ic.creator_id 
+          WHERE ic.used_by_id = "users"."id" LIMIT 1
+        )`,
+        invitedByAvatar: sql<string | null>`(
+          SELECT u_inv.avatar FROM invite_codes ic 
+          LEFT JOIN users u_inv ON u_inv.id = ic.creator_id 
+          WHERE ic.used_by_id = "users"."id" LIMIT 1
+        )`,
+        usedInviteCode: sql<string | null>`(
+          SELECT ic.code FROM invite_codes ic WHERE ic.used_by_id = "users"."id" LIMIT 1
+        )`,
+        usedInviteDate: sql<string | null>`(
+          SELECT ic.used_at::text FROM invite_codes ic WHERE ic.used_by_id = "users"."id" LIMIT 1
+        )`,
+        invitedUsersCount: sql<number>`COALESCE((
+          SELECT COUNT(*) FROM invite_codes ic WHERE ic.creator_id = "users"."id" AND ic.is_used = true AND ic.used_by_id IS NOT NULL
+        ), 0)::int`,
       })
       .from(users)
       .where(whereClause)
@@ -133,6 +168,78 @@ usersRouter.get('/users/:id', requireAuth, requireStaff('MANAGE_USERS'), async (
       .select({ val: count() })
       .from(friendRequests)
       .where(and(or(eq(friendRequests.senderId, id), eq(friendRequests.receiverId, id)), eq(friendRequests.status, 'ACCEPTED')));
+
+    // 1. Who invited this user (inviter data & invite code used)
+    const [usedInviteRecord] = await db
+      .select({
+        code: inviteCodes.code,
+        creatorId: inviteCodes.creatorId,
+        createdAt: inviteCodes.createdAt,
+        usedAt: inviteCodes.usedAt,
+        creatorUsername: users.username,
+        creatorEmail: users.email,
+        creatorAvatar: users.avatar,
+        creatorRole: users.role,
+        creatorIsBlocked: users.isBlocked,
+        creatorBannedUntil: users.bannedUntil,
+      })
+      .from(inviteCodes)
+      .leftJoin(users, eq(inviteCodes.creatorId, users.id))
+      .where(eq(inviteCodes.usedById, id))
+      .limit(1);
+
+    const invitedBy = usedInviteRecord
+      ? {
+          inviteCode: usedInviteRecord.code,
+          inviteCreatedAt: usedInviteRecord.createdAt,
+          inviteUsedAt: usedInviteRecord.usedAt,
+          isSystemInvite: !usedInviteRecord.creatorId,
+          inviter: usedInviteRecord.creatorId
+            ? {
+                id: usedInviteRecord.creatorId,
+                username: usedInviteRecord.creatorUsername,
+                email: usedInviteRecord.creatorEmail,
+                avatar: usedInviteRecord.creatorAvatar,
+                role: usedInviteRecord.creatorRole,
+                isBlocked: usedInviteRecord.creatorIsBlocked,
+                bannedUntil: usedInviteRecord.creatorBannedUntil,
+              }
+            : null,
+        }
+      : null;
+
+    // 2. Who was invited by this user (all users registered through their codes)
+    const invitedUsers = await db
+      .select({
+        id: users.id,
+        username: users.username,
+        email: users.email,
+        avatar: users.avatar,
+        role: users.role,
+        isBlocked: users.isBlocked,
+        bannedUntil: users.bannedUntil,
+        warningCount: users.warningCount,
+        createdAt: users.createdAt,
+        inviteCode: inviteCodes.code,
+        inviteCreatedAt: inviteCodes.createdAt,
+        inviteUsedAt: inviteCodes.usedAt,
+      })
+      .from(inviteCodes)
+      .innerJoin(users, eq(inviteCodes.usedById, users.id))
+      .where(and(eq(inviteCodes.creatorId, id), eq(inviteCodes.isUsed, true)))
+      .orderBy(desc(inviteCodes.usedAt));
+
+    // 3. User's active/unused invite codes
+    const activeInviteCodes = await db
+      .select({
+        id: inviteCodes.id,
+        code: inviteCodes.code,
+        isActive: inviteCodes.isActive,
+        createdAt: inviteCodes.createdAt,
+      })
+      .from(inviteCodes)
+      .where(and(eq(inviteCodes.creatorId, id), eq(inviteCodes.isUsed, false)))
+      .orderBy(desc(inviteCodes.createdAt));
 
     // Reports filed against this user
     const reportsAgainstUser = await db
@@ -192,6 +299,9 @@ usersRouter.get('/users/:id', requireAuth, requireStaff('MANAGE_USERS'), async (
         commentsCount: Number(commentsCountRes?.val || 0),
         friendsCount: Number(friendsCountRes?.val || 0),
       },
+      invitedBy,
+      invitedUsers,
+      activeInviteCodes,
       reports: reportsAgainstUser,
       auditLogs: userAuditLogs,
     });

@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
-import { requireAuth, requireAdmin, optionalAuth, AuthRequest, JWT_SECRET } from '../middleware/auth.ts';
+import { requireAuth, requireAdmin, requireStaff, isStaffRole, optionalAuth, AuthRequest, JWT_SECRET } from '../middleware/auth.ts';
+import { logAdminAction } from './routes/admin/auditHelper.ts';
 import { db } from '../db/index.ts';
 import {
   users,
@@ -30,7 +31,7 @@ import {
   passwordResetTokens,
   directMessages,
 } from '../db/schema.ts';
-import { eq, and, or, desc, asc, sql, inArray, isNull, ilike, gte, lte } from 'drizzle-orm';
+import { eq, and, or, desc, asc, sql, inArray, isNull, ilike, gte, lte, count } from 'drizzle-orm';
 import { providerManager } from './providers/index.ts';
 import { UnifiedSearchFilters } from './providers/types.ts';
 import { encryptCredentials, decryptCredentials, maskApiKey } from '../lib/crypto.ts';
@@ -50,11 +51,10 @@ import crypto from 'crypto';
 export const apiRouter = Router();
 
 export function setSessionCookie(res: Response, token: string) {
-  const isProd = process.env.NODE_ENV === 'production';
   res.cookie('dodik_session', token, {
     httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax',
+    secure: true,
+    sameSite: 'none',
     path: '/',
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   });
@@ -81,8 +81,28 @@ export function sanitizeUser(user: any) {
 // ==========================================
 apiRouter.get('/proxy/image', async (req, res) => {
   const imageUrl = req.query.url as string;
-  if (!imageUrl || !imageUrl.startsWith('http')) {
+if (!imageUrl || !imageUrl.startsWith('http')) {
     return res.status(400).send('Некорректный URL изображения');
+  }
+  
+  try {
+    const urlObj = new URL(imageUrl);
+    const hostname = urlObj.hostname;
+    // Basic SSRF protection
+    if (
+      hostname === 'localhost' || 
+      hostname === '127.0.0.1' || 
+      hostname.startsWith('10.') || 
+      hostname.startsWith('192.168.') || 
+      hostname.startsWith('172.') ||
+      hostname.startsWith('169.254.') ||
+      hostname.includes('::') || 
+      hostname.includes('unix')
+    ) {
+      return res.status(403).send('Доступ к локальным адресам запрещен');
+    }
+  } catch (err) {
+    return res.status(400).send('Невалидный URL');
   }
 
   try {
@@ -237,13 +257,15 @@ const getRegistrationStatusHandler = async (_req: any, res: any) => {
       .where(eq(systemSettings.key, 'telegram_bot_username'))
       .limit(1);
 
-    const mode = setting.length > 0 ? setting[0].value : 'OPEN'; // 'OPEN' | 'INVITE_ONLY' | 'CLOSED'
-    const botUsername = botSetting.length > 0 ? botSetting[0].value : 'DodikTrackerBot';
+    const mode = setting.length > 0 && setting[0].value ? setting[0].value : 'OPEN'; // 'OPEN' | 'INVITE_ONLY' | 'CLOSED' | 'MAINTENANCE'
+    const botUsername = botSetting.length > 0 && botSetting[0].value ? botSetting[0].value : 'DodikTrackerBot';
 
     res.json({
       mode,
       allowsRegistration: mode === 'OPEN' || mode === 'INVITE_ONLY',
       requiresInvite: mode === 'INVITE_ONLY',
+      isClosed: mode === 'CLOSED',
+      isMaintenance: mode === 'MAINTENANCE',
       botUsername,
     });
   } catch (err: any) {
@@ -254,6 +276,52 @@ const getRegistrationStatusHandler = async (_req: any, res: any) => {
 apiRouter.get('/auth/registration-status', getRegistrationStatusHandler);
 apiRouter.get('/auth/registration-mode', getRegistrationStatusHandler);
 apiRouter.get('/admin/registration-mode', getRegistrationStatusHandler);
+
+apiRouter.put('/admin/registration-mode', requireAuth, requireStaff('MANAGE_SETTINGS'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { mode } = req.body;
+    if (!['OPEN', 'INVITE_ONLY', 'CLOSED', 'MAINTENANCE'].includes(mode)) {
+      return res.status(400).json({ error: 'Неверный режим регистрации (OPEN, INVITE_ONLY, CLOSED, MAINTENANCE)' });
+    }
+
+    const [existing] = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, 'site_access_mode'))
+      .limit(1);
+
+    if (existing) {
+      await db
+        .update(systemSettings)
+        .set({ value: mode, updatedAt: new Date() })
+        .where(eq(systemSettings.key, 'site_access_mode'));
+    } else {
+      await db.insert(systemSettings).values({
+        key: 'site_access_mode',
+        value: mode,
+        description: 'Режим доступа к регистрации в проекте',
+      });
+    }
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: 'UPDATE_REGISTRATION_MODE',
+      details: `Изменен режим доступа сайта на: ${mode}`,
+      ip: req.ip,
+    });
+
+    res.json({
+      success: true,
+      mode,
+      allowsRegistration: mode === 'OPEN' || mode === 'INVITE_ONLY',
+      requiresInvite: mode === 'INVITE_ONLY',
+      isClosed: mode === 'CLOSED',
+      isMaintenance: mode === 'MAINTENANCE',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Register with username & password (+ optional or required invite code)
 // Email is NOT required (Requirements 14)
@@ -284,6 +352,7 @@ apiRouter.post('/auth/register', async (req, res) => {
 
     const allUsers = await db.select({ id: users.id }).from(users);
     const isFirstUser = allUsers.length === 0;
+    let validatedInvite: typeof inviteCodes.$inferSelect | null = null;
 
     if (!isFirstUser) {
       if (mode === 'CLOSED') {
@@ -294,21 +363,28 @@ apiRouter.post('/auth/register', async (req, res) => {
         return res.status(503).json({ error: 'Сайт находится на техническом обслуживании' });
       }
 
-      if (mode === 'INVITE_ONLY') {
-        if (!inviteCode || !String(inviteCode).trim()) {
-          return res.status(400).json({ error: 'Проект закрытый. Для регистрации необходим инвайт-код' });
-        }
+      // Check invite code
+      const cleanCode = inviteCode && String(inviteCode).trim() ? String(inviteCode).trim().toUpperCase() : null;
 
-        const cleanCode = String(inviteCode).trim().toUpperCase();
+      if (cleanCode) {
         const foundCode = await db
           .select()
           .from(inviteCodes)
-          .where(and(eq(inviteCodes.code, cleanCode), eq(inviteCodes.isUsed, false)))
+          .where(eq(inviteCodes.code, cleanCode))
           .limit(1);
 
         if (foundCode.length === 0) {
-          return res.status(400).json({ error: 'Недействительный или уже использованный инвайт-код' });
+          return res.status(400).json({ error: 'Инвайт-код не существует' });
         }
+        if (foundCode[0].isUsed) {
+          return res.status(400).json({ error: 'Инвайт-код уже был использован' });
+        }
+        if (foundCode[0].isActive === false) {
+          return res.status(400).json({ error: 'Инвайт-код отключен администратором' });
+        }
+        validatedInvite = foundCode[0];
+      } else if (mode === 'INVITE_ONLY') {
+        return res.status(400).json({ error: 'Проект закрытый. Для регистрации необходим инвайт-код' });
       }
     }
 
@@ -341,14 +417,28 @@ apiRouter.post('/auth/register', async (req, res) => {
       })
       .returning();
 
-    // 4. If an invite code was used, mark it
-    if (inviteCode) {
-      const cleanCode = String(inviteCode).trim().toUpperCase();
+    // 4. If an invite code was used, mark it and link user
+    if (validatedInvite) {
       await db
         .update(inviteCodes)
         .set({ isUsed: true, usedById: newUser.id, usedAt: new Date() })
-        .where(eq(inviteCodes.code, cleanCode))
+        .where(eq(inviteCodes.id, validatedInvite.id))
         .catch(() => {});
+
+      if (validatedInvite.creatorId) {
+        await db
+          .insert(notifications)
+          .values({
+            userId: validatedInvite.creatorId,
+            type: 'SYSTEM',
+            title: 'Инвайт использован',
+            body: `Пользователь @${newUser.username} успешно зарегистрировался по вашему инвайт-коду!`,
+            senderId: newUser.id,
+            senderUsername: newUser.username,
+            link: `/users/${newUser.username}`,
+          })
+          .catch(() => {});
+      }
     }
 
     // 5. Generate JWT Token
@@ -404,6 +494,20 @@ apiRouter.post('/auth/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Неверный пароль' });
+    }
+
+    // Check maintenance mode for non-staff
+    const regModeSetting = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, 'site_access_mode'))
+      .limit(1);
+    const mode = regModeSetting.length > 0 && regModeSetting[0].value ? regModeSetting[0].value : 'OPEN';
+
+    if (mode === 'MAINTENANCE' && !isStaffRole(user.role)) {
+      return res.status(503).json({
+        error: 'Сайт находится на техническом обслуживании. Вход доступен только для администрации.',
+      });
     }
 
     const token = jwt.sign(
@@ -707,38 +811,44 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
         .from(systemSettings)
         .where(eq(systemSettings.key, 'site_access_mode'))
         .limit(1);
-      const mode = regModeSetting.length > 0 ? regModeSetting[0].value : 'OPEN';
+      const mode = regModeSetting.length > 0 && regModeSetting[0].value ? regModeSetting[0].value : 'OPEN';
 
       const allUsers = await db.select({ id: users.id }).from(users);
       const isFirst = allUsers.length === 0;
+
+      let validatedTgInvite: typeof inviteCodes.$inferSelect | null = null;
+      const cleanInvite = inviteCode && String(inviteCode).trim() ? String(inviteCode).trim().toUpperCase() : null;
 
       if (!isFirst) {
         if (mode === 'CLOSED') {
           return res.status(403).json({ error: 'Регистрация закрыта администратором' });
         }
-        if (mode === 'INVITE_ONLY') {
-          if (!inviteCode) {
-            return res.status(400).json({
-              requireInvite: true,
-              error: 'Для новой регистрации через Telegram необходим инвайт-код. Пожалуйста, введите инвайт-код.',
-            });
-          }
-          const cleanInvite = String(inviteCode).trim().toUpperCase();
+        if (mode === 'MAINTENANCE') {
+          return res.status(503).json({ error: 'Сайт находится на техническом обслуживании. Регистрация временно отключена.' });
+        }
+
+        if (cleanInvite) {
           const foundInvite = await db
             .select()
             .from(inviteCodes)
-            .where(and(eq(inviteCodes.code, cleanInvite), eq(inviteCodes.isUsed, false)))
+            .where(eq(inviteCodes.code, cleanInvite))
             .limit(1);
 
           if (foundInvite.length === 0) {
-            return res.status(400).json({ error: 'Недействительный инвайт-код' });
+            return res.status(400).json({ error: 'Инвайт-код не существует' });
           }
-
-          // Mark used
-          await db
-            .update(inviteCodes)
-            .set({ isUsed: true, usedAt: new Date() })
-            .where(eq(inviteCodes.code, cleanInvite));
+          if (foundInvite[0].isUsed) {
+            return res.status(400).json({ error: 'Инвайт-код уже был использован' });
+          }
+          if (foundInvite[0].isActive === false) {
+            return res.status(400).json({ error: 'Инвайт-код отключен администратором' });
+          }
+          validatedTgInvite = foundInvite[0];
+        } else if (mode === 'INVITE_ONLY') {
+          return res.status(400).json({
+            requireInvite: true,
+            error: 'Для новой регистрации через Telegram необходим инвайт-код. Пожалуйста, введите инвайт-код.',
+          });
         }
       }
 
@@ -763,9 +873,47 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
         })
         .returning();
 
+      // If invite used, link it and notify
+      if (validatedTgInvite) {
+        await db
+          .update(inviteCodes)
+          .set({ isUsed: true, usedById: created.id, usedAt: new Date() })
+          .where(eq(inviteCodes.id, validatedTgInvite.id))
+          .catch(() => {});
+
+        if (validatedTgInvite.creatorId) {
+          await db
+            .insert(notifications)
+            .values({
+              userId: validatedTgInvite.creatorId,
+              type: 'SYSTEM',
+              title: 'Инвайт использован',
+              body: `Пользователь @${created.username} успешно зарегистрировался по вашему инвайт-коду через Telegram!`,
+              senderId: created.id,
+              senderUsername: created.username,
+              link: `/users/${created.username}`,
+            })
+            .catch(() => {});
+        }
+      }
+
       userRecord = created;
     } else {
-      // User exists -> update telegram link if available
+      // User exists -> check maintenance mode
+      const regModeSetting = await db
+        .select()
+        .from(systemSettings)
+        .where(eq(systemSettings.key, 'site_access_mode'))
+        .limit(1);
+      const mode = regModeSetting.length > 0 && regModeSetting[0].value ? regModeSetting[0].value : 'OPEN';
+
+      if (mode === 'MAINTENANCE' && !isStaffRole(userRecord.role)) {
+        return res.status(503).json({
+          error: 'Сайт находится на техническом обслуживании. Вход доступен только для администрации.',
+        });
+      }
+
+      // Update telegram link if available
       if (tgId || tgChatId || stored.telegramUsername) {
         await db
           .update(users)
@@ -841,9 +989,30 @@ apiRouter.post('/auth/session', async (req, res) => {
       }
     }
 
+    const regModeSetting = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, 'site_access_mode'))
+      .limit(1);
+    const mode = regModeSetting.length > 0 && regModeSetting[0].value ? regModeSetting[0].value : 'OPEN';
+
     if (!user) {
       const allUsers = await db.select({ id: users.id }).from(users).limit(1);
       const isFirst = allUsers.length === 0;
+
+      if (!isFirst) {
+        if (mode === 'CLOSED') {
+          return res.status(403).json({ error: 'Регистрация новых пользователей закрыта администратором' });
+        }
+        if (mode === 'MAINTENANCE') {
+          return res.status(503).json({ error: 'Сайт находится на техническом обслуживании. Регистрация недоступна.' });
+        }
+        if (mode === 'INVITE_ONLY') {
+          return res.status(403).json({
+            error: 'Регистрация разрешена только по инвайт-кодам. Пожалуйста, воспользуйтесь формой регистрации с инвайт-кодом.',
+          });
+        }
+      }
 
       let baseUsername = name.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase().slice(0, 16);
       if (!baseUsername) baseUsername = 'user';
@@ -873,6 +1042,13 @@ apiRouter.post('/auth/session', async (req, res) => {
         })
         .returning();
       user = created;
+    } else {
+      // Existing user -> check maintenance mode
+      if (mode === 'MAINTENANCE' && !isStaffRole(user.role)) {
+        return res.status(503).json({
+          error: 'Сайт находится на техническом обслуживании. Вход доступен только для администрации.',
+        });
+      }
     }
 
     if (user.isBlocked) {
@@ -907,23 +1083,48 @@ apiRouter.post('/auth/logout', async (_req, res) => {
 apiRouter.get('/invites/my', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
+    const [freshUser] = await db
+      .select({
+        id: users.id,
+        role: users.role,
+        invitesLeft: users.invitesLeft,
+      })
+      .from(users)
+      .where(eq(users.id, user.id));
+
+    const effectiveUser = freshUser || user;
+    const isSuperAdmin = effectiveUser.role === 'SUPER_ADMIN';
+    const isAdmin = effectiveUser.role === 'ADMIN' || isSuperAdmin;
+
     const myCodes = await db
       .select({
         id: inviteCodes.id,
         code: inviteCodes.code,
         isUsed: inviteCodes.isUsed,
+        isActive: inviteCodes.isActive,
         createdAt: inviteCodes.createdAt,
         usedAt: inviteCodes.usedAt,
         usedById: inviteCodes.usedById,
+        usedByUsername: sql<string | null>`(SELECT username FROM users WHERE users.id = ${inviteCodes.usedById})`,
+        usedByAvatar: sql<string | null>`(SELECT avatar FROM users WHERE users.id = ${inviteCodes.usedById})`,
       })
       .from(inviteCodes)
-      .where(eq(inviteCodes.creatorId, user.id))
+      .where(eq(inviteCodes.creatorId, effectiveUser.id))
       .orderBy(desc(inviteCodes.createdAt));
 
-    const isAdmin = user.role === 'ADMIN' || user.role === 'SUPER_ADMIN';
+    const totalCreated = myCodes.length;
+    const activeCount = myCodes.filter((c) => !c.isUsed && c.isActive !== false).length;
+    const usedCount = myCodes.filter((c) => c.isUsed).length;
+    const totalLimit = isAdmin ? 999999 : 3;
+    const invitesLeft = isAdmin ? 999999 : Math.max(0, effectiveUser.invitesLeft);
 
     res.json({
-      invitesLeft: isAdmin ? 999999 : user.invitesLeft,
+      invitesLeft,
+      totalLimit,
+      totalCreated,
+      activeCount,
+      usedCount,
+      canGenerate: isAdmin || (invitesLeft > 0 && totalCreated < 3),
       isUnlimited: isAdmin,
       codes: myCodes,
     });
@@ -932,21 +1133,63 @@ apiRouter.get('/invites/my', requireAuth, async (req: AuthRequest, res: Response
   }
 });
 
-// Generate new invite code
+// Generate new invite code with atomic limit validation
 apiRouter.post('/invites/generate', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
-    const isAdmin = user.role === 'ADMIN' || user.role === 'SUPER_ADMIN';
+    
+    // Always fetch fresh user state from DB
+    const [freshUser] = await db
+      .select({
+        id: users.id,
+        role: users.role,
+        invitesLeft: users.invitesLeft,
+      })
+      .from(users)
+      .where(eq(users.id, user.id));
 
-    if (!isAdmin && user.invitesLeft <= 0) {
-      return res.status(403).json({ error: 'У вас закончились доступные приглашения (лимит 3)' });
+    if (!freshUser) {
+      return res.status(401).json({ error: 'Пользователь не найден' });
+    }
+
+    const isAdmin = freshUser.role === 'ADMIN' || freshUser.role === 'SUPER_ADMIN';
+
+    if (!isAdmin) {
+      // Check total created invites by this user
+      const [countRes] = await db
+        .select({ val: count() })
+        .from(inviteCodes)
+        .where(eq(inviteCodes.creatorId, freshUser.id));
+      const totalCreated = Number(countRes?.val || 0);
+
+      if (freshUser.invitesLeft <= 0 || totalCreated >= 3) {
+        return res.status(403).json({
+          error: 'Все инвайты использованы. Вы создали максимальное количество инвайт-кодов (3 из 3).',
+        });
+      }
+
+      // Atomic update to prevent race conditions / parallel request bypass
+      const updateResult = await db
+        .update(users)
+        .set({
+          invitesLeft: sql`invites_left - 1`,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(users.id, freshUser.id), sql`invites_left > 0`))
+        .returning({ newInvitesLeft: users.invitesLeft });
+
+      if (updateResult.length === 0) {
+        return res.status(403).json({
+          error: 'Все инвайты использованы (лимит 3).',
+        });
+      }
     }
 
     let code = generateInviteCode();
     // Ensure uniqueness
     let attempts = 0;
-    while (attempts < 5) {
-      const exists = await db.select().from(inviteCodes).where(eq(inviteCodes.code, code)).limit(1);
+    while (attempts < 10) {
+      const exists = await db.select({ id: inviteCodes.id }).from(inviteCodes).where(eq(inviteCodes.code, code)).limit(1);
       if (exists.length === 0) break;
       code = generateInviteCode();
       attempts++;
@@ -956,21 +1199,27 @@ apiRouter.post('/invites/generate', requireAuth, async (req: AuthRequest, res: R
       .insert(inviteCodes)
       .values({
         code,
-        creatorId: user.id,
+        creatorId: freshUser.id,
         isUsed: false,
+        isActive: true,
       })
       .returning();
 
-    // Deduct invite for regular user
-    let remaining = user.invitesLeft;
-    if (!isAdmin) {
-      remaining = Math.max(0, user.invitesLeft - 1);
-      await db.update(users).set({ invitesLeft: remaining }).where(eq(users.id, user.id));
-    }
+    const [updatedUser] = await db
+      .select({ invitesLeft: users.invitesLeft })
+      .from(users)
+      .where(eq(users.id, freshUser.id));
+
+    const remaining = isAdmin ? 999999 : (updatedUser?.invitesLeft ?? 0);
 
     res.json({
-      invite: newInvite,
-      invitesLeft: isAdmin ? 999999 : remaining,
+      success: true,
+      invite: {
+        ...newInvite,
+        usedByUsername: null,
+        usedByAvatar: null,
+      },
+      invitesLeft: remaining,
       isUnlimited: isAdmin,
     });
   } catch (err: any) {
@@ -1029,8 +1278,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
       listVisibility,
       statisticsVisibility,
       notificationSettings,
-      telegramChatId,
-    } = req.body;
+      } = req.body;
 
     // Validate username uniqueness if changed
     if (username && username !== user.username) {
@@ -1053,7 +1301,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
         listVisibility: listVisibility || user.listVisibility,
         statisticsVisibility: statisticsVisibility || user.statisticsVisibility,
         notificationSettings: notificationSettings !== undefined ? notificationSettings : user.notificationSettings,
-        telegramChatId: telegramChatId !== undefined ? telegramChatId : user.telegramChatId,
+        
         updatedAt: new Date(),
       })
       .where(eq(users.id, user.id))
@@ -1800,10 +2048,16 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
       // Log activity
       await db.insert(activities).values({
         userId: user.id,
-        type: 'MEDIA_RATED',
+        type: 'REVIEW_ADDED',
         mediaId,
-        details: title ? `Отзыв: "${title}"` : 'Написал(а) отзыв',
-      });
+        details: JSON.stringify({
+          reviewId: savedReview.id,
+          rating: effectiveRating,
+          title: savedReview.title,
+          snippet: content.slice(0, 200),
+          containsSpoilers: !!savedReview.containsSpoilers,
+        }),
+      }).catch((e) => console.warn('[Review Activity] insert error:', e));
       // Trigger review achievement
       achievementService.checkAndUnlock(user.id, 'REVIEW_WRITTEN', { reviewId: savedReview.id }).catch(() => {});
 
@@ -2019,6 +2273,9 @@ apiRouter.post('/reviews/:id/like', requireAuth, async (req: AuthRequest, res: R
           title: 'Новый лайк',
           body: `@${user.username} оценил(а) вашу рецензию`,
           link: `/media/any/${reviewItem.mediaId}`,
+          senderId: user.id,
+          senderUsername: user.username,
+          senderAvatar: user.avatar,
         });
         // Trigger achievement check for receiving likes
         achievementService.checkAndUnlock(reviewItem.userId, 'LIKE_RECEIVED').catch(() => {});
@@ -2294,10 +2551,10 @@ apiRouter.put('/library/:id', requireAuth, async (req: AuthRequest, res: Respons
 
       await db.insert(activities).values({
         userId: user.id,
-        type: status === 'COMPLETED' ? 'MEDIA_COMPLETED' : 'MEDIA_ADDED',
+        type: status === 'COMPLETED' ? 'MEDIA_COMPLETED' : 'MEDIA_STATUS_CHANGED',
         mediaId: prev.mediaId,
         details: status,
-      });
+      }).catch((e) => console.warn('[Activity insert] error:', e));
     }
 
     if (rating && rating !== prev.rating) {
@@ -2341,8 +2598,37 @@ apiRouter.delete('/library/:id', requireAuth, async (req: AuthRequest, res: Resp
 apiRouter.get('/feed', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser;
-    // Get recent activities with user and media details
-    const list = await db
+    const tab = (req.query.tab as string) || 'all'; // 'all' | 'friends' | 'my'
+    const typeFilter = (req.query.type as string) || 'ALL'; // 'ALL' | 'MEDIA' | 'REVIEWS' | 'LISTS' | 'ACHIEVEMENTS' | 'FRIENDS'
+    const categoryFilter = (req.query.category as string) || 'ALL'; // 'ALL' | 'MOVIE' | 'TV' | 'ANIME' | 'GAME' | 'BOOK' | 'COMIC'
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string, 10) || 50));
+    const offset = Math.max(0, parseInt(req.query.offset as string, 10) || 0);
+
+    // 1. Get current user's accepted friend IDs
+    let friendIds: number[] = [];
+    if (user) {
+      const friendships = await db
+        .select()
+        .from(friendRequests)
+        .where(
+          and(
+            eq(friendRequests.status, 'ACCEPTED'),
+            or(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, user.id))
+          )
+        );
+      friendIds = friendships.map((f) => (f.senderId === user.id ? f.receiverId : f.senderId));
+    }
+
+    if (tab === 'friends' && (!user || friendIds.length === 0)) {
+      return res.json({ activities: [], total: 0, friendCount: friendIds.length });
+    }
+
+    if (tab === 'my' && !user) {
+      return res.json({ activities: [], total: 0, friendCount: 0 });
+    }
+
+    // 2. Query activities with user, media, list, tierList joined
+    const rawList = await db
       .select({
         id: activities.id,
         type: activities.type,
@@ -2351,20 +2637,125 @@ apiRouter.get('/feed', optionalAuth, async (req: AuthRequest, res: Response) => 
         userId: users.id,
         username: users.username,
         avatar: users.avatar,
+        role: users.role,
+        bio: users.bio,
+        isBlocked: users.isBlocked,
+        activityVisibility: users.activityVisibility,
+        ratingVisibility: users.ratingVisibility,
+        userListVisibility: users.listVisibility,
+        libraryVisibility: users.libraryVisibility,
         mediaId: media.id,
         mediaTitle: media.title,
+        mediaOriginalTitle: media.originalTitle,
         mediaPoster: media.posterUrl,
+        mediaBackdrop: media.backdropUrl,
         mediaType: media.type,
+        mediaYear: media.year,
+        mediaRating: media.rating,
+        listId: lists.id,
+        listTitle: lists.title,
+        listCover: lists.cover,
+        listCategory: lists.category,
+        listVisibility: lists.visibility,
+        tierListId: tierLists.id,
+        tierListTitle: tierLists.title,
+        tierListCategory: tierLists.category,
+        tierListVisibility: tierLists.visibility,
       })
       .from(activities)
       .innerJoin(users, eq(activities.userId, users.id))
       .leftJoin(media, eq(activities.mediaId, media.id))
+      .leftJoin(lists, eq(activities.listId, lists.id))
+      .leftJoin(tierLists, eq(activities.tierListId, tierLists.id))
       .orderBy(desc(activities.createdAt))
-      .limit(30);
+      .limit(300);
 
-    // Get likes count for these activities
-    const activityIds = list.map((a) => a.id);
+    // 3. Apply Strict Privacy & Tab Filtering
+    const visibleActivities = rawList.filter((act) => {
+      if (act.isBlocked) return false;
+      const isOwner = user ? user.id === act.userId : false;
+      const isFriend = user ? friendIds.includes(act.userId) : false;
+
+      // Tab filter
+      if (tab === 'my') {
+        if (!isOwner) return false;
+      } else if (tab === 'friends') {
+        if (!isFriend) return false;
+      }
+
+      // If owner viewing their own activity, always allowed
+      if (isOwner) return true;
+
+      // Check general user activityVisibility
+      if (act.activityVisibility === 'PRIVATE') return false;
+      if (act.activityVisibility === 'FRIENDS' && !isFriend) return false;
+
+      // Check specific activity types privacy
+      if (act.type === 'MEDIA_RATED') {
+        if (act.ratingVisibility === 'PRIVATE') return false;
+        if (act.ratingVisibility === 'FRIENDS' && !isFriend) return false;
+      }
+
+      if (['MEDIA_ADDED', 'MEDIA_COMPLETED', 'MEDIA_STATUS_CHANGED'].includes(act.type)) {
+        if (act.libraryVisibility === 'PRIVATE') return false;
+        if (act.libraryVisibility === 'FRIENDS' && !isFriend) return false;
+      }
+
+      if (['LIST_CREATED', 'LIST_UPDATED'].includes(act.type)) {
+        if (act.userListVisibility === 'PRIVATE') return false;
+        if (act.userListVisibility === 'FRIENDS' && !isFriend) return false;
+        if (act.listId && act.listVisibility === 'PRIVATE') return false;
+      }
+
+      if (['TIERLIST_CREATED', 'TIERLIST_UPDATED'].includes(act.type)) {
+        if (act.userListVisibility === 'PRIVATE') return false;
+        if (act.tierListVisibility === 'PRIVATE') return false;
+        if (act.tierListVisibility === 'FRIENDS' && !isFriend) return false;
+      }
+
+      return true;
+    });
+
+    // 4. Apply Event Type Filter & Media Category Filter
+    const filtered = visibleActivities.filter((act) => {
+      // Type Filter
+      if (typeFilter === 'MEDIA') {
+        if (!['MEDIA_ADDED', 'MEDIA_COMPLETED', 'MEDIA_STATUS_CHANGED', 'MEDIA_RATED'].includes(act.type)) return false;
+      } else if (typeFilter === 'REVIEWS') {
+        if (act.type !== 'REVIEW_ADDED') return false;
+      } else if (typeFilter === 'LISTS') {
+        if (!['LIST_CREATED', 'LIST_UPDATED', 'TIERLIST_CREATED', 'TIERLIST_UPDATED'].includes(act.type)) return false;
+      } else if (typeFilter === 'ACHIEVEMENTS') {
+        if (act.type !== 'ACHIEVEMENT_UNLOCKED') return false;
+      } else if (typeFilter === 'FRIENDS') {
+        if (act.type !== 'FRIEND_ADDED') return false;
+      }
+
+      // Category Filter (e.g. MOVIE, TV, GAME, BOOK, etc.)
+      if (categoryFilter && categoryFilter !== 'ALL') {
+        if (act.mediaType) {
+          if (act.mediaType !== categoryFilter) return false;
+        } else if (act.listCategory) {
+          if (!act.listCategory.toUpperCase().includes(categoryFilter.toUpperCase())) return false;
+        } else if (act.tierListCategory) {
+          if (!act.tierListCategory.toUpperCase().includes(categoryFilter.toUpperCase())) return false;
+        } else {
+          // If activity is not tied to media and category filter is active, skip
+          if (['MEDIA', 'MOVIE', 'TV', 'ANIME', 'GAME', 'BOOK', 'COMIC'].includes(categoryFilter)) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    });
+
+    const paginated = filtered.slice(offset, offset + limit);
+    const activityIds = paginated.map((a) => a.id);
+
+    // 5. Batch load likes and comments for paginated activities
     let likesMap: Record<number, { count: number; userLiked: boolean }> = {};
+    let commentsMap: Record<number, { count: number; recent: any[] }> = {};
 
     if (activityIds.length > 0) {
       const allLikes = await db
@@ -2381,15 +2772,189 @@ apiRouter.get('/feed', optionalAuth, async (req: AuthRequest, res: Response) => 
           likesMap[l.targetId].userLiked = true;
         }
       }
+
+      const allComments = await db
+        .select({
+          id: comments.id,
+          targetId: comments.targetId,
+          content: comments.content,
+          createdAt: comments.createdAt,
+          userId: users.id,
+          username: users.username,
+          avatar: users.avatar,
+          role: users.role,
+        })
+        .from(comments)
+        .innerJoin(users, eq(comments.userId, users.id))
+        .where(and(eq(comments.targetType, 'ACTIVITY'), inArray(comments.targetId, activityIds), eq(comments.isHidden, false)))
+        .orderBy(asc(comments.createdAt));
+
+      for (const c of allComments) {
+        if (!commentsMap[c.targetId]) {
+          commentsMap[c.targetId] = { count: 0, recent: [] };
+        }
+        commentsMap[c.targetId].count++;
+        commentsMap[c.targetId].recent.push(c);
+      }
     }
 
-    const enriched = list.map((act) => ({
-      ...act,
-      likesCount: likesMap[act.id]?.count || 0,
-      userLiked: likesMap[act.id]?.userLiked || false,
-    }));
+    // 6. Enrich details
+    const enriched = paginated.map((act) => {
+      let parsedDetails: any = null;
+      if (act.details) {
+        try {
+          parsedDetails = JSON.parse(act.details);
+        } catch (_e) {
+          parsedDetails = act.details;
+        }
+      }
 
-    res.json(enriched);
+      return {
+        id: act.id,
+        type: act.type,
+        details: act.details,
+        parsedDetails,
+        createdAt: act.createdAt,
+        user: {
+          id: act.userId,
+          username: act.username,
+          avatar: act.avatar,
+          role: act.role,
+          bio: act.bio,
+        },
+        media: act.mediaId ? {
+          id: act.mediaId,
+          title: act.mediaTitle,
+          originalTitle: act.mediaOriginalTitle,
+          posterUrl: act.mediaPoster,
+          backdropUrl: act.mediaBackdrop,
+          type: act.mediaType,
+          year: act.mediaYear,
+          rating: act.mediaRating,
+        } : null,
+        list: act.listId ? {
+          id: act.listId,
+          title: act.listTitle,
+          cover: act.listCover,
+          category: act.listCategory,
+        } : null,
+        tierList: act.tierListId ? {
+          id: act.tierListId,
+          title: act.tierListTitle,
+          category: act.tierListCategory,
+        } : null,
+        likesCount: likesMap[act.id]?.count || 0,
+        userLiked: likesMap[act.id]?.userLiked || false,
+        commentsCount: commentsMap[act.id]?.count || 0,
+        recentComments: commentsMap[act.id]?.recent || [],
+      };
+    });
+
+    res.json({
+      activities: enriched,
+      total: filtered.length,
+      friendCount: friendIds.length,
+    });
+  } catch (err: any) {
+    console.error('Feed error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get comments for an activity
+apiRouter.get('/activities/:id/comments', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'Некорректный ID активности' });
+
+    const activityComments = await db
+      .select({
+        id: comments.id,
+        content: comments.content,
+        createdAt: comments.createdAt,
+        userId: users.id,
+        username: users.username,
+        avatar: users.avatar,
+        role: users.role,
+      })
+      .from(comments)
+      .innerJoin(users, eq(comments.userId, users.id))
+      .where(and(eq(comments.targetType, 'ACTIVITY'), eq(comments.targetId, id), eq(comments.isHidden, false)))
+      .orderBy(asc(comments.createdAt));
+
+    res.json(activityComments);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Post a comment to an activity
+apiRouter.post('/activities/:id/comments', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const id = parseInt(req.params.id, 10);
+    const { content } = req.body;
+
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'Некорректный ID активности' });
+    const trimmed = String(content || '').trim();
+    if (!trimmed) return res.status(400).json({ error: 'Комментарий не может быть пустым' });
+
+    const [targetAct] = await db.select().from(activities).where(eq(activities.id, id)).limit(1);
+    if (!targetAct) return res.status(404).json({ error: 'Событие не найдено' });
+
+    const [newComment] = await db
+      .insert(comments)
+      .values({
+        userId: user.id,
+        targetType: 'ACTIVITY',
+        targetId: id,
+        content: trimmed,
+      })
+      .returning();
+
+    // Send notification to activity owner if not commenter
+    if (targetAct.userId !== user.id) {
+      sendAppNotification(targetAct.userId, {
+        type: 'COMMENT',
+        title: 'Новый комментарий в ленте',
+        body: `@${user.username}: "${trimmed.slice(0, 60)}"`,
+        link: '/feed',
+        senderId: user.id,
+        senderUsername: user.username,
+        senderAvatar: user.avatar,
+      }).catch(() => {});
+    }
+
+    res.json({
+      ...newComment,
+      userId: user.id,
+      username: user.username,
+      avatar: user.avatar,
+      role: user.role,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete comment from activity
+apiRouter.delete('/activities/comments/:commentId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const commentId = parseInt(req.params.commentId, 10);
+    if (!commentId || isNaN(commentId)) return res.status(400).json({ error: 'Некорректный ID' });
+
+    const [target] = await db.select().from(comments).where(eq(comments.id, commentId)).limit(1);
+    if (!target) return res.status(404).json({ error: 'Комментарий не найден' });
+
+    const isOwner = target.userId === user.id;
+    const isAdmin = user.role === 'ADMIN' || user.role === 'SUPER_ADMIN' || user.role === 'MODERATOR';
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Нет прав на удаление этого комментария' });
+    }
+
+    await db.delete(comments).where(eq(comments.id, commentId));
+    res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -2422,6 +2987,23 @@ apiRouter.post('/social/like', requireAuth, async (req: AuthRequest, res: Respon
         targetType,
         targetId,
       });
+
+      // Send notification if liking an activity
+      if (targetType === 'ACTIVITY') {
+        const [act] = await db.select().from(activities).where(eq(activities.id, targetId)).limit(1);
+        if (act && act.userId !== user.id) {
+          sendAppNotification(act.userId, {
+            type: 'LIKE',
+            title: 'Новый лайк',
+            body: `@${user.username} оценил(а) ваше событие в ленте`,
+            link: '/feed',
+            senderId: user.id,
+            senderUsername: user.username,
+            senderAvatar: user.avatar,
+          }).catch(() => {});
+        }
+      }
+
       return res.json({ liked: true });
     }
   } catch (err: any) {
@@ -2551,6 +3133,9 @@ apiRouter.post('/friends/request', requireAuth, async (req: AuthRequest, res: Re
       title: 'Новая заявка в друзья',
       body: `@${user.username} отправил(а) вам заявку в друзья`,
       link: '/friends',
+      senderId: user.id,
+      senderUsername: user.username,
+      senderAvatar: user.avatar,
     });
 
     res.json(reqRecord);
@@ -2559,23 +3144,59 @@ apiRouter.post('/friends/request', requireAuth, async (req: AuthRequest, res: Re
   }
 });
 
-// Respond to friend request (ACCEPTED, DECLINED)
-apiRouter.put('/friends/request/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+// Respond to friend request by requester ID (used by Notification Center)
+apiRouter.post('/friends/accept', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { requesterId } = req.body;
+    const reqs = await db.select().from(friendRequests)
+      .where(and(eq(friendRequests.senderId, requesterId), eq(friendRequests.receiverId, user.id), eq(friendRequests.status, 'PENDING')))
+      .limit(1);
+    if (!reqs.length) return res.status(404).json({ error: 'Заявка не найдена' });
+    
+    // Delegate to the existing handler logic
+    req.params.id = String(reqs[0].id);
+    req.body.action = 'ACCEPT';
+    return handleFriendRequestAction(req, res);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/friends/decline', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { requesterId } = req.body;
+    const reqs = await db.select().from(friendRequests)
+      .where(and(eq(friendRequests.senderId, requesterId), eq(friendRequests.receiverId, user.id), eq(friendRequests.status, 'PENDING')))
+      .limit(1);
+    if (!reqs.length) return res.status(404).json({ error: 'Заявка не найдена' });
+    
+    // Delegate to the existing handler logic
+    req.params.id = String(reqs[0].id);
+    req.body.action = 'DECLINE';
+    return handleFriendRequestAction(req, res);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper for both /friends/request/:id and the above endpoints
+async function handleFriendRequestAction(req: AuthRequest, res: Response) {
   try {
     const user = req.dbUser!;
     const id = parseInt(req.params.id, 10);
     const { action } = req.body; // 'ACCEPT' | 'DECLINE'
-
+    
     const reqFound = await db
       .select()
       .from(friendRequests)
       .where(and(eq(friendRequests.id, id), eq(friendRequests.receiverId, user.id)))
       .limit(1);
-
     if (reqFound.length === 0) {
       return res.status(404).json({ error: 'Заявка не найдена' });
     }
-
+    
     const newStatus = action === 'ACCEPT' ? 'ACCEPTED' : 'DECLINED';
     const [updated] = await db
       .update(friendRequests)
@@ -2587,12 +3208,34 @@ apiRouter.put('/friends/request/:id', requireAuth, async (req: AuthRequest, res:
       .returning();
 
     if (action === 'ACCEPT') {
+      const [senderUser] = await db
+        .select({ id: users.id, username: users.username, avatar: users.avatar })
+        .from(users)
+        .where(eq(users.id, reqFound[0].senderId))
+        .limit(1);
+      
+      if (senderUser) {
+        await db.insert(activities).values({
+          userId: user.id,
+          type: 'FRIEND_ADDED',
+          details: JSON.stringify({
+            friendId: senderUser.id,
+            friendUsername: senderUser.username,
+            friendAvatar: senderUser.avatar,
+          }),
+        }).catch(() => {});
+      }
+      
       await sendAppNotification(reqFound[0].senderId, {
         type: 'FRIEND_ACCEPTED',
         title: 'Заявка принята',
         body: `@${user.username} принял(а) вашу заявку в друзья`,
         link: `/u/${user.username}`,
+        senderId: user.id,
+        senderUsername: user.username,
+        senderAvatar: user.avatar,
       });
+
       // Trigger friend achievement for both users
       achievementService.checkAndUnlock(user.id, 'FRIEND_ADDED').catch(() => {});
       achievementService.checkAndUnlock(reqFound[0].senderId, 'FRIEND_ADDED').catch(() => {});
@@ -2602,6 +3245,11 @@ apiRouter.put('/friends/request/:id', requireAuth, async (req: AuthRequest, res:
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+}
+
+// Respond to friend request (ACCEPTED, DECLINED)
+apiRouter.put('/friends/request/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+  return handleFriendRequestAction(req, res);
 });
 
 // ==========================================
@@ -3191,6 +3839,16 @@ apiRouter.post('/lists', requireAuth, async (req: AuthRequest, res: Response) =>
           });
         }
       }
+    }
+
+    // Log social activity if list is not private
+    if (newList.visibility !== 'PRIVATE') {
+      await db.insert(activities).values({
+        userId: user.id,
+        type: 'LIST_CREATED',
+        listId: newList.id,
+        details: newList.title,
+      }).catch(() => {});
     }
 
     // Trigger list creation achievement
@@ -5038,7 +5696,7 @@ apiRouter.get('/users/:username/tier-lists', optionalAuth, async (req: AuthReque
       if (targetUser.listVisibility === 'PRIVATE') {
         return res.json([]);
       }
-      if (targetUser.listVisibility === 'FRIENDS_ONLY' && !isFriend) {
+      if (targetUser.listVisibility === 'FRIENDS' && !isFriend) {
         return res.json([]);
       }
     }
@@ -5046,7 +5704,7 @@ apiRouter.get('/users/:username/tier-lists', optionalAuth, async (req: AuthReque
     const conditions: any[] = [eq(tierLists.ownerId, targetUser.id)];
     if (!isOwner && !isAdmin) {
       if (isFriend) {
-        conditions.push(or(eq(tierLists.visibility, 'PUBLIC'), eq(tierLists.visibility, 'FRIENDS_ONLY')));
+        conditions.push(or(eq(tierLists.visibility, 'PUBLIC'), eq(tierLists.visibility, 'FRIENDS')));
       } else {
         conditions.push(eq(tierLists.visibility, 'PUBLIC'));
       }
@@ -5169,6 +5827,16 @@ apiRouter.post('/tier-lists', requireAuth, async (req: AuthRequest, res: Respons
         ownerId: user.id,
       })
       .returning();
+
+    // Log social activity if tier list is not private
+    if (newTierList.visibility !== 'PRIVATE') {
+      await db.insert(activities).values({
+        userId: user.id,
+        type: 'TIERLIST_CREATED',
+        tierListId: newTierList.id,
+        details: newTierList.title,
+      }).catch(() => {});
+    }
 
     // Trigger tier list creation & completion achievements
     achievementService.checkAndUnlock(user.id, 'TIER_LIST_CREATED', { tierListId: newTierList.id }).catch(() => {});
@@ -5404,7 +6072,7 @@ apiRouter.get('/tier-lists/:id', optionalAuth, async (req: AuthRequest, res: Res
         return res.status(403).json({ error: 'Этот тир-лист является приватным и доступен только автору' });
       }
 
-      if (tierList.visibility === 'FRIENDS_ONLY') {
+      if (tierList.visibility === 'FRIENDS') {
         if (!user) {
           return res.status(403).json({ error: 'Этот тир-лист доступен только автору и его друзьям' });
         }
@@ -6578,8 +7246,24 @@ apiRouter.post('/messages', requireAuth, async (req: AuthRequest, res: Response)
       .where(eq(users.id, rId))
       .limit(1);
 
-    if (!receiver) {
+if (!receiver) {
       return res.status(404).json({ error: 'Получатель не найден' });
+    }
+
+    // BLOCK CHECK
+    const blockedCheck = await db
+      .select()
+      .from(friendRequests)
+      .where(
+        or(
+          and(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, rId), eq(friendRequests.status, 'BLOCKED')),
+          and(eq(friendRequests.senderId, rId), eq(friendRequests.receiverId, user.id), eq(friendRequests.status, 'BLOCKED'))
+        )
+      )
+      .limit(1);
+
+    if (blockedCheck.length > 0) {
+      return res.status(403).json({ error: 'Вы не можете отправить сообщение этому пользователю' });
     }
 
     const [savedMsg] = await db
@@ -6616,721 +7300,9 @@ apiRouter.post('/messages', requireAuth, async (req: AuthRequest, res: Response)
 // 13. ADMIN PANEL & INTEGRATIONS
 // ==========================================
 
-apiRouter.get('/admin/dashboard', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const [allUsers, allMedia, allLists, allTierLists, allLogs] = await Promise.all([
-      db.select().from(users),
-      db.select().from(media),
-      db.select().from(lists),
-      db.select().from(tierLists),
-      db.select().from(apiLogs).limit(50),
-    ]);
 
-    res.json({
-      users: {
-        total: allUsers.length,
-        new7d: allUsers.filter(u => u.createdAt && new Date(u.createdAt).getTime() > Date.now() - 7 * 24 * 60 * 60 * 1000).length,
-        active30d: allUsers.length,
-        blocked: allUsers.filter(u => u.isBlocked).length,
-        staff: allUsers.filter(u => ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR'].includes(u.role)).length,
-      },
-      content: {
-        total: allMedia.length,
-        hidden: allMedia.filter(m => m.isHidden).length,
-        byCategory: [
-          { type: 'MOVIE', count: allMedia.filter(m => m.type === 'MOVIE').length },
-          { type: 'TV', count: allMedia.filter(m => m.type === 'TV').length },
-          { type: 'ANIME', count: allMedia.filter(m => m.type === 'ANIME').length },
-          { type: 'GAME', count: allMedia.filter(m => m.type === 'GAME').length },
-          { type: 'BOOK', count: allMedia.filter(m => m.type === 'BOOK').length },
-        ].filter(c => c.count > 0)
-      },
-      engagement: {
-        reviews: 0,
-        lists: allLists.length,
-        tierLists: allTierLists.length,
-        userMedia: 0,
-        messages: 0,
-      },
-      moderation: {
-        pending: 0,
-        total: 0,
-        resolved: 0,
-      },
-      system: {
-        maintenanceMode: false,
-        uptime: '12d 5h',
-        version: '1.0.0',
-        database: 'CONNECTED',
-        cache: 'OPTIMIZED',
-        registrationMode: 'OPEN',
-        integrations: {
-          enabled: 3,
-          hasErrors: 0,
-        }
-      },
-      trends: {
-        registrations: [],
-        userMedia: [],
-      },
-      recentAudit: [],
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// Duplicated admin routes removed
 
-// Admin message cleanup status
-apiRouter.get('/admin/message-cleanup/status', requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
-  try {
-    const cleanupStatus = getCleanupStatus();
-    res.json(cleanupStatus);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Admin trigger message cleanup manually
-apiRouter.post('/admin/message-cleanup/run', requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
-  try {
-    const result = await runMessageCleanupJob();
-    res.json({ ok: true, ...result });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// List configured integrations (credentials masked)
-apiRouter.get('/admin/integrations', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const registeredProviders = providerManager.getAllProviders();
-    const storedIntegrations = await db.select().from(systemIntegrations);
-
-    const integrationsMap = new Map(storedIntegrations.map((i) => [i.provider, i]));
-
-    const result = registeredProviders.map((p) => {
-      const stored = integrationsMap.get(p.name.toUpperCase());
-      let creds: Record<string, any> | undefined = undefined;
-      if (stored?.encryptedCredentials) {
-        try {
-          creds = decryptCredentials(stored.encryptedCredentials);
-        } catch {}
-      }
-
-      const hasKey = !!(creds?.apiKey || creds?.clientId || creds?.clientSecret || stored?.encryptedCredentials);
-      const hasClientId = !!(creds?.clientId || (creds?.apiKey && !creds?.clientSecret && p.name.toUpperCase() === 'IGDB'));
-      const hasClientSecret = !!creds?.clientSecret;
-
-      return {
-        provider: p.name,
-        supportedTypes: p.supportedTypes,
-        requiresKey: p.requiresKey,
-        enabled: stored ? stored.enabled : !p.requiresKey,
-        hasKey,
-        hasClientId,
-        hasClientSecret,
-        maskedKey: creds?.apiKey ? maskApiKey(creds.apiKey) : undefined,
-        maskedClientId: creds?.clientId ? maskApiKey(creds.clientId) : undefined,
-        lastCheckedAt: stored?.lastCheckedAt || null,
-        lastError: stored?.lastError || null,
-        priority: stored?.priority || 1,
-      };
-    });
-
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Save or update integration credentials (encrypted with AES-256-GCM)
-apiRouter.post('/admin/integrations', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const user = req.dbUser!;
-    const { provider, apiKey, enabled, priority, clientId, clientSecret, removeKey } = req.body;
-
-    if (!provider) {
-      return res.status(400).json({ error: 'Провайдер обязателен' });
-    }
-
-    const providerKey = provider.toUpperCase();
-    const existing = await db
-      .select()
-      .from(systemIntegrations)
-      .where(eq(systemIntegrations.provider, providerKey))
-      .limit(1);
-
-    let encrypted: string | null = existing[0]?.encryptedCredentials || null;
-
-    if (removeKey) {
-      encrypted = null;
-    } else if (apiKey !== undefined || clientId !== undefined || clientSecret !== undefined) {
-      let currentCreds: Record<string, any> = {};
-      if (existing[0]?.encryptedCredentials) {
-        try {
-          currentCreds = decryptCredentials(existing[0].encryptedCredentials) || {};
-        } catch (_e) {}
-      }
-
-      let newClientId = clientId;
-      let newClientSecret = clientSecret;
-      let newApiKey = apiKey;
-
-      // Auto-split combined strings for IGDB
-      if (providerKey === 'IGDB' && newApiKey && typeof newApiKey === 'string' && newApiKey.includes(':') && !newClientSecret) {
-        const parts = newApiKey.split(':');
-        newClientId = parts[0].trim();
-        newClientSecret = parts.slice(1).join(':').trim();
-        newApiKey = undefined;
-      }
-
-      const credentialsPayload: Record<string, any> = {
-        ...currentCreds,
-        ...(newApiKey !== undefined ? (newApiKey === '' ? {} : { apiKey: newApiKey }) : {}),
-        ...(newClientId !== undefined ? (newClientId === '' ? {} : { clientId: newClientId }) : {}),
-        ...(newClientSecret !== undefined ? (newClientSecret === '' ? {} : { clientSecret: newClientSecret }) : {}),
-      };
-
-      // Clean empty keys
-      if (newApiKey === '') delete credentialsPayload.apiKey;
-      if (newClientId === '') delete credentialsPayload.clientId;
-      if (newClientSecret === '') delete credentialsPayload.clientSecret;
-
-      if (Object.keys(credentialsPayload).length > 0) {
-        encrypted = encryptCredentials(credentialsPayload);
-      } else {
-        encrypted = null;
-      }
-    }
-
-    if (existing.length > 0) {
-      await db
-        .update(systemIntegrations)
-        .set({
-          enabled: enabled !== undefined ? enabled : existing[0].enabled,
-          encryptedCredentials: encrypted,
-          priority: priority !== undefined ? Number(priority) : existing[0].priority,
-          updatedAt: new Date(),
-        })
-        .where(eq(systemIntegrations.id, existing[0].id));
-    } else {
-      await db.insert(systemIntegrations).values({
-        provider: providerKey,
-        enabled: enabled !== undefined ? !!enabled : false,
-        encryptedCredentials: encrypted,
-        priority: priority !== undefined ? Number(priority) : 1,
-      });
-    }
-
-    // Audit log (never logs secret)
-    await db.insert(adminAuditLogs).values({
-      userId: user.id,
-      action: 'UPDATE_INTEGRATION',
-      details: `Обновлена интеграция ${providerKey} (включена: ${enabled}, ключ ${encrypted ? 'настроен' : 'удален'})`,
-    });
-
-    res.json({
-      ok: true,
-      hasKey: !!encrypted,
-      maskedKey: apiKey ? maskApiKey(apiKey) : undefined,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Provider health check (calls actual external API)
-apiRouter.post('/admin/integrations/health-check', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const { provider, apiKey, clientId, clientSecret } = req.body;
-    let creds: Record<string, any> | undefined = undefined;
-    if (apiKey || clientId || clientSecret) {
-      creds = {
-        ...(apiKey ? { apiKey } : {}),
-        ...(clientId ? { clientId } : {}),
-        ...(clientSecret ? { clientSecret } : {}),
-      };
-    }
-    const result = await providerManager.healthCheck(provider, creds);
-
-    // Update integration last status
-    await db
-      .update(systemIntegrations)
-      .set({
-        lastCheckedAt: new Date(),
-        lastError: result.ok ? null : result.error,
-      })
-      .where(eq(systemIntegrations.provider, provider.toUpperCase()))
-      .catch(() => {});
-
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Users management
-apiRouter.get('/admin/users', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const allUsers = await db
-      .select({
-        id: users.id,
-        uid: users.uid,
-        username: users.username,
-        email: users.email,
-        avatar: users.avatar,
-        role: users.role,
-        isBlocked: users.isBlocked,
-        invitesLeft: users.invitesLeft,
-        telegramChatId: users.telegramChatId,
-        telegramUsername: users.telegramUsername,
-        createdAt: users.createdAt,
-        mediaCount: sql<number>`COALESCE((SELECT COUNT(*) FROM user_media WHERE user_media.user_id = ${users.id}), 0)::int`,
-      })
-      .from(users)
-      .orderBy(desc(users.createdAt))
-      .limit(100);
-
-    res.json(allUsers);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.put('/admin/users/:id/role', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const { role } = req.body; // USER, MODERATOR, ADMIN, SUPER_ADMIN
-
-    const [targetUser] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-    if (!targetUser) {
-      return res.status(404).json({ error: 'Пользователь не найден' });
-    }
-
-    const [updated] = await db
-      .update(users)
-      .set({ role, updatedAt: new Date() })
-      .where(eq(users.id, id))
-      .returning();
-
-    await db.insert(adminAuditLogs).values({
-      userId: req.dbUser!.id,
-      action: 'CHANGE_ROLE',
-      details: `Роль пользователя @${targetUser.username} изменена с ${targetUser.role} на ${role}`,
-      ip: req.ip,
-    }).catch(() => {});
-
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.put('/admin/users/:id/block', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const [targetUser] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-    if (!targetUser) {
-      return res.status(404).json({ error: 'Пользователь не найден' });
-    }
-
-    // Prevent blocking super admin
-    if (targetUser.role === 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Нельзя заблокировать главного администратора' });
-    }
-
-    const newBlockedStatus = !targetUser.isBlocked;
-    const [updated] = await db
-      .update(users)
-      .set({ isBlocked: newBlockedStatus, updatedAt: new Date() })
-      .where(eq(users.id, id))
-      .returning();
-
-    await db.insert(adminAuditLogs).values({
-      userId: req.dbUser!.id,
-      action: newBlockedStatus ? 'BAN_USER' : 'UNBAN_USER',
-      details: `${newBlockedStatus ? 'Заблокирован' : 'Разблокирован'} аккаунт @${targetUser.username}`,
-      ip: req.ip,
-    }).catch(() => {});
-
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.post('/admin/users/:id/reset-password', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const [targetUser] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-    if (!targetUser) {
-      return res.status(404).json({ error: 'Пользователь не найден' });
-    }
-
-    // Generate token
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-
-    await db.insert(passwordResetTokens).values({
-      userId: id,
-      tokenHash,
-      expiresAt,
-    });
-
-    const host = req.get('host') || 'localhost:3000';
-    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-    const resetUrl = `${protocol}://${host}/reset-password/${rawToken}`;
-
-    await db.insert(adminAuditLogs).values({
-      userId: req.dbUser!.id,
-      action: 'RESET_PASSWORD',
-      details: `Сгенерирована ссылка для сброса пароля пользователя @${targetUser.username}`,
-      ip: req.ip,
-    }).catch(() => {});
-
-    res.json({
-      success: true,
-      token: rawToken,
-      resetUrl,
-      username: targetUser.username,
-      expiresAt,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Admin audit logs
-apiRouter.get('/admin/audit-logs', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const logs = await db
-      .select({
-        id: adminAuditLogs.id,
-        action: adminAuditLogs.action,
-        details: adminAuditLogs.details,
-        ip: adminAuditLogs.ip,
-        createdAt: adminAuditLogs.createdAt,
-        adminUsername: users.username,
-        adminAvatar: users.avatar,
-      })
-      .from(adminAuditLogs)
-      .leftJoin(users, eq(adminAuditLogs.userId, users.id))
-      .orderBy(desc(adminAuditLogs.createdAt))
-      .limit(100);
-
-    res.json(logs);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// API request logs
-apiRouter.get('/admin/api-logs', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const logs = await db.select().from(apiLogs).orderBy(desc(apiLogs.createdAt)).limit(100);
-    res.json(logs);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// System settings
-apiRouter.get('/admin/settings', async (req, res) => {
-  try {
-    const settings = await db.select().from(systemSettings);
-    res.json(settings);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update registration mode: 'OPEN' | 'INVITE_ONLY' | 'CLOSED'
-apiRouter.put('/admin/registration-mode', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const { mode } = req.body;
-    if (!mode || !['OPEN', 'INVITE_ONLY', 'CLOSED'].includes(mode)) {
-      return res.status(400).json({ error: 'Недопустимый режим (допустимо: OPEN, INVITE_ONLY, CLOSED)' });
-    }
-
-    const existing = await db
-      .select()
-      .from(systemSettings)
-      .where(eq(systemSettings.key, 'site_access_mode'))
-      .limit(1);
-
-    if (existing.length > 0) {
-      await db
-        .update(systemSettings)
-        .set({ value: mode, updatedAt: new Date() })
-        .where(eq(systemSettings.key, 'site_access_mode'));
-    } else {
-      await db.insert(systemSettings).values({
-        key: 'site_access_mode',
-        value: mode,
-        description: 'Режим доступа к регистрации в проекте',
-      });
-    }
-
-    await db.insert(adminAuditLogs).values({
-      userId: req.dbUser!.id,
-      action: 'UPDATE_REGISTRATION_MODE',
-      details: `Режим регистрации изменен на: ${mode}`,
-    });
-
-    res.json({ ok: true, mode });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get all system invite codes for admin panel
-apiRouter.get('/admin/invites', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const allCodes = await db
-      .select({
-        id: inviteCodes.id,
-        code: inviteCodes.code,
-        isUsed: inviteCodes.isUsed,
-        createdAt: inviteCodes.createdAt,
-        usedAt: inviteCodes.usedAt,
-        creatorId: inviteCodes.creatorId,
-        usedById: inviteCodes.usedById,
-      })
-      .from(inviteCodes)
-      .orderBy(desc(inviteCodes.createdAt))
-      .limit(200);
-
-    const userIds = [
-      ...new Set([
-        ...allCodes.map((c) => c.creatorId).filter(Boolean),
-        ...allCodes.map((c) => c.usedById).filter(Boolean),
-      ]),
-    ] as number[];
-
-    const usersMap = new Map<number, string>();
-    if (userIds.length > 0) {
-      const foundUsers = await db
-        .select({ id: users.id, username: users.username })
-        .from(users)
-        .where(inArray(users.id, userIds));
-      foundUsers.forEach((u) => usersMap.set(u.id, u.username));
-    }
-
-    const formatted = allCodes.map((c) => ({
-      ...c,
-      creatorUsername: c.creatorId ? usersMap.get(c.creatorId) || `ID #${c.creatorId}` : 'Система / Администратор',
-      usedByUsername: c.usedById ? usersMap.get(c.usedById) || `ID #${c.usedById}` : null,
-    }));
-
-    res.json(formatted);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Admin adjusts a specific user's invite balance
-apiRouter.put('/admin/users/:id/invites', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const { count } = req.body;
-
-    const countNum = parseInt(count, 10);
-    if (isNaN(countNum) || countNum < 0) {
-      return res.status(400).json({ error: 'Количество должно быть неотрицательным числом' });
-    }
-
-    const [updated] = await db
-      .update(users)
-      .set({ invitesLeft: countNum, updatedAt: new Date() })
-      .where(eq(users.id, id))
-      .returning();
-
-    await db.insert(adminAuditLogs).values({
-      userId: req.dbUser!.id,
-      action: 'UPDATE_USER_INVITES',
-      details: `Количество инвайтов для пользователя #${id} (${updated.username}) изменено на: ${countNum}`,
-    });
-
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Admin Telegram integration settings
-apiRouter.get('/admin/telegram-settings', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const settings = await db.select().from(systemSettings);
-    const map = new Map(settings.map((s) => [s.key, s.value]));
-
-    const botToken = map.get('telegram_bot_token') || '';
-    const botUsername = map.get('telegram_bot_username') || 'DodikTrackerBot';
-    let adminIds: string[] = [];
-    try {
-      adminIds = JSON.parse(map.get('telegram_admin_ids') || '[]');
-    } catch (_e) {}
-
-    res.json({
-      hasToken: !!botToken,
-      maskedToken: botToken ? maskApiKey(botToken) : '',
-      botUsername,
-      adminIds,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update Telegram bot token, username, or admin IDs
-apiRouter.post('/admin/telegram-settings', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const { botToken, botUsername, adminIds } = req.body;
-
-    const upsertSetting = async (key: string, value: string, descText: string) => {
-      const existing = await db.select().from(systemSettings).where(eq(systemSettings.key, key)).limit(1);
-      if (existing.length > 0) {
-        await db.update(systemSettings).set({ value, updatedAt: new Date() }).where(eq(systemSettings.key, key));
-      } else {
-        await db.insert(systemSettings).values({ key, value, description: descText });
-      }
-    };
-
-    if (botToken !== undefined && botToken.trim()) {
-      await upsertSetting('telegram_bot_token', botToken.trim(), 'Telegram Bot API Token');
-    }
-
-    if (botUsername !== undefined) {
-      await upsertSetting('telegram_bot_username', botUsername.replace('@', '').trim(), 'Telegram Bot Username');
-    }
-
-    if (adminIds !== undefined) {
-      await upsertSetting('telegram_admin_ids', JSON.stringify(adminIds), 'List of Telegram Administrator Chat IDs');
-    }
-
-    await db.insert(adminAuditLogs).values({
-      userId: req.dbUser!.id,
-      action: 'UPDATE_TELEGRAM_SETTINGS',
-      details: 'Обновлены настройки Telegram интеграции и список ID администраторов',
-    });
-
-    // Automatically reload and restart Telegram bot polling with new settings
-    await telegramBot.restart();
-
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// User test Telegram notification (from profile Settings)
-apiRouter.post('/notifications/test-telegram', requireAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const user = req.dbUser!;
-    const { chatId } = req.body;
-    const targetChatId = chatId ? String(chatId).trim() : user.telegramChatId;
-
-    if (!targetChatId) {
-      return res.status(400).json({ error: 'Chat ID не указан' });
-    }
-
-    const testMsg = `🎉 *Dodik Tracker — Тестовое уведомление*\n\nПривет, *${user.username}*! Связь с ботом успешно проверена. Теперь вы будете оперативно получать уведомления о друзьях, оценках и списках прямо в Telegram!`;
-    const result = await telegramBot.sendMessage(targetChatId, testMsg);
-
-    if (!result.ok) {
-      return res.status(400).json({
-        error: result.error || result.description || 'Не удалось отправить сообщение. Убедитесь, что вы нажали /start в боте.',
-      });
-    }
-
-    res.json({ ok: true, result });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Generate 6-digit link code for logged-in user
-apiRouter.post('/auth/telegram/link-code', requireAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const user = req.dbUser!;
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    const expiresAt = Date.now() + 15 * 60 * 1000;
-
-    telegramAuthCodes.set(code, {
-      code,
-      expiresAt,
-      userId: user.id,
-    });
-
-    const botSetting = await db
-      .select()
-      .from(systemSettings)
-      .where(eq(systemSettings.key, 'telegram_bot_username'))
-      .limit(1);
-    const botUsername = botSetting.length > 0 ? botSetting[0].value : 'DodikTrackerBot';
-
-    res.json({
-      code,
-      expiresAt,
-      botUsername,
-      message: `Код привязки: ${code}. Отправьте команду /link ${code} боту @${botUsername}`,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Test Telegram Bot API connection & optionally send message to admin IDs
-apiRouter.post('/admin/telegram-test', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const settings = await db.select().from(systemSettings);
-    const map = new Map(settings.map((s) => [s.key, s.value]));
-
-    const token = req.body.botToken || map.get('telegram_bot_token');
-    if (!token) {
-      return res.status(400).json({ error: 'Telegram Bot Token не настроен' });
-    }
-
-    // Call getMe
-    const getMeRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
-    const getMeData = await getMeRes.json();
-
-    if (!getMeData.ok) {
-      return res.status(400).json({
-        ok: false,
-        error: `Ошибка Telegram API: ${getMeData.description || 'Недействительный токен'}`,
-      });
-    }
-
-    // If an admin ID is provided or in settings, optionally send a test notification
-    const testAdminId = req.body.adminId;
-    let messageSent = false;
-    let sendResult = null;
-
-    if (testAdminId) {
-      const sendRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: testAdminId,
-          text: `🔔 *Dodik Tracker: Проверка связи*\n\nИнтеграция с Telegram успешно подключена к боту *@${getMeData.result.username}*!\n\nАдминистратор: ${req.dbUser!.username}\nДата: ${new Date().toLocaleString('ru-RU')}`,
-          parse_mode: 'Markdown',
-        }),
-      });
-      sendResult = await sendRes.json();
-      messageSent = sendResult.ok;
-    }
-
-    res.json({
-      ok: true,
-      bot: getMeData.result,
-      messageSent,
-      sendResult,
-    });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
 
 import { importExportRouter } from './routes/importExport.ts';
 import { gamesRouter } from './routes/games.ts';

@@ -15,19 +15,35 @@ import { logAdminAction } from './auditHelper.ts';
 
 export const settingsRouter = Router();
 
+// Helper to get all settings as key-value map
+async function getSettingsMap() {
+  const all = await db.select().from(systemSettings);
+  const map: Record<string, string> = {};
+  for (const s of all) {
+    map[s.key] = s.value;
+  }
+  return map;
+}
+
 // 1. Get All System Settings
 settingsRouter.get('/settings', requireAuth, requireStaff('MANAGE_SETTINGS'), async (_req: AuthRequest, res: Response) => {
   try {
-    const all = await db.select().from(systemSettings);
-    const map: Record<string, string> = {};
-    for (const s of all) {
-      map[s.key] = s.value;
-    }
+    const map = await getSettingsMap();
     res.json({
       site_access_mode: map.site_access_mode || 'OPEN',
+      siteAccessMode: map.site_access_mode || 'OPEN',
       maintenance_message: map.maintenance_message || 'Сервис находится на техническом обслуживании',
       site_name: map.site_name || 'Dodik Tracker',
+      siteName: map.site_name || 'Dodik Tracker',
+      site_motto: map.site_motto || 'Трекер фильмов, аниме, сериалов и игр',
+      siteMotto: map.site_motto || 'Трекер фильмов, аниме, сериалов и игр',
       default_invites: map.default_invites || '3',
+      allowGuestReviews: map.allow_guest_reviews !== 'false',
+      allow_guest_reviews: map.allow_guest_reviews !== 'false',
+      maxCommentsPerMinute: parseInt(map.max_comments_per_minute || '5', 10),
+      max_comments_per_minute: parseInt(map.max_comments_per_minute || '5', 10),
+      maxAvatarSizeMb: parseInt(map.max_avatar_size_mb || '5', 10),
+      max_avatar_size_mb: parseInt(map.max_avatar_size_mb || '5', 10),
     });
   } catch (err: any) {
     console.error('[Settings] Get error:', err);
@@ -35,55 +51,132 @@ settingsRouter.get('/settings', requireAuth, requireStaff('MANAGE_SETTINGS'), as
   }
 });
 
-// 2. Update System Settings
-settingsRouter.put('/settings', requireAuth, requireStaff('MANAGE_SETTINGS'), async (req: AuthRequest, res: Response) => {
+// Update settings handler (used for both PUT and POST)
+const handleUpdateSettings = async (req: AuthRequest, res: Response) => {
   try {
     const updates = req.body; // Record<string, any>
     const actor = req.dbUser!;
 
-    const allowedKeys = [
-      'site_access_mode',
-      'maintenance_message',
-      'site_name',
-      'default_invites',
-    ];
+    const keyMapping: Record<string, string> = {
+      site_access_mode: 'site_access_mode',
+      siteAccessMode: 'site_access_mode',
+      maintenance_message: 'maintenance_message',
+      site_name: 'site_name',
+      siteName: 'site_name',
+      site_motto: 'site_motto',
+      siteMotto: 'site_motto',
+      default_invites: 'default_invites',
+      allow_guest_reviews: 'allow_guest_reviews',
+      allowGuestReviews: 'allow_guest_reviews',
+      max_comments_per_minute: 'max_comments_per_minute',
+      maxCommentsPerMinute: 'max_comments_per_minute',
+      max_avatar_size_mb: 'max_avatar_size_mb',
+      maxAvatarSizeMb: 'max_avatar_size_mb',
+    };
 
-    for (const [key, val] of Object.entries(updates)) {
-      if (!allowedKeys.includes(key)) continue;
+    const validModes = ['OPEN', 'INVITE_ONLY', 'CLOSED', 'MAINTENANCE'];
+    const updatedKeys: string[] = [];
 
-      const stringVal = typeof val === 'boolean' ? (val ? 'true' : 'false') : String(val);
+    for (const [rawKey, val] of Object.entries(updates)) {
+      const dbKey = keyMapping[rawKey];
+      if (!dbKey) continue;
 
-      const [existing] = await db.select().from(systemSettings).where(eq(systemSettings.key, key)).limit(1);
-      if (existing) {
-        await db.update(systemSettings).set({ value: stringVal, updatedAt: new Date() }).where(eq(systemSettings.key, key));
+      let stringVal: string;
+      if (typeof val === 'boolean') {
+        stringVal = val ? 'true' : 'false';
       } else {
-        await db.insert(systemSettings).values({ key, value: stringVal });
+        stringVal = String(val);
       }
+
+      // Validate registration mode if applicable
+      if (dbKey === 'site_access_mode') {
+        if (!validModes.includes(stringVal)) {
+          continue;
+        }
+      }
+
+      const [existing] = await db.select().from(systemSettings).where(eq(systemSettings.key, dbKey)).limit(1);
+      if (existing) {
+        await db.update(systemSettings).set({ value: stringVal, updatedAt: new Date() }).where(eq(systemSettings.key, dbKey));
+      } else {
+        await db.insert(systemSettings).values({ key: dbKey, value: stringVal });
+      }
+      updatedKeys.push(dbKey);
     }
 
     await logAdminAction({
       userId: actor.id,
       action: 'UPDATE_SETTINGS',
-      details: `Обновлены системные настройки: ${Object.keys(updates).join(', ')}`,
+      details: `Обновлены системные настройки: ${Array.from(new Set(updatedKeys)).join(', ')}`,
       ip: req.ip,
     });
 
-    res.json({ success: true, message: 'Настройки успешно сохранены' });
+    const map = await getSettingsMap();
+    res.json({
+      success: true,
+      message: 'Настройки успешно сохранены',
+      settings: {
+        site_access_mode: map.site_access_mode || 'OPEN',
+        siteAccessMode: map.site_access_mode || 'OPEN',
+        maintenance_message: map.maintenance_message || 'Сервис находится на техническом обслуживании',
+        site_name: map.site_name || 'Dodik Tracker',
+        siteName: map.site_name || 'Dodik Tracker',
+        site_motto: map.site_motto || 'Трекер фильмов, аниме, сериалов и игр',
+        siteMotto: map.site_motto || 'Трекер фильмов, аниме, сериалов и игр',
+        default_invites: map.default_invites || '3',
+        allowGuestReviews: map.allow_guest_reviews !== 'false',
+        allow_guest_reviews: map.allow_guest_reviews !== 'false',
+        maxCommentsPerMinute: parseInt(map.max_comments_per_minute || '5', 10),
+        max_comments_per_minute: parseInt(map.max_comments_per_minute || '5', 10),
+        maxAvatarSizeMb: parseInt(map.max_avatar_size_mb || '5', 10),
+        max_avatar_size_mb: parseInt(map.max_avatar_size_mb || '5', 10),
+      },
+    });
   } catch (err: any) {
     console.error('[Settings] Update error:', err);
     res.status(500).json({ error: err.message });
   }
-});
+};
 
-// 3. List Invite Codes
+// 2. Update System Settings (support both PUT and POST)
+settingsRouter.put('/settings', requireAuth, requireStaff('MANAGE_SETTINGS'), handleUpdateSettings);
+settingsRouter.post('/settings', requireAuth, requireStaff('MANAGE_SETTINGS'), handleUpdateSettings);
+
+// 3. List Invite Codes with filtering, search and stats
 settingsRouter.get('/invites', requireAuth, requireStaff('MANAGE_SETTINGS'), async (req: AuthRequest, res: Response) => {
   try {
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10));
     const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '25'), 10)));
     const offset = (page - 1) * limit;
+    const status = String(req.query.status || 'ALL').toUpperCase();
+    const query = String(req.query.q || '').trim();
 
-    const [totalRes] = await db.select({ val: count() }).from(inviteCodes);
+    // Base conditions
+    const conditions = [];
+    if (status === 'ACTIVE') {
+      conditions.push(and(eq(inviteCodes.isUsed, false), eq(inviteCodes.isActive, true)));
+    } else if (status === 'USED') {
+      conditions.push(eq(inviteCodes.isUsed, true));
+    } else if (status === 'DISABLED') {
+      conditions.push(eq(inviteCodes.isActive, false));
+    }
+
+    if (query) {
+      conditions.push(
+        sql`(${inviteCodes.code} ILIKE ${'%' + query + '%'} OR (SELECT username FROM users WHERE users.id = ${inviteCodes.creatorId}) ILIKE ${'%' + query + '%'} OR (SELECT username FROM users WHERE users.id = ${inviteCodes.usedById}) ILIKE ${'%' + query + '%'})`
+      );
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [totalRes] = await db.select({ val: count() }).from(inviteCodes).where(whereClause);
     const totalCount = Number(totalRes?.val || 0);
+
+    // Global counts for badges
+    const [allCountRes] = await db.select({ val: count() }).from(inviteCodes);
+    const [activeCountRes] = await db.select({ val: count() }).from(inviteCodes).where(and(eq(inviteCodes.isUsed, false), eq(inviteCodes.isActive, true)));
+    const [usedCountRes] = await db.select({ val: count() }).from(inviteCodes).where(eq(inviteCodes.isUsed, true));
+    const [disabledCountRes] = await db.select({ val: count() }).from(inviteCodes).where(eq(inviteCodes.isActive, false));
 
     const items = await db
       .select({
@@ -91,12 +184,17 @@ settingsRouter.get('/invites', requireAuth, requireStaff('MANAGE_SETTINGS'), asy
         code: inviteCodes.code,
         creatorId: inviteCodes.creatorId,
         usedById: inviteCodes.usedById,
+        isUsed: inviteCodes.isUsed,
+        isActive: inviteCodes.isActive,
         usedAt: inviteCodes.usedAt,
         createdAt: inviteCodes.createdAt,
         creatorUsername: sql<string>`(SELECT username FROM users WHERE users.id = ${inviteCodes.creatorId})`,
+        creatorAvatar: sql<string>`(SELECT avatar FROM users WHERE users.id = ${inviteCodes.creatorId})`,
         usedByUsername: sql<string>`(SELECT username FROM users WHERE users.id = ${inviteCodes.usedById})`,
+        usedByAvatar: sql<string>`(SELECT avatar FROM users WHERE users.id = ${inviteCodes.usedById})`,
       })
       .from(inviteCodes)
+      .where(whereClause)
       .orderBy(desc(inviteCodes.createdAt))
       .limit(limit)
       .offset(offset);
@@ -107,6 +205,12 @@ settingsRouter.get('/invites', requireAuth, requireStaff('MANAGE_SETTINGS'), asy
       page,
       limit,
       totalPages: Math.ceil(totalCount / limit),
+      stats: {
+        total: Number(allCountRes?.val || 0),
+        active: Number(activeCountRes?.val || 0),
+        used: Number(usedCountRes?.val || 0),
+        disabled: Number(disabledCountRes?.val || 0),
+      },
     });
   } catch (err: any) {
     console.error('[Settings] Invites error:', err);
@@ -114,7 +218,7 @@ settingsRouter.get('/invites', requireAuth, requireStaff('MANAGE_SETTINGS'), asy
   }
 });
 
-// 4. Generate System Invite Codes
+// 4. Generate System Invite Codes (Admin Unlimited)
 settingsRouter.post('/invites/generate', requireAuth, requireStaff('MANAGE_SETTINGS'), async (req: AuthRequest, res: Response) => {
   try {
     const { count: qty, prefix } = req.body;
@@ -130,6 +234,8 @@ settingsRouter.post('/invites/generate', requireAuth, requireStaff('MANAGE_SETTI
       await db.insert(inviteCodes).values({
         code,
         creatorId: actor.id,
+        isUsed: false,
+        isActive: true,
       });
       createdCodes.push(code);
     }
@@ -137,7 +243,7 @@ settingsRouter.post('/invites/generate', requireAuth, requireStaff('MANAGE_SETTI
     await logAdminAction({
       userId: actor.id,
       action: 'GENERATE_INVITES',
-      details: `Сгенерировано ${num} системных инвайт-кодов с префиксом ${codePrefix}`,
+      details: `Сгенерировано ${num} инвайт-кодов с префиксом ${codePrefix}`,
       ip: req.ip,
     });
 
@@ -148,6 +254,57 @@ settingsRouter.post('/invites/generate', requireAuth, requireStaff('MANAGE_SETTI
     });
   } catch (err: any) {
     console.error('[Settings] Generate invites error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4.1 Toggle / Disable Invite Code
+settingsRouter.post('/invites/:id/toggle', requireAuth, requireStaff('MANAGE_SETTINGS'), async (req: AuthRequest, res: Response) => {
+  try {
+    const inviteId = parseInt(req.params.id, 10);
+    if (!inviteId) return res.status(400).json({ error: 'Неверный ID инвайта' });
+
+    const [existing] = await db.select().from(inviteCodes).where(eq(inviteCodes.id, inviteId)).limit(1);
+    if (!existing) return res.status(404).json({ error: 'Инвайт-код не найден' });
+
+    const newActive = !existing.isActive;
+    await db.update(inviteCodes).set({ isActive: newActive }).where(eq(inviteCodes.id, inviteId));
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: newActive ? 'ENABLE_INVITE' : 'DISABLE_INVITE',
+      details: `Инвайт-код ${existing.code} ${newActive ? 'активирован' : 'отключен'}`,
+      ip: req.ip,
+    });
+
+    res.json({ success: true, isActive: newActive });
+  } catch (err: any) {
+    console.error('[Settings] Toggle invite error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4.2 Delete Invite Code
+settingsRouter.delete('/invites/:id', requireAuth, requireStaff('MANAGE_SETTINGS'), async (req: AuthRequest, res: Response) => {
+  try {
+    const inviteId = parseInt(req.params.id, 10);
+    if (!inviteId) return res.status(400).json({ error: 'Неверный ID инвайта' });
+
+    const [existing] = await db.select().from(inviteCodes).where(eq(inviteCodes.id, inviteId)).limit(1);
+    if (!existing) return res.status(404).json({ error: 'Инвайт-код не найден' });
+
+    await db.delete(inviteCodes).where(eq(inviteCodes.id, inviteId));
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: 'DELETE_INVITE',
+      details: `Удален инвайт-код ${existing.code}`,
+      ip: req.ip,
+    });
+
+    res.json({ success: true, message: 'Инвайт-код удален' });
+  } catch (err: any) {
+    console.error('[Settings] Delete invite error:', err);
     res.status(500).json({ error: err.message });
   }
 });

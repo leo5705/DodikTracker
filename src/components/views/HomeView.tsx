@@ -15,6 +15,12 @@ import {
   MessageSquare,
   Gamepad2,
   Book,
+  Newspaper,
+  Calendar,
+  User,
+  Pin,
+  Eye,
+  RotateCw,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { AddToLibraryModal } from '../modals/AddToLibraryModal.tsx';
@@ -31,6 +37,8 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
   const [inProgress, setInProgress] = useState<any[]>([]);
   const [trending, setTrending] = useState<any[]>([]);
   const [recentFeed, setRecentFeed] = useState<any[]>([]);
+  const [latestNews, setLatestNews] = useState<any[]>([]);
+  const [newsLoading, setNewsLoading] = useState(true);
   const [modalItem, setModalItem] = useState<any | null>(null);
 
   const handleTrendingClick = async (item: any) => {
@@ -79,6 +87,17 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => setRecentFeed(data.slice(0, 4)))
       .catch(() => {});
+
+    // 4. Fetch latest published news
+    setNewsLoading(true);
+    fetch('/api/news?limit=3')
+      .then((res) => (res.ok ? res.json() : { items: [] }))
+      .then((data) => {
+        const items = Array.isArray(data) ? data : (data.items || []);
+        setLatestNews(items.slice(0, 3));
+      })
+      .catch(() => setLatestNews([]))
+      .finally(() => setNewsLoading(false));
   }, [dbUser]);
 
   return (
@@ -211,6 +230,161 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           )}
         </div>
       )}
+
+      {/* News Section */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-bold text-zinc-100 font-mono flex items-center gap-2">
+            <Newspaper className="w-4 h-4 text-[#9B6BFF]" />
+            НОВОСТИ & АНОНСЫ
+          </h2>
+          <button
+            onClick={() => navigate('/news')}
+            className="text-xs text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 transition-colors"
+          >
+            Все новости →
+          </button>
+        </div>
+
+        {newsLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="p-5 rounded-2xl bg-[#14131A] border border-[#252233] animate-pulse space-y-3">
+                <div className="w-full h-36 bg-zinc-800/50 rounded-xl" />
+                <div className="h-4 bg-zinc-800/60 rounded w-3/4" />
+                <div className="h-3 bg-zinc-800/40 rounded w-full" />
+                <div className="h-3 bg-zinc-800/40 rounded w-1/2" />
+              </div>
+            ))}
+          </div>
+        ) : latestNews.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {latestNews.map((art) => {
+              let tags: string[] = [];
+              try {
+                if (Array.isArray(art.tags)) tags = art.tags;
+                else if (typeof art.tags === 'string') tags = JSON.parse(art.tags);
+              } catch {}
+
+              const articleUrl = `/news/${art.slug || art.id}`;
+
+              return (
+                <div
+                  key={art.id}
+                  onClick={() => navigate(articleUrl)}
+                  className="group cursor-pointer rounded-2xl bg-[#14131A] border border-[#252233] hover:border-[#9B6BFF]/50 overflow-hidden flex flex-col justify-between transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-purple-950/20"
+                >
+                  <div>
+                    {/* Cover Preview */}
+                    <div className="relative w-full h-40 bg-[#0F0E12] overflow-hidden">
+                      {art.cover ? (
+                        <img
+                          src={art.cover}
+                          alt={art.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-zinc-600 bg-gradient-to-br from-[#1C1A27] to-[#121118]">
+                          <Newspaper className="w-10 h-10 text-zinc-500/70" />
+                          <span className="text-[11px] font-medium text-zinc-500 mt-1">Dodik Tracker News</span>
+                        </div>
+                      )}
+
+                      {/* Badges */}
+                      <div className="absolute top-2.5 left-2.5 flex flex-wrap gap-1.5">
+                        {art.isPinned && (
+                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/90 text-black shadow">
+                            <Pin className="w-2.5 h-2.5 fill-black" /> Закреплено
+                          </span>
+                        )}
+                        {art.isFeatured && (
+                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#9B6BFF] text-white shadow">
+                            <Star className="w-2.5 h-2.5 fill-white" /> Главное
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Content */}
+                    <div className="p-4 space-y-2">
+                      <h3 className="font-bold text-sm text-[#F3F1F8] group-hover:text-[#9B6BFF] transition-colors line-clamp-2 leading-snug">
+                        {art.title}
+                      </h3>
+
+                      {art.excerpt ? (
+                        <p className="text-xs text-[#9A94AA] line-clamp-2 leading-relaxed">
+                          {art.excerpt}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-[#9A94AA] line-clamp-2 leading-relaxed">
+                          {art.content ? art.content.replace(/[#*`_>]/g, '').slice(0, 100) : ''}
+                        </p>
+                      )}
+
+                      {/* Tags */}
+                      {tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 pt-1">
+                          {tags.slice(0, 2).map((tag, idx) => (
+                            <span
+                              key={idx}
+                              className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#1C1A27] text-[#9A94AA] border border-[#252233]"
+                            >
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="px-4 py-3 border-t border-[#252233] flex items-center justify-between text-[11px] text-[#9A94AA]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {art.authorAvatar ? (
+                        <img
+                          src={art.authorAvatar}
+                          alt={art.authorUsername || 'admin'}
+                          className="w-4 h-4 rounded-full object-cover border border-[#252233] shrink-0"
+                        />
+                      ) : (
+                        <User className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                      )}
+                      <span className="truncate text-zinc-300 font-medium">
+                        @{art.authorUsername || 'admin'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="flex items-center gap-1 text-zinc-400 text-[10px]">
+                        <Eye className="w-3 h-3" />
+                        {art.viewsCount || 0}
+                      </span>
+                      <span className="flex items-center gap-1 text-[10px]">
+                        <Calendar className="w-3 h-3" />
+                        {art.publishedAt
+                          ? new Date(art.publishedAt).toLocaleDateString('ru-RU', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric',
+                            })
+                          : ''}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="p-8 rounded-2xl bg-[#14131A] border border-[#252233] text-center space-y-2">
+            <Newspaper className="w-8 h-8 mx-auto text-zinc-600" />
+            <p className="font-semibold text-sm text-zinc-300">Пока нет новостей</p>
+            <p className="text-xs text-zinc-500 max-w-sm mx-auto">
+              Здесь будут публиковаться свежие анонсы платформы, обновления каталога и важные события.
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* Trending Section */}
       <div className="space-y-4">

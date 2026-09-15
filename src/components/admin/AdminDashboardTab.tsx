@@ -79,7 +79,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
     );
   }
 
-  const { users, content, engagement, moderation, system, trends, recentAudit } = data;
+  const { users, content: contentStats, engagement, moderation, system, trends, recentAudit, additionalStats } = data;
 
   return (
     <div className="space-y-6">
@@ -158,12 +158,12 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-black text-[#F3F1F8]">{content.total}</span>
+            <span className="text-2xl font-black text-[#F3F1F8]">{contentStats.total}</span>
             <span className="text-xs text-[#9A94AA]">произведений</span>
           </div>
           <div className="mt-2 text-xs text-[#9A94AA] flex items-center justify-between border-t border-[#252233]/60 pt-2">
             <span>В трекере: {engagement.userMedia}</span>
-            {content.hidden > 0 && <span className="text-amber-400">Скрыто: {content.hidden}</span>}
+            {contentStats.hidden > 0 && <span className="text-amber-400">Скрыто: {contentStats.hidden}</span>}
           </div>
         </div>
 
@@ -207,7 +207,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
       </div>
 
       {/* Quick Action Shortcuts */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <button
           onClick={() => onNavigateTab('moderation')}
           className="p-3.5 rounded-xl bg-[#191724] hover:bg-[#211E30] border border-[#2B273F] text-left transition-colors flex items-center gap-3 group"
@@ -234,7 +234,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
             <div className="text-xs font-bold text-[#F3F1F8] group-hover:text-indigo-300 transition-colors truncate">
               Новости
             </div>
-            <div className="text-[10px] text-[#9A94AA] truncate">CMS публикации</div>
+            <div className="text-[10px] text-[#9A94AA] truncate">{additionalStats?.news?.published || 0} опубликовано, {additionalStats?.news?.drafts || 0} черновиков</div>
           </div>
         </button>
 
@@ -249,7 +249,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
             <div className="text-xs font-bold text-[#F3F1F8] group-hover:text-[#AC82FF] transition-colors truncate">
               Объявления
             </div>
-            <div className="text-[10px] text-[#9A94AA] truncate">Баннеры платформы</div>
+            <div className="text-[10px] text-[#9A94AA] truncate">{additionalStats?.announcements?.active || 0} активных</div>
           </div>
         </button>
 
@@ -264,9 +264,25 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
             <div className="text-xs font-bold text-[#F3F1F8] group-hover:text-emerald-300 transition-colors truncate">
               Уведомления
             </div>
-            <div className="text-[10px] text-[#9A94AA] truncate">Рассылка сообщений</div>
+            <div className="text-[10px] text-[#9A94AA] truncate">{additionalStats?.notifications?.total || 0} отправлено</div>
           </div>
         </button>
+
+        <button
+          onClick={() => onNavigateTab('invites')}
+          className="p-3.5 rounded-xl bg-[#191724] hover:bg-[#211E30] border border-[#2B273F] text-left transition-colors flex items-center gap-3 group"
+        >
+          <div className="w-8 h-8 rounded-lg bg-pink-500/20 text-pink-300 flex items-center justify-center shrink-0">
+            <Sparkles className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs font-bold text-[#F3F1F8] group-hover:text-pink-300 transition-colors truncate">
+              Инвайты
+            </div>
+            <div className="text-[10px] text-[#9A94AA] truncate">{additionalStats?.invites?.active || 0} активных</div>
+          </div>
+        </button>
+
       </div>
 
       {/* Two Column Grid: Activity Trends & System Status */}
@@ -292,7 +308,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
             <div>
               <div className="flex items-center justify-between text-xs text-[#9A94AA] mb-1.5">
                 <span className="font-semibold text-indigo-300">Новые пользователи</span>
-                <span>{trends.registrations?.reduce((acc: number, r: any) => acc + (r.count || 0), 0) || 0} за 14 дн.</span>
+                <span>{trends.registrations?.reduce((acc: number, r: any) => acc + (Number(r.count) || 0), 0) || 0} за 14 дн.</span>
               </div>
               <div className="h-14 flex items-end gap-1.5 bg-[#0F0E12] p-2 rounded-xl border border-[#252233]/60">
                 {(trends.registrations || []).length === 0 ? (
@@ -320,7 +336,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
             <div>
               <div className="flex items-center justify-between text-xs text-[#9A94AA] mb-1.5">
                 <span className="font-semibold text-purple-300">Добавления в библиотеки</span>
-                <span>{trends.userMedia?.reduce((acc: number, r: any) => acc + (r.count || 0), 0) || 0} за 14 дн.</span>
+                <span>{trends.userMedia?.reduce((acc: number, r: any) => acc + (Number(r.count) || 0), 0) || 0} за 14 дн.</span>
               </div>
               <div className="h-14 flex items-end gap-1.5 bg-[#0F0E12] p-2 rounded-xl border border-[#252233]/60">
                 {(trends.userMedia || []).length === 0 ? (
@@ -352,7 +368,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
               Распределение медиа по типам
             </h4>
             <div className="flex flex-wrap gap-2">
-              {(content.byCategory || []).map((cat: any) => (
+              {(contentStats.byCategory || []).map((cat: any) => (
                 <div
                   key={cat.type}
                   className="px-2.5 py-1 rounded-lg bg-[#191724] border border-[#252233] text-xs flex items-center gap-1.5"

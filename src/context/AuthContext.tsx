@@ -152,6 +152,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ) {
         return;
       }
+      if (
+        err?.code === 'auth/popup-blocked' ||
+        err?.message?.includes('popup-blocked')
+      ) {
+        console.warn('Google Sign-in popup was blocked by the browser.');
+        const blockedErr = new Error('auth/popup-blocked');
+        (blockedErr as any).code = 'auth/popup-blocked';
+        throw blockedErr;
+      }
       console.error('Google Sign-in error:', err);
       throw err;
     }

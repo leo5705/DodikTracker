@@ -349,6 +349,7 @@ export const inviteCodes = pgTable('invite_codes', {
   creatorId: integer('creator_id').references(() => users.id, { onDelete: 'set null' }),
   usedById: integer('used_by_id').references(() => users.id, { onDelete: 'set null' }),
   isUsed: boolean('is_used').notNull().default(false),
+  isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').defaultNow(),
   usedAt: timestamp('used_at'),
 });
@@ -622,14 +623,18 @@ export const newsRelations = relations(news, ({ one }) => ({
   author: one(users, { fields: [news.authorId], references: [users.id] }),
 }));
 
-// 35. Announcements (System Banners & Broadcasts) Table
+// 35. Announcements (System Messages & Broadcasts) Table
 export const announcements = pgTable('announcements', {
   id: serial('id').primaryKey(),
   title: text('title').notNull(),
-  message: text('message').notNull(),
+  content: text('content'), // rich / markdown content
+  message: text('message').notNull(), // alias/backward-compat content
+  priority: text('priority').notNull().default('NORMAL'), // 'NORMAL' | 'IMPORTANT' | 'CRITICAL'
   severity: text('severity').notNull().default('INFO'), // 'INFO' | 'SUCCESS' | 'WARNING' | 'CRITICAL'
+  status: text('status').notNull().default('PUBLISHED'), // 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
   targetAudience: text('target_audience').notNull().default('ALL'), // 'ALL' | 'USERS' | 'ADMINS'
   isActive: boolean('is_active').notNull().default(true),
+  publishedAt: timestamp('published_at'),
   startAt: timestamp('start_at').defaultNow(),
   endAt: timestamp('end_at'),
   showBanner: boolean('show_banner').notNull().default(true),
@@ -639,10 +644,31 @@ export const announcements = pgTable('announcements', {
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({
   isActiveIdx: index('announcements_is_active_idx').on(table.isActive),
+  statusIdx: index('announcements_status_idx').on(table.status),
+  priorityIdx: index('announcements_priority_idx').on(table.priority),
   severityIdx: index('announcements_severity_idx').on(table.severity),
+  publishedAtIdx: index('announcements_published_at_idx').on(table.publishedAt),
 }));
 
-export const announcementsRelations = relations(announcements, ({ one }) => ({
+export const announcementsRelations = relations(announcements, ({ one, many }) => ({
   creator: one(users, { fields: [announcements.createdBy], references: [users.id] }),
+  reads: many(announcementReads),
+}));
+
+// 35b. Announcement Reads (Read & Dismissed Tracking) Table
+export const announcementReads = pgTable('announcement_reads', {
+  id: serial('id').primaryKey(),
+  announcementId: integer('announcement_id').references(() => announcements.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  readAt: timestamp('read_at').defaultNow(),
+}, (table) => ({
+  announcementUserUnq: uniqueIndex('announcement_reads_ann_user_unq').on(table.announcementId, table.userId),
+  userIdx: index('announcement_reads_user_id_idx').on(table.userId),
+  announcementIdx: index('announcement_reads_ann_id_idx').on(table.announcementId),
+}));
+
+export const announcementReadsRelations = relations(announcementReads, ({ one }) => ({
+  announcement: one(announcements, { fields: [announcementReads.announcementId], references: [announcements.id] }),
+  user: one(users, { fields: [announcementReads.userId], references: [users.id] }),
 }));
 

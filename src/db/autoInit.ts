@@ -315,6 +315,7 @@ export async function runAutoMigrations(pool: Pool) {
           "creator_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
           "used_by_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
           "is_used" boolean NOT NULL DEFAULT false,
+          "is_active" boolean NOT NULL DEFAULT true,
           "created_at" timestamp DEFAULT now(),
           "used_at" timestamp
         );
@@ -479,10 +480,14 @@ export async function runAutoMigrations(pool: Pool) {
         CREATE TABLE IF NOT EXISTS "announcements" (
           "id" serial PRIMARY KEY,
           "title" text NOT NULL,
+          "content" text,
           "message" text NOT NULL,
+          "priority" text NOT NULL DEFAULT 'NORMAL',
           "severity" text NOT NULL DEFAULT 'INFO',
+          "status" text NOT NULL DEFAULT 'PUBLISHED',
           "target_audience" text NOT NULL DEFAULT 'ALL',
           "is_active" boolean NOT NULL DEFAULT true,
+          "published_at" timestamp DEFAULT now(),
           "start_at" timestamp DEFAULT now(),
           "end_at" timestamp,
           "show_banner" boolean NOT NULL DEFAULT true,
@@ -492,9 +497,27 @@ export async function runAutoMigrations(pool: Pool) {
           "updated_at" timestamp DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS "announcements_is_active_idx" ON "announcements"("is_active");
+        CREATE INDEX IF NOT EXISTS "announcements_status_idx" ON "announcements"("status");
+        CREATE INDEX IF NOT EXISTS "announcements_priority_idx" ON "announcements"("priority");
         CREATE INDEX IF NOT EXISTS "announcements_severity_idx" ON "announcements"("severity");
+        CREATE INDEX IF NOT EXISTS "announcements_published_at_idx" ON "announcements"("published_at");
+
+        -- 35b. Announcement Reads Table
+        CREATE TABLE IF NOT EXISTS "announcement_reads" (
+          "id" serial PRIMARY KEY,
+          "announcement_id" integer NOT NULL REFERENCES "announcements"("id") ON DELETE CASCADE,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "read_at" timestamp DEFAULT now(),
+          CONSTRAINT "announcement_reads_ann_user_unq" UNIQUE ("announcement_id", "user_id")
+        );
+        CREATE INDEX IF NOT EXISTS "announcement_reads_user_id_idx" ON "announcement_reads"("user_id");
+        CREATE INDEX IF NOT EXISTS "announcement_reads_ann_id_idx" ON "announcement_reads"("announcement_id");
 
         -- 36. Add Missing Columns to existing tables (Idempotent)
+        ALTER TABLE "announcements" ADD COLUMN IF NOT EXISTS "content" text;
+        ALTER TABLE "announcements" ADD COLUMN IF NOT EXISTS "priority" text NOT NULL DEFAULT 'NORMAL';
+        ALTER TABLE "announcements" ADD COLUMN IF NOT EXISTS "status" text NOT NULL DEFAULT 'PUBLISHED';
+        ALTER TABLE "announcements" ADD COLUMN IF NOT EXISTS "published_at" timestamp;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "banned_until" timestamp;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ban_reason" text;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "warning_count" integer NOT NULL DEFAULT 0;
@@ -504,6 +527,7 @@ export async function runAutoMigrations(pool: Pool) {
         ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "tier_lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "reviews" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "invite_codes" ADD COLUMN IF NOT EXISTS "is_active" boolean NOT NULL DEFAULT true;
       `);
       console.log('[AutoInit] Database tables and indexes verified successfully.');
     } finally {

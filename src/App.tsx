@@ -31,9 +31,12 @@ import { GameDeveloperDetailView } from './components/views/GameDeveloperDetailV
 import { GamePublishersView } from './components/views/GamePublishersView.tsx';
 import { GamePublisherDetailView } from './components/views/GamePublisherDetailView.tsx';
 import { GameSeriesDetailView } from './components/views/GameSeriesDetailView.tsx';
+import { NewsView } from './components/views/NewsView.tsx';
+import { NewsDetailView } from './components/views/NewsDetailView.tsx';
 import { AuthGatekeeper } from './components/auth/AuthGatekeeper.tsx';
 import { ResetPasswordView } from './components/auth/ResetPasswordView.tsx';
 import { MiniMessenger } from './components/modals/MiniMessenger.tsx';
+import { AnnouncementBanner } from './components/AnnouncementBanner.tsx';
 import { Loader2 } from 'lucide-react';
 
 function MainApp() {
@@ -161,6 +164,12 @@ function MainApp() {
       case 'achievements':
         return <AchievementsView />;
 
+      case 'news':
+        return <NewsView />;
+
+      case 'news-detail':
+        return <NewsDetailView key={route.params.slug} slug={route.params.slug} />;
+
       case 'notifications':
         return <NotificationCenterView onNavigate={navigate} />;
       case 'settings':
@@ -200,7 +209,10 @@ function MainApp() {
 
       {/* Main View Area */}
       <main className="flex-1 min-w-0 pt-16 md:pt-0 pb-20 md:pb-8 px-4 sm:px-6 lg:px-10 max-w-7xl mx-auto w-full">
-        <div className="py-6 sm:py-8">{renderView()}</div>
+        <div className="py-6 sm:py-8">
+          <AnnouncementBanner />
+          {renderView()}
+        </div>
       </main>
 
       {/* Mini Messenger globally available for authenticated users */}

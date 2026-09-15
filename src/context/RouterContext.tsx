@@ -23,6 +23,8 @@ export interface RouteMatch {
     | 'notifications'
     | 'media-detail'
     | 'reset-password'
+    | 'news'
+    | 'news-detail'
     | 'game-catalog'
     | 'game-detail'
     | 'game-developers'
@@ -201,6 +203,19 @@ export function parseRoute(rawPathname: string): RouteMatch {
       params: { ...queryParams, token: resetPasswordMatch[1] },
       pathname: cleanPath,
     };
+  }
+
+  // News Routes
+  const newsDetailMatch = cleanPath.match(/^\/news\/([a-zA-Z0-9_.-]+)$/);
+  if (newsDetailMatch) {
+    return {
+      name: 'news-detail',
+      params: { ...queryParams, slug: newsDetailMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+  if (cleanPath === '/news') {
+    return { name: 'news', params: queryParams, pathname: cleanPath };
   }
 
   // 5. Library import / export

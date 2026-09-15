@@ -15,6 +15,7 @@ import {
   Settings,
   LayoutDashboard,
   Sparkles,
+  Ticket,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { AdminDashboardTab } from '../admin/AdminDashboardTab.tsx';
@@ -29,6 +30,7 @@ import { AdminAnalyticsTab } from '../admin/AdminAnalyticsTab.tsx';
 import { AdminIntegrationsTab } from '../admin/AdminIntegrationsTab.tsx';
 import { AdminAuditTab } from '../admin/AdminAuditTab.tsx';
 import { AdminSettingsTab } from '../admin/AdminSettingsTab.tsx';
+import { AdminInvitesTab } from '../admin/AdminInvitesTab.tsx';
 
 export type AdminTabType =
   | 'dashboard'
@@ -42,6 +44,7 @@ export type AdminTabType =
   | 'analytics'
   | 'integrations'
   | 'audit'
+  | 'invites'
   | 'settings';
 
 interface TabDefinition {
@@ -132,6 +135,12 @@ export const AdminView: React.FC = () => {
         label: 'Аудит',
         icon: FileText,
         canAccess: isModerator,
+      },
+      {
+        id: 'invites',
+        label: 'Инвайты',
+        icon: Ticket,
+        canAccess: isAdmin,
       },
       {
         id: 'settings',
@@ -252,6 +261,7 @@ export const AdminView: React.FC = () => {
         {currentTab === 'analytics' && <AdminAnalyticsTab />}
         {currentTab === 'integrations' && <AdminIntegrationsTab />}
         {currentTab === 'audit' && <AdminAuditTab />}
+        {currentTab === 'invites' && <AdminInvitesTab />}
         {currentTab === 'settings' && <AdminSettingsTab />}
       </div>
     </div>

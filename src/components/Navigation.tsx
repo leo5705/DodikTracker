@@ -24,6 +24,7 @@ import {
   ChevronDown,
   Search,
   Trophy,
+  Newspaper,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useRouter } from '../context/RouterContext.tsx';
@@ -42,6 +43,7 @@ export type ActiveTab =
   | 'tier-lists'
   | 'statistics'
   | 'achievements'
+  | 'news'
   | 'calendar'
   | 'admin'
   | 'profile'
@@ -96,6 +98,9 @@ export const Navigation: React.FC<NavigationProps> = ({
         return 'statistics';
       case 'achievements':
         return 'achievements';
+      case 'news':
+      case 'news-detail':
+        return 'news';
       case 'calendar':
         return 'calendar';
       case 'admin':
@@ -122,6 +127,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       'tier-lists': '/tier-lists',
       statistics: '/statistics',
       achievements: '/achievements',
+      news: '/news',
       calendar: '/calendar',
       admin: '/admin',
       profile: dbUser ? `/u/${dbUser.username}` : '/profile',
@@ -176,6 +182,7 @@ export const Navigation: React.FC<NavigationProps> = ({
     { id: 'tier-lists', label: 'Tier Lists', icon: Layers },
     { id: 'statistics', label: 'Статистика', icon: BarChart3 },
     { id: 'achievements', label: 'Достижения', icon: Trophy },
+    { id: 'news', label: 'Новости', icon: Newspaper },
     { id: 'calendar', label: 'Календарь релизов', icon: CalendarDays },
   ];
 

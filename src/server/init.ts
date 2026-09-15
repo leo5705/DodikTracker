@@ -20,10 +20,7 @@ export async function initDbSettings() {
       .limit(1);
 
     if (setting.length === 0) {
-      const userCountResult = await db.select({ value: count() }).from(users);
-      const userCount = Number(userCountResult[0]?.value || 0);
-
-      const initialMode = userCount > 0 ? 'INVITE_ONLY' : 'OPEN';
+      const initialMode = 'OPEN';
 
       await db.insert(systemSettings).values({
         key: 'site_access_mode',

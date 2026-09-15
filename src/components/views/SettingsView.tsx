@@ -14,9 +14,11 @@ import {
   Monitor,
   Radio,
   Sliders,
+  Ticket,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useNotifications } from '../../context/NotificationContext.tsx';
+import { UserInvitesSection } from '../invites/UserInvitesSection.tsx';
 import {
   NOTIFICATION_TYPE_DEFINITIONS,
   NotificationPreferences,
@@ -30,7 +32,7 @@ interface SettingsViewProps {
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile }) => {
   const { dbUser, authFetch, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'privacy' | 'notifications'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'privacy' | 'notifications' | 'invites'>('profile');
 
   // Profile Form state
   const [username, setUsername] = useState('');
@@ -233,6 +235,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
     { id: 'profile', label: 'Профиль', icon: User },
     { id: 'privacy', label: 'Приватность', icon: Shield },
     { id: 'notifications', label: 'Уведомления', icon: Bell },
+    { id: 'invites', label: 'Мои приглашения', icon: Ticket },
   ];
 
   if (!dbUser) return null;
@@ -739,6 +742,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
           </div>
         </div>
       )}
+
+      {activeTab === 'invites' && <UserInvitesSection />}
     </div>
   );
 };

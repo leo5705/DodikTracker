@@ -14,10 +14,35 @@ import {
   adminAuditLogs,
   systemIntegrations,
   systemSettings,
+  inviteCodes,
+  news,
+  announcements,
+  notifications,
+  friendRequests,
 } from '../../../db/schema.ts';
-import { sql, desc, eq, count, and, gte } from 'drizzle-orm';
+import { sql, desc, eq, count, and, gte, isNull } from 'drizzle-orm';
 
 export const dashboardRouter = Router();
+
+function padDates(rows: any[], days: number): any[] {
+  const result: any[] = [];
+  const now = new Date();
+  const dateMap = new Map<string, number>();
+  
+  for (const row of rows) {
+    dateMap.set(row.day, row.count);
+  }
+
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+    const dateString = d.toISOString().split('T')[0];
+    result.push({
+      day: dateString,
+      count: dateMap.get(dateString) || 0
+    });
+  }
+  return result;
+}
 
 dashboardRouter.get('/dashboard', requireAuth, requireStaff('VIEW_DASHBOARD'), async (_req: AuthRequest, res: Response) => {
   try {
@@ -64,6 +89,9 @@ dashboardRouter.get('/dashboard', requireAuth, requireStaff('VIEW_DASHBOARD'), a
     const [totalTierListsRes] = await db.select({ val: count() }).from(tierLists);
     const [totalCommentsRes] = await db.select({ val: count() }).from(comments);
     const [totalMessagesRes] = await db.select({ val: count() }).from(directMessages);
+    
+    const [totalFriendRequestsRes] = await db.select({ val: count() }).from(friendRequests);
+    const [acceptedFriendRequestsRes] = await db.select({ val: count() }).from(friendRequests).where(eq(friendRequests.status, 'ACCEPTED'));
 
     // 4. Moderation metrics
     const [pendingReportsRes] = await db.select({ val: count() }).from(reports).where(eq(reports.status, 'PENDING'));
@@ -82,11 +110,33 @@ dashboardRouter.get('/dashboard', requireAuth, requireStaff('VIEW_DASHBOARD'), a
     const settingsList = await db.select().from(systemSettings);
     const settingsMap = new Map(settingsList.map((s) => [s.key, s.value]));
     const regMode = settingsMap.get('site_access_mode') || 'OPEN';
-    const maintenanceMode = settingsMap.get('maintenance_mode') === 'true';
+    const maintenanceMode = regMode === 'MAINTENANCE' || settingsMap.get('maintenance_mode') === 'true';
+
+    // Additional Stats requested by User
+    
+    // Invites
+    const [totalInvitesRes] = await db.select({ val: count() }).from(inviteCodes);
+    const [activeInvitesRes] = await db.select({ val: count() }).from(inviteCodes).where(eq(inviteCodes.isActive, true));
+    const [usedInvitesRes] = await db.select({ val: count() }).from(inviteCodes).where(eq(inviteCodes.isUsed, true));
+    
+    // News
+    const [totalNewsRes] = await db.select({ val: count() }).from(news);
+    const [publishedNewsRes] = await db.select({ val: count() }).from(news).where(eq(news.status, 'PUBLISHED'));
+    const [draftNewsRes] = await db.select({ val: count() }).from(news).where(eq(news.status, 'DRAFT'));
+    const [archivedNewsRes] = await db.select({ val: count() }).from(news).where(eq(news.status, 'ARCHIVED'));
+    
+    // Announcements
+    const [totalAnnouncementsRes] = await db.select({ val: count() }).from(announcements);
+    const [activeAnnouncementsRes] = await db.select({ val: count() }).from(announcements).where(eq(announcements.isActive, true));
+    const [publishedAnnouncementsRes] = await db.select({ val: count() }).from(announcements).where(eq(announcements.status, 'PUBLISHED'));
+    
+    // Notifications
+    const [totalNotificationsRes] = await db.select({ val: count() }).from(notifications);
+    const [unreadNotificationsRes] = await db.select({ val: count() }).from(notifications).where(eq(notifications.isRead, false));
 
     // 7. Daily trends (last 14 days)
     const dailyRegistrationsRes = await db.execute(sql`
-      SELECT TO_CHAR(created_at, 'YYYY-MM-DD') as day, COUNT(*)::int as count
+      SELECT TO_CHAR(timezone('UTC', created_at), 'YYYY-MM-DD') as day, COUNT(*)::int as count
       FROM users
       WHERE created_at >= ${fourteenDaysAgo}
       GROUP BY day
@@ -94,7 +144,7 @@ dashboardRouter.get('/dashboard', requireAuth, requireStaff('VIEW_DASHBOARD'), a
     `);
 
     const dailyReviewsRes = await db.execute(sql`
-      SELECT TO_CHAR(created_at, 'YYYY-MM-DD') as day, COUNT(*)::int as count
+      SELECT TO_CHAR(timezone('UTC', created_at), 'YYYY-MM-DD') as day, COUNT(*)::int as count
       FROM reviews
       WHERE created_at >= ${fourteenDaysAgo}
       GROUP BY day
@@ -102,7 +152,7 @@ dashboardRouter.get('/dashboard', requireAuth, requireStaff('VIEW_DASHBOARD'), a
     `);
 
     const dailyUserMediaRes = await db.execute(sql`
-      SELECT TO_CHAR(created_at, 'YYYY-MM-DD') as day, COUNT(*)::int as count
+      SELECT TO_CHAR(timezone('UTC', created_at), 'YYYY-MM-DD') as day, COUNT(*)::int as count
       FROM user_media
       WHERE created_at >= ${fourteenDaysAgo}
       GROUP BY day
@@ -110,7 +160,7 @@ dashboardRouter.get('/dashboard', requireAuth, requireStaff('VIEW_DASHBOARD'), a
     `);
 
     const dailyReportsRes = await db.execute(sql`
-      SELECT TO_CHAR(created_at, 'YYYY-MM-DD') as day, COUNT(*)::int as count
+      SELECT TO_CHAR(timezone('UTC', created_at), 'YYYY-MM-DD') as day, COUNT(*)::int as count
       FROM reports
       WHERE created_at >= ${fourteenDaysAgo}
       GROUP BY day
@@ -154,6 +204,8 @@ dashboardRouter.get('/dashboard', requireAuth, requireStaff('VIEW_DASHBOARD'), a
         tierLists: Number(totalTierListsRes?.val || 0),
         comments: Number(totalCommentsRes?.val || 0),
         messages: Number(totalMessagesRes?.val || 0),
+        friendRequestsTotal: Number(totalFriendRequestsRes?.val || 0),
+        friendRequestsAccepted: Number(acceptedFriendRequestsRes?.val || 0),
       },
       moderation: {
         pending: Number(pendingReportsRes?.val || 0),
@@ -165,11 +217,33 @@ dashboardRouter.get('/dashboard', requireAuth, requireStaff('VIEW_DASHBOARD'), a
         maintenanceMode,
         integrations: integrationsStatus,
       },
+      additionalStats: {
+        invites: {
+          total: Number(totalInvitesRes?.val || 0),
+          active: Number(activeInvitesRes?.val || 0),
+          used: Number(usedInvitesRes?.val || 0),
+        },
+        news: {
+          total: Number(totalNewsRes?.val || 0),
+          published: Number(publishedNewsRes?.val || 0),
+          drafts: Number(draftNewsRes?.val || 0),
+          archived: Number(archivedNewsRes?.val || 0),
+        },
+        announcements: {
+          total: Number(totalAnnouncementsRes?.val || 0),
+          active: Number(activeAnnouncementsRes?.val || 0),
+          published: Number(publishedAnnouncementsRes?.val || 0),
+        },
+        notifications: {
+          total: Number(totalNotificationsRes?.val || 0),
+          unread: Number(unreadNotificationsRes?.val || 0),
+        }
+      },
       trends: {
-        registrations: (dailyRegistrationsRes as any).rows || [],
-        reviews: (dailyReviewsRes as any).rows || [],
-        userMedia: (dailyUserMediaRes as any).rows || [],
-        reports: (dailyReportsRes as any).rows || [],
+        registrations: padDates((dailyRegistrationsRes as any).rows || [], 14),
+        reviews: padDates((dailyReviewsRes as any).rows || [], 14),
+        userMedia: padDates((dailyUserMediaRes as any).rows || [], 14),
+        reports: padDates((dailyReportsRes as any).rows || [], 14),
       },
       recentAudit,
     });

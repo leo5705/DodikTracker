@@ -30,6 +30,7 @@ export const AuthGatekeeper: React.FC = () => {
   const [inviteCode, setInviteCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [popupBlocked, setPopupBlocked] = useState(false);
 
   // Telegram state
   const [tgCode, setTgCode] = useState<string | null>(null);
@@ -55,6 +56,16 @@ export const AuthGatekeeper: React.FC = () => {
       }
     };
     fetchMode();
+
+    // Check URL search parameters for invite code
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlInvite = urlParams.get('invite') || urlParams.get('code');
+    if (urlInvite) {
+      const code = urlInvite.trim().toUpperCase();
+      setInviteCode(code);
+      setTgInviteCode(code);
+      setTab('REGISTER');
+    }
   }, []);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -76,11 +87,17 @@ export const AuthGatekeeper: React.FC = () => {
     if (submitting) return;
     setSubmitting(true);
     setError(null);
+    setPopupBlocked(false);
     try {
       await loginGoogle();
     } catch (err: any) {
-      if (err.message && err.message.includes('popup-blocked')) {
-        setError('Всплывающее окно заблокировано браузером. Пожалуйста, разрешите всплывающие окна для этого сайта, или откройте приложение в новой вкладке.');
+      if (
+        err?.code === 'auth/popup-blocked' ||
+        err?.message?.includes('popup-blocked') ||
+        err?.message?.includes('auth/popup-blocked')
+      ) {
+        setPopupBlocked(true);
+        setError('Браузер заблокировал всплывающее окно авторизации Google. Нажмите кнопку ниже, чтобы открыть приложение в новой вкладке, или воспользуйтесь входом по паролю / Telegram.');
       } else if (err.message && err.message.includes('Pending promise was never set')) {
         // Ignore this internal assertion
       } else {
@@ -343,7 +360,7 @@ export const AuthGatekeeper: React.FC = () => {
                 </div>
               </div>
 
-              {regMode === 'INVITE_ONLY' && (
+              {regMode === 'INVITE_ONLY' ? (
                 <div className="space-y-1">
                   <label className="text-[11px] font-semibold text-[#AC82FF] flex items-center gap-1">
                     <Ticket className="w-3.5 h-3.5" />
@@ -353,12 +370,26 @@ export const AuthGatekeeper: React.FC = () => {
                     type="text"
                     required
                     value={inviteCode}
-                    onChange={(e) => setInviteCode(e.target.value)}
+                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
                     placeholder="Например: DODIK-X79K2L"
                     className="w-full px-3 py-2.5 rounded-xl bg-[#191724] border border-[#AC82FF]/40 text-xs font-mono text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
                   />
                 </div>
-              )}
+              ) : regMode === 'OPEN' ? (
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-[#9A94AA] flex items-center gap-1">
+                    <Ticket className="w-3.5 h-3.5" />
+                    Инвайт-код (если есть)
+                  </label>
+                  <input
+                    type="text"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                    placeholder="Необязательно (например: DODIK-X79K2L)"
+                    className="w-full px-3 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs font-mono text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+                  />
+                </div>
+              ) : null}
 
               {regMode === 'CLOSED' || regMode === 'MAINTENANCE' ? (
                 <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs text-center">
@@ -527,6 +558,18 @@ export const AuthGatekeeper: React.FC = () => {
               </svg>
               <span>Войти в один клик через Google</span>
             </button>
+
+            {popupBlocked && (
+              <a
+                href={window.location.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-2 px-3 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-[#AC82FF] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <span>Открыть приложение в новой вкладке</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
           </div>
         </div>
 
