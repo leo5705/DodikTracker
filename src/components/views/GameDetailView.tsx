@@ -15,6 +15,7 @@ import { GameDevelopmentTeam } from '../game/GameDevelopmentTeam.tsx';
 import { GameRelatedGames } from '../game/GameRelatedGames.tsx';
 import { GameAdminDiagnosticModal } from '../game/GameAdminDiagnosticModal.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { useShare } from '../../context/ShareContext.tsx';
 
 interface GameDetailViewProps {
   idOrSlug: string;
@@ -22,6 +23,7 @@ interface GameDetailViewProps {
 
 export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
   const { dbUser } = useAuth();
+  const { openCompletionModal, openShareModal } = useShare();
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -103,6 +105,16 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
       const data = await res.json();
       setUserTracking(data);
       showToast(`Статус игры обновлён: ${status}`, 'success');
+
+      if (status === 'COMPLETED') {
+        openCompletionModal({
+          mediaId: Number(game.mediaId || data.mediaId),
+          title: game.title || game.originalTitle || 'Игра',
+          type: 'GAME',
+          posterUrl: game.posterUrl,
+          rating: userTracking?.score || null,
+        });
+      }
     } catch (err: any) {
       showToast(err.message || 'Ошибка сохранения статуса', 'error');
     }
@@ -137,7 +149,7 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
               : 'LOCAL',
             externalId: String(game.externalIds.rawg || game.externalIds.igdb || game.externalIds.gmdb || game.slug || game.id),
           },
-          status: userTracking?.status || 'COMPLETED',
+          status: userTracking?.status || 'PLANNING',
           score: selectedScore,
         }),
       });
@@ -199,6 +211,18 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
         onStatusChange={handleStatusChange}
         onOpenRatingModal={() => setShowScoreModal(true)}
         onOpenDiagnosticModal={() => setShowDiagnostic(true)}
+        onOpenShareModal={() =>
+          openShareModal(
+            {
+              id: Number(game.mediaId),
+              title: game.title,
+              type: 'GAME',
+              posterUrl: game.posterUrl,
+              rating: userTracking?.score || null,
+            },
+            userTracking?.status === 'COMPLETED'
+          )
+        }
       />
 
       {/* Main Grid Content */}
@@ -286,7 +310,7 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
       )}
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 animate-bounce">
+        <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px)+1rem)] md:bottom-6 right-4 sm:right-6 z-50 animate-bounce pointer-events-auto">
           <div
             className={`px-4 py-2.5 rounded-xl border text-xs font-semibold shadow-2xl flex items-center gap-2 ${
               toastMessage.type === 'success'

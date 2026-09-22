@@ -25,6 +25,7 @@ import {
   Bookmark,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { useShare } from '../../context/ShareContext.tsx';
 import { AddToListModal } from './AddToListModal.tsx';
 import { ConfirmModal } from './ConfirmModal.tsx';
 
@@ -44,6 +45,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   onOpenUserProfile,
 }) => {
   const { authFetch, dbUser, login } = useAuth();
+  const { openCompletionModal } = useShare();
   const [mediaData, setMediaData] = useState<any>(initialMedia || null);
   const [loading, setLoading] = useState(false);
   const [reviewsList, setReviewsList] = useState<any[]>([]);
@@ -162,6 +164,16 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         setTrackingSavedSuccess(true);
         setTimeout(() => setTrackingSavedSuccess(false), 2000);
         onUpdated?.();
+
+        if (userStatus === 'COMPLETED') {
+          openCompletionModal({
+            mediaId: Number(targetMediaId),
+            title: mediaData?.title || 'Контент',
+            type: mediaData?.type,
+            posterUrl: mediaData?.posterUrl,
+            rating: userRating || null,
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to save tracking:', err);

@@ -15,6 +15,11 @@ import {
   Radio,
   Sliders,
   Ticket,
+  Copy,
+  ExternalLink,
+  AlertCircle,
+  Unlink,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useNotifications } from '../../context/NotificationContext.tsx';
@@ -31,7 +36,7 @@ interface SettingsViewProps {
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile }) => {
-  const { dbUser, authFetch, logout } = useAuth();
+  const { dbUser, authFetch, logout, refreshProfile } = useAuth();
   const [activeTab, setActiveTab] = useState<'profile' | 'privacy' | 'notifications' | 'invites'>('profile');
 
   // Profile Form state
@@ -61,8 +66,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
   
   const [testingTelegram, setTestingTelegram] = useState(false);
   const [telegramTestSuccess, setTelegramTestSuccess] = useState<string | null>(null);
-  const [linkCodeInfo, setLinkCodeInfo] = useState<{ code: string; botUsername: string } | null>(null);
+  const [linkCodeInfo, setLinkCodeInfo] = useState<{ code: string; botUsername: string; botUrl?: string } | null>(null);
   const [generatingCode, setGeneratingCode] = useState(false);
+  const [verifyingLink, setVerifyingLink] = useState(false);
+  const [unlinkingTelegram, setUnlinkingTelegram] = useState(false);
+  const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   // Status state
   const [saving, setSaving] = useState(false);
@@ -214,21 +223,131 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
     }
   };
 
+  // Auto-poll status when linkCodeInfo is active
+  useEffect(() => {
+    if (!linkCodeInfo?.code) return;
+    let cancelled = false;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await authFetch(`/api/auth/telegram/link-status?code=${linkCodeInfo.code}`);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+
+        if (res.status === 409 || data.status === 'ALREADY_LINKED') {
+          clearInterval(intervalId);
+          setLinkCodeInfo(null);
+          setTelegramLinkError(data.error || 'Этот Telegram уже привязан к другому аккаунту.');
+          return;
+        }
+
+        if (data.status === 'LINKED') {
+          clearInterval(intervalId);
+          setLinkCodeInfo(null);
+          setTelegramLinkError(null);
+          setTelegramTestSuccess('Telegram успешно привязан!');
+          await refreshProfile();
+          setTimeout(() => setTelegramTestSuccess(null), 5000);
+          return;
+        }
+
+        if (data.status === 'EXPIRED') {
+          clearInterval(intervalId);
+          setLinkCodeInfo(null);
+          setTelegramLinkError('Срок действия кода истек. Запросите новый код.');
+          return;
+        }
+      } catch (_err) {
+        // silent polling error
+      }
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [linkCodeInfo?.code]);
+
   const handleGenerateLinkCode = async () => {
     setGeneratingCode(true);
+    setTelegramLinkError(null);
     setErrorMessage(null);
     try {
-      const res = await authFetch('/api/auth/telegram/request-code', { method: 'POST' });
+      const res = await authFetch('/api/auth/telegram/link-code', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Не удалось получить код привязки');
       }
-      setLinkCodeInfo({ code: data.code, botUsername: data.botUsername });
+      setLinkCodeInfo({
+        code: data.code,
+        botUsername: data.botUsername,
+        botUrl: data.botUrl || `https://t.me/${data.botUsername}?start=link_${data.code}`,
+      });
     } catch (err: any) {
-      setErrorMessage(err.message || 'Ошибка');
+      setTelegramLinkError(err.message || 'Ошибка генерации кода');
     } finally {
       setGeneratingCode(false);
     }
+  };
+
+  const handleConfirmLink = async () => {
+    if (!linkCodeInfo?.code) return;
+    setVerifyingLink(true);
+    setTelegramLinkError(null);
+    try {
+      const res = await authFetch('/api/auth/telegram/confirm-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: linkCodeInfo.code }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409) {
+          setLinkCodeInfo(null);
+          setTelegramLinkError(data.error || 'Этот Telegram уже привязан к другому аккаунту.');
+          return;
+        }
+        throw new Error(data.error || 'Привязка ещё не подтверждена в боте.');
+      }
+      setLinkCodeInfo(null);
+      setTelegramLinkError(null);
+      setTelegramTestSuccess('Telegram успешно привязан!');
+      await refreshProfile();
+      setTimeout(() => setTelegramTestSuccess(null), 5000);
+    } catch (err: any) {
+      setTelegramLinkError(err.message || 'Ошибка проверки привязки');
+    } finally {
+      setVerifyingLink(false);
+    }
+  };
+
+  const handleUnlinkTelegram = async () => {
+    if (!window.confirm('Вы действительно хотите отвязать Telegram от вашего аккаунта?')) {
+      return;
+    }
+    setUnlinkingTelegram(true);
+    setTelegramLinkError(null);
+    try {
+      const res = await authFetch('/api/auth/telegram/unlink', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Не удалось отвязать Telegram');
+      }
+      setTelegramTestSuccess('Telegram успешно отвязан от вашего аккаунта.');
+      setTelegramChatId('');
+      await refreshProfile();
+      setTimeout(() => setTelegramTestSuccess(null), 5000);
+    } catch (err: any) {
+      setTelegramLinkError(err.message || 'Ошибка при отвязке');
+    } finally {
+      setUnlinkingTelegram(false);
+    }
+  };
+
+  const handleCopyCode = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
   };
 
   const tabs = [
@@ -634,111 +753,209 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
           {/* Telegram Integration Card */}
           <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-5">
-            <div className="flex items-center justify-between pb-2 border-b border-[#252233]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#252233]">
               <div className="flex items-center gap-2">
                 <Send className="w-4 h-4 text-sky-400" />
                 <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono">
                   Telegram-уведомления
                 </h3>
               </div>
-              <span className="text-[10px] px-2 py-0.5 rounded-md bg-sky-500/10 border border-sky-500/30 text-sky-300 font-mono">
-                TELEGRAM BOT
-              </span>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-sky-950/20 border border-sky-800/30 text-xs text-sky-200/90 space-y-2">
-              <p className="font-semibold flex items-center gap-1.5">
-                <Info className="w-3.5 h-3.5" />
-                Способы подключения Telegram-бота:
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div className="p-3 rounded-lg bg-[#191724]/80 border border-[#2E2A40] space-y-1.5">
-                  <div className="font-semibold text-sky-300 text-[11px]">Способ 1: Быстрый код</div>
-                  <p className="text-[11px] text-[#A29DB5]">
-                    Сгенерируйте код и отправьте его боту командой <span className="font-mono text-sky-300">/link КОД</span>
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleGenerateLinkCode}
-                    disabled={generatingCode}
-                    className="mt-1 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600/30 hover:bg-sky-600/50 text-sky-200 text-xs font-semibold border border-sky-500/40 transition-colors disabled:opacity-50"
-                  >
-                    {generatingCode ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                    Получить код привязки
-                  </button>
-                </div>
-                <div className="p-3 rounded-lg bg-[#191724]/80 border border-[#2E2A40] space-y-1.5">
-                  <div className="font-semibold text-sky-300 text-[11px]">Способ 2: Вручную через Chat ID</div>
-                  <p className="text-[11px] text-[#A29DB5]">
-                    Отправьте <span className="font-mono text-sky-300">/start</span> боту, скопируйте свой Chat ID и вставьте в поле ниже.
-                  </p>
-                </div>
-              </div>
-
-              {linkCodeInfo && (
-                <div className="p-3 rounded-lg bg-purple-950/40 border border-purple-800/40 text-xs space-y-1 mt-2">
-                  <div className="text-zinc-300">
-                    Ваш одноразовый код привязки: <span className="font-mono font-bold text-lg text-purple-300 px-2 py-0.5 bg-black/40 rounded">{linkCodeInfo.code}</span>
-                  </div>
-                  <p className="text-[11px] text-zinc-400">
-                    Отправьте команду <span className="font-mono text-purple-300">/link {linkCodeInfo.code}</span> боту{' '}
-                    <a
-                      href={`https://t.me/${linkCodeInfo.botUsername}?start=${linkCodeInfo.code}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline text-sky-300 hover:text-sky-200"
-                    >
-                      @{linkCodeInfo.botUsername}
-                    </a>
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-[#D5D0E3]">Ваш Telegram Chat ID</label>
               <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Например: 123456789"
-                  value={telegramChatId}
-                  onChange={(e) => setTelegramChatId(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs font-mono text-[#F3F1F8] placeholder-[#656075] focus:outline-none focus:border-[#9B6BFF]"
-                />
-                <button
-                  type="button"
-                  onClick={handleTestTelegramNotification}
-                  disabled={testingTelegram}
-                  className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#191724] hover:bg-[#1E1B2B] border border-[#2E2A40] text-xs font-medium text-sky-300 transition-colors disabled:opacity-50"
-                >
-                  {testingTelegram ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Send className="w-3.5 h-3.5" />
-                  )}
-                  Тест
-                </button>
+                <span className="text-xs text-[#9A94AA]">Telegram:</span>
+                {dbUser?.telegramId || dbUser?.telegramChatId ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
+                    <Check className="w-3 h-3" />
+                    [Привязан]
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs font-mono">
+                    [Не привязан]
+                  </span>
+                )}
               </div>
             </div>
 
-            {telegramTestSuccess && (
-              <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-200 text-xs flex items-center gap-2">
-                <Check className="w-3.5 h-3.5" />
-                <span>{telegramTestSuccess}</span>
+            {/* Error banner (e.g. ALREADY_LINKED) */}
+            {telegramLinkError && (
+              <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-bold text-rose-300">{telegramLinkError}</div>
+                  <div className="text-[11px] text-rose-300/80">
+                    Никаких молчаливых перепривязок. Если этот Telegram принадлежит вам, войдите под тем аккаунтом или отвяжите его в настройках.
+                  </div>
+                </div>
               </div>
             )}
 
-            <div className="flex justify-end pt-2">
-              <button
-                type="button"
-                onClick={() => handleSaveSettings()}
-                disabled={saving}
-                className="flex items-center gap-2 px-5 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-bold transition-colors disabled:opacity-50"
-              >
-                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                Сохранить Chat ID
-              </button>
-            </div>
+            {/* Success banner */}
+            {telegramTestSuccess && (
+              <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-800/40 text-emerald-200 text-xs flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-medium">{telegramTestSuccess}</span>
+              </div>
+            )}
+
+            {/* Case 1: ALREADY LINKED */}
+            {dbUser?.telegramId || dbUser?.telegramChatId ? (
+              <div className="p-4 rounded-xl bg-[#191724] border border-[#2E2A40] space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="text-xs font-medium text-[#A29DB5]">Привязанный профиль Telegram:</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-sky-300 font-mono">
+                        {dbUser.telegramUsername ? `@${dbUser.telegramUsername}` : `ID: ${dbUser.telegramId || dbUser.telegramChatId}`}
+                      </span>
+                      {dbUser.telegramId && (
+                        <span className="text-[10px] text-[#7A748E] font-mono">
+                          (ID: {dbUser.telegramId})
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTestTelegramNotification}
+                      disabled={testingTelegram}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#252233] hover:bg-[#2E2A40] text-sky-300 text-xs font-semibold border border-sky-500/20 transition-colors disabled:opacity-50"
+                    >
+                      {testingTelegram ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      <span>Тест</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleUnlinkTelegram}
+                      disabled={unlinkingTelegram}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-950/30 hover:bg-rose-900/40 text-rose-300 text-xs font-semibold border border-rose-800/40 transition-colors disabled:opacity-50"
+                    >
+                      {unlinkingTelegram ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Unlink className="w-3.5 h-3.5" />
+                      )}
+                      <span>Отвязать</span>
+                    </button>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-[#7A748E]">
+                  Ваш Telegram успешно подключен. Вы будете получать важные уведомления и сможете легко восстанавливать доступ.
+                </p>
+              </div>
+            ) : (
+              /* Case 2: NOT LINKED */
+              <div className="space-y-4">
+                {!linkCodeInfo ? (
+                  <div className="p-4 rounded-xl bg-[#191724] border border-[#2E2A40] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="text-sm font-semibold text-[#F3F1F8]">
+                        Привязка Telegram к вашему аккаунту
+                      </div>
+                      <p className="text-xs text-[#A29DB5] max-w-md">
+                        Подключите Telegram, чтобы получать мгновенные уведомления о релизах, комментариях и активности друзей.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleGenerateLinkCode}
+                      disabled={generatingCode}
+                      className="shrink-0 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow-lg shadow-sky-950/40 transition-colors disabled:opacity-50"
+                    >
+                      {generatingCode ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-4 h-4" />
+                      )}
+                      <span>Привязать Telegram</span>
+                    </button>
+                  </div>
+                ) : (
+                  /* Active Link Code Flow */
+                  <div className="p-5 rounded-2xl bg-purple-950/20 border border-purple-800/40 space-y-4">
+                    <div className="flex items-center justify-between pb-2 border-b border-purple-800/30">
+                      <div className="text-xs font-bold text-purple-200 uppercase tracking-wide flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                        Одноразовый код привязки
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLinkCodeInfo(null);
+                          setTelegramLinkError(null);
+                        }}
+                        className="text-[11px] text-zinc-400 hover:text-white transition-colors"
+                      >
+                        Отмена
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-black/40 border border-purple-900/40">
+                      <div>
+                        <div className="text-[11px] text-zinc-400">Ваш код:</div>
+                        <div className="text-3xl font-black font-mono tracking-widest text-purple-300">
+                          {linkCodeInfo.code}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 w-full sm:w-auto">
+                        <button
+                          type="button"
+                          onClick={() => handleCopyCode(`/link ${linkCodeInfo.code}`)}
+                          className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-mono text-zinc-200 border border-zinc-700 transition-colors"
+                        >
+                          {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>/link {linkCodeInfo.code}</span>
+                        </button>
+
+                        <a
+                          href={linkCodeInfo.botUrl || `https://t.me/${linkCodeInfo.botUsername}?start=link_${linkCodeInfo.code}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow transition-colors"
+                        >
+                          <span>Открыть бота</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-zinc-300 space-y-1.5">
+                      <div className="font-semibold text-zinc-200">Инструкция:</div>
+                      <div className="text-[11px] text-zinc-400 space-y-1">
+                        <div>1. Откройте бота <a href={`https://t.me/${linkCodeInfo.botUsername}`} target="_blank" rel="noopener noreferrer" className="text-sky-300 underline font-mono">@{linkCodeInfo.botUsername}</a> в Telegram.</div>
+                        <div>2. Отправьте команду <span className="text-purple-300 font-mono font-bold">/link {linkCodeInfo.code}</span> (или нажмите «Начать / Start» по ссылке выше).</div>
+                        <div>3. Привязка подтвердится автоматически или нажмите кнопку ниже.</div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                      <div className="flex items-center gap-2 text-xs text-purple-300">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Ожидаем подтверждения в Telegram-боте...</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleConfirmLink}
+                        disabled={verifyingLink}
+                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                      >
+                        {verifyingLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                        <span>Проверить привязку</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

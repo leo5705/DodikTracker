@@ -144,6 +144,18 @@ announcementsRouter.post('/announcements', requireAuth, requireStaff('MANAGE_ANN
       ip: req.ip,
     });
 
+    if (isPublished && finalIsActive) {
+      notificationService.broadcastNotification({
+        type: 'ADMIN_ANNOUNCEMENT',
+        title: created.title,
+        message: textBody,
+        content: textBody,
+        entityType: 'ANNOUNCEMENT',
+        entityId: String(created.id),
+        actorUserId: actor.id,
+      }).catch(() => {});
+    }
+
     if (sendTelegram && isPublished && finalIsActive) {
       const severityEmoji = finalPriority === 'CRITICAL' ? '🚨' : finalPriority === 'IMPORTANT' ? '⚠️' : '📢';
       notificationService.sendTelegramNotification(
@@ -286,6 +298,16 @@ announcementsRouter.post('/announcements/:id/publish', requireAuth, requireStaff
       details: `Опубликовано системное объявление #${id}: «${updated.title}»`,
       ip: req.ip,
     });
+
+    notificationService.broadcastNotification({
+      type: 'ADMIN_ANNOUNCEMENT',
+      title: updated.title,
+      message: updated.content || updated.message || '',
+      content: updated.content || updated.message || '',
+      entityType: 'ANNOUNCEMENT',
+      entityId: String(updated.id),
+      actorUserId: actor.id,
+    }).catch(() => {});
 
     res.json({
       ...updated,

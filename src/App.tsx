@@ -37,6 +37,8 @@ import { AuthGatekeeper } from './components/auth/AuthGatekeeper.tsx';
 import { ResetPasswordView } from './components/auth/ResetPasswordView.tsx';
 import { MiniMessenger } from './components/modals/MiniMessenger.tsx';
 import { AnnouncementBanner } from './components/AnnouncementBanner.tsx';
+import { FeedbackModal } from './components/modals/FeedbackModal.tsx';
+import { ShareProvider } from './context/ShareContext.tsx';
 import { Loader2 } from 'lucide-react';
 
 function MainApp() {
@@ -172,6 +174,27 @@ function MainApp() {
 
       case 'notifications':
         return <NotificationCenterView onNavigate={navigate} />;
+
+      case 'feedback':
+        return (
+          <>
+            <HomeView
+              onNavigate={(tab) => {
+                if (tab === 'profile') {
+                  navigate(dbUser ? `/u/${dbUser.username}` : '/profile');
+                } else {
+                  navigate(`/${tab === 'home' ? '' : tab}`);
+                }
+              }}
+            />
+            <FeedbackModal
+              isOpen={true}
+              initialTicketId={route.params?.id ? parseInt(route.params.id, 10) : null}
+              onClose={() => navigate('/')}
+            />
+          </>
+        );
+
       case 'settings':
         return (
           <SettingsView
@@ -208,7 +231,7 @@ function MainApp() {
       />
 
       {/* Main View Area */}
-      <main className="flex-1 min-w-0 pt-16 md:pt-0 pb-20 md:pb-8 px-4 sm:px-6 lg:px-10 max-w-7xl mx-auto w-full">
+      <main className="flex-1 min-w-0 pt-16 md:pt-0 pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-8 px-4 sm:px-6 lg:px-10 max-w-7xl mx-auto w-full">
         <div className="py-6 sm:py-8">
           <AnnouncementBanner />
           {renderView()}
@@ -235,7 +258,9 @@ export default function App() {
     <AuthProvider>
       <RouterProvider>
         <NotificationWrapper>
-          <ErrorBoundary><MainApp /></ErrorBoundary>
+          <ShareProvider>
+            <ErrorBoundary><MainApp /></ErrorBoundary>
+          </ShareProvider>
         </NotificationWrapper>
       </RouterProvider>
     </AuthProvider>

@@ -15,6 +15,7 @@ import {
   UnifiedGameSummary,
   GameCatalogFilters,
 } from '../../../types/unifiedGame.ts';
+import { deduplicateAndNormalizeStores } from '../../../utils/storeNormalizer.ts';
 
 const RAWG_PLATFORM_MAP: Record<string, number> = {
   pc: 4,
@@ -158,12 +159,15 @@ export class RAWGGameProvider implements IGameProvider {
 
       const tags = (data.tags || []).slice(0, 20).map((t: any) => t.name);
 
-      const stores = (data.stores || []).map((s: any) => ({
-        id: s.store?.id,
-        name: s.store?.name || 'Store',
-        domain: s.store?.domain,
-        url: s.url,
-      }));
+      const stores = deduplicateAndNormalizeStores(
+        (data.stores || []).map((s: any) => ({
+          id: s.store?.id || s.id,
+          name: s.store?.name || 'Store',
+          domain: s.store?.domain,
+          url: s.url,
+          storeId: s.store?.id ? String(s.store.id) : undefined,
+        }))
+      );
 
       return {
         externalId: String(data.id),
@@ -510,12 +514,14 @@ export class RAWGGameProvider implements IGameProvider {
       if (!res.ok) return [];
       const data = await res.json();
 
-      return (data.results || []).map((s: any) => ({
-        id: String(s.id),
-        name: s.store_id ? `Store #${s.store_id}` : 'Store',
-        url: s.url,
-        storeId: String(s.store_id),
-      }));
+      return deduplicateAndNormalizeStores(
+        (data.results || []).map((s: any) => ({
+          id: String(s.id),
+          name: s.store_id ? `Store #${s.store_id}` : 'Store',
+          url: s.url,
+          storeId: String(s.store_id),
+        }))
+      );
     } catch (err) {
       console.warn(`[RAWGGameProvider] getStores(${gameIdOrSlug}) failed:`, err);
       return [];

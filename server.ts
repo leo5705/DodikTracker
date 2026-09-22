@@ -22,6 +22,9 @@ async function startServer() {
   const PORT = 3000;
   const httpServer = http.createServer(app);
 
+  // Trust proxy for reverse proxy environments (Cloud Run, Nginx, AI Studio proxy)
+  app.set('trust proxy', 1);
+
   // Security Headers (configured to allow Vite in dev and external images)
   app.use(helmet({
     contentSecurityPolicy: false, // Disabled to prevent breaking Vite HMR and inline styles/scripts without complex setup
@@ -35,6 +38,11 @@ async function startServer() {
     message: { error: 'Too many requests, please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: {
+      trustProxy: false,
+      xForwardedForHeader: false,
+      forwardedHeader: false,
+    },
   });
   app.use('/api', generalLimiter);
 

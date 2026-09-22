@@ -96,6 +96,8 @@ export interface ContentReview {
   containsSpoilers?: boolean;
   likesCount?: number;
   isLiked?: boolean;
+  userReaction?: string | null;
+  reactions?: Record<string, number>;
   createdAt: string;
   updatedAt?: string;
 }

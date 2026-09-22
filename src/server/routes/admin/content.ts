@@ -4,6 +4,7 @@ import { db } from '../../../db/index.ts';
 import { media, mediaExternalIds, seasons, episodes, userMedia } from '../../../db/schema.ts';
 import { eq, and, sql, desc, count, ilike, or } from 'drizzle-orm';
 import { logAdminAction } from './auditHelper.ts';
+import { UnifiedGameService } from '../../game/unifiedGameService.ts';
 
 export const contentRouter = Router();
 
@@ -178,6 +179,17 @@ contentRouter.post('/content/:id/toggle-hide', requireAuth, requireStaff('MANAGE
       .set({ isHidden: newHidden, updatedAt: new Date() })
       .where(eq(media.id, id))
       .returning();
+
+    // Invalidate game cache if it's a game
+    if (item.type === 'GAME') {
+      const extRows = await db
+        .select({ externalId: mediaExternalIds.externalId })
+        .from(mediaExternalIds)
+        .where(eq(mediaExternalIds.mediaId, id))
+        .catch(() => []);
+      const extIds = extRows.map((r) => r.externalId);
+      await UnifiedGameService.getInstance().invalidateGameCache(id, extIds);
+    }
 
     await logAdminAction({
       userId: actor.id,

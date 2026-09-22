@@ -15,6 +15,11 @@ import {
   X,
   ExternalLink,
   ListOrdered,
+  Share2,
+  Layers,
+  LifeBuoy,
+  CheckCircle2,
+  Megaphone,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppNotification } from '../../types/notification.ts';
@@ -33,6 +38,7 @@ interface NotificationToastProps {
 
 export const getNotificationVisuals = (type: string) => {
   switch (type) {
+    case 'ACHIEVEMENT':
     case 'ACHIEVEMENT_UNLOCKED':
       return {
         icon: Trophy,
@@ -89,6 +95,46 @@ export const getNotificationVisuals = (type: string) => {
         gradient: 'from-indigo-950/40 to-[#14131A]',
         categoryName: 'Новый релиз',
       };
+    case 'CONTENT_COMPLETED':
+      return {
+        icon: CheckCircle2,
+        badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+        borderColor: 'border-emerald-500/40',
+        gradient: 'from-emerald-950/40 to-[#14131A]',
+        categoryName: 'Прогресс',
+      };
+    case 'CONTENT_SHARED':
+      return {
+        icon: Share2,
+        badgeColor: 'bg-violet-500/20 text-violet-300 border-violet-500/30',
+        borderColor: 'border-violet-500/40',
+        gradient: 'from-violet-950/40 to-[#14131A]',
+        categoryName: 'Поделились',
+      };
+    case 'TIER_LIST_INVITE':
+      return {
+        icon: Layers,
+        badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+        borderColor: 'border-amber-500/40',
+        gradient: 'from-amber-950/40 to-[#14131A]',
+        categoryName: 'Тир-лист',
+      };
+    case 'FEEDBACK_REPLIED':
+      return {
+        icon: LifeBuoy,
+        badgeColor: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
+        borderColor: 'border-cyan-500/40',
+        gradient: 'from-cyan-950/40 to-[#14131A]',
+        categoryName: 'Поддержка',
+      };
+    case 'ADMIN_ANNOUNCEMENT':
+      return {
+        icon: Megaphone,
+        badgeColor: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/30',
+        borderColor: 'border-fuchsia-500/40',
+        gradient: 'from-fuchsia-950/40 to-[#14131A]',
+        categoryName: 'Объявление',
+      };
     case 'MENTION':
       return {
         icon: AtSign,
@@ -106,14 +152,16 @@ export const getNotificationVisuals = (type: string) => {
         categoryName: 'Оповещение администрации',
       };
     case 'LIKE':
+    case 'REVIEW_LIKED':
       return {
         icon: Heart,
         badgeColor: 'bg-red-500/20 text-red-300 border-red-500/30',
         borderColor: 'border-red-500/40',
         gradient: 'from-red-950/40 to-[#14131A]',
-        categoryName: 'Лайк',
+        categoryName: 'Оценка',
       };
     case 'COMMENT':
+    case 'REVIEW_COMMENTED':
       return {
         icon: MessageCircle,
         badgeColor: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
@@ -230,7 +278,7 @@ export const NotificationToastItem: React.FC<NotificationToastProps> = ({
           </h4>
 
           <p className="text-xs text-[#C5C0D6] leading-relaxed line-clamp-2">
-            {notif.body || notif.content}
+            {notif.message || notif.body || notif.content}
           </p>
         </div>
 

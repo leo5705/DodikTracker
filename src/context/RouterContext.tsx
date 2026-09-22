@@ -21,6 +21,7 @@ export interface RouteMatch {
     | 'profile'
     | 'settings'
     | 'notifications'
+    | 'feedback'
     | 'media-detail'
     | 'reset-password'
     | 'news'
@@ -217,6 +218,17 @@ export function parseRoute(rawPathname: string): RouteMatch {
   if (cleanPath === '/news') {
     return { name: 'news', params: queryParams, pathname: cleanPath };
   }
+
+  // Feedback Routes
+  const feedbackDetailMatch = cleanPath.match(/^\/feedback\/([a-zA-Z0-9_.-]+)$/);
+  if (feedbackDetailMatch) {
+    return {
+      name: 'feedback',
+      params: { ...queryParams, id: feedbackDetailMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+  if (cleanPath === '/feedback') return { name: 'feedback', params: queryParams, pathname: cleanPath };
 
   // 5. Library import / export
   if (cleanPath === '/library/import') return { name: 'library-import', params: queryParams, pathname: cleanPath };

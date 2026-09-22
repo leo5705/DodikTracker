@@ -9,6 +9,10 @@ import {
   Edit2,
   Trash2,
   Calendar,
+  Heart,
+  Flame,
+  Laugh,
+  SmilePlus,
 } from 'lucide-react';
 import { ContentReview, ContentDodikRating } from '../../types/content.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
@@ -21,7 +25,15 @@ interface ContentReviewsSectionProps {
   onEditReview?: (review: ContentReview) => void;
   onDeleteReview?: (reviewId: number) => Promise<void>;
   onLikeReview?: (reviewId: number) => Promise<void>;
+  onReactReview?: (reviewId: number, type: string) => Promise<void>;
 }
+
+const REACTION_OPTIONS = [
+  { type: 'LIKE', label: 'Класс', icon: ThumbsUp, color: 'text-purple-400', activeBg: 'bg-purple-950/70 border-purple-700/60 text-purple-300' },
+  { type: 'HEART', label: 'Любовь', icon: Heart, color: 'text-rose-400', activeBg: 'bg-rose-950/70 border-rose-700/60 text-rose-300' },
+  { type: 'FIRE', label: 'Огонь', icon: Flame, color: 'text-amber-400', activeBg: 'bg-amber-950/70 border-amber-700/60 text-amber-300' },
+  { type: 'LAUGH', label: 'Ха-ха', icon: Laugh, color: 'text-emerald-400', activeBg: 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300' },
+];
 
 export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
   reviews,
@@ -31,9 +43,11 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
   onEditReview,
   onDeleteReview,
   onLikeReview,
+  onReactReview,
 }) => {
   const { dbUser } = useAuth();
   const [revealedSpoilers, setRevealedSpoilers] = useState<Set<number>>(new Set());
+  const [activePickerId, setActivePickerId] = useState<number | null>(null);
 
   const toggleSpoiler = (reviewId: number) => {
     setRevealedSpoilers((prev) => {
@@ -42,6 +56,15 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
       else next.add(reviewId);
       return next;
     });
+  };
+
+  const handleReactionClick = (reviewId: number, type: string) => {
+    setActivePickerId(null);
+    if (onReactReview) {
+      onReactReview(reviewId, type);
+    } else if (onLikeReview) {
+      onLikeReview(reviewId);
+    }
   };
 
   // Rating distribution calculation
@@ -242,20 +265,89 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
                   </div>
                 )}
 
-                {/* Like Button */}
-                {onLikeReview && (
-                  <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-end">
-                    <button
-                      onClick={() => onLikeReview(rev.id)}
-                      className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all ${
-                        rev.isLiked
-                          ? 'bg-purple-950/60 border-purple-800/40 text-purple-300'
-                          : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
-                      }`}
-                    >
-                      <ThumbsUp className={`w-3.5 h-3.5 ${rev.isLiked ? 'fill-purple-400' : ''}`} />
-                      <span>{rev.likesCount || 0}</span>
-                    </button>
+                {/* Reactions and Likes Bar */}
+                {(onReactReview || onLikeReview) && (
+                  <div className="pt-2 border-t border-zinc-800/60 flex flex-wrap items-center justify-between gap-2 relative">
+                    {/* Existing Reactions Badges */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {REACTION_OPTIONS.map((opt) => {
+                        const count = rev.reactions?.[opt.type] || (opt.type === 'LIKE' ? (rev.likesCount || 0) : 0);
+                        if (count <= 0) return null;
+                        const isSelected = rev.userReaction === opt.type || (opt.type === 'LIKE' && rev.isLiked && !rev.userReaction);
+                        const Icon = opt.icon;
+
+                        return (
+                          <button
+                            key={opt.type}
+                            onClick={() => handleReactionClick(rev.id, opt.type)}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-medium border transition-all ${
+                              isSelected
+                                ? opt.activeBg
+                                : 'bg-zinc-900/90 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                            }`}
+                            title={opt.label}
+                          >
+                            <Icon className={`w-3.5 h-3.5 ${opt.color} ${isSelected ? 'fill-current' : ''}`} />
+                            <span className="font-mono text-[11px]">{count}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Reaction trigger & popover picker */}
+                    <div className="flex items-center gap-1 relative ml-auto">
+                      {/* Quick Like / Toggle button */}
+                      <button
+                        onClick={() => handleReactionClick(rev.id, rev.userReaction || 'LIKE')}
+                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-xl border transition-all ${
+                          rev.isLiked || rev.userReaction
+                            ? 'bg-purple-950/60 border-purple-800/50 text-purple-300'
+                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                        }`}
+                        title="Поставить реакцию"
+                      >
+                        <ThumbsUp className={`w-3.5 h-3.5 ${rev.isLiked || rev.userReaction === 'LIKE' ? 'fill-purple-400 text-purple-400' : ''}`} />
+                        <span>{rev.likesCount || 0}</span>
+                      </button>
+
+                      {/* Reaction Picker Button */}
+                      <button
+                        onClick={() => setActivePickerId(activePickerId === rev.id ? null : rev.id)}
+                        className={`p-1.5 rounded-xl border transition-all ${
+                          activePickerId === rev.id
+                            ? 'bg-purple-900/50 border-purple-700 text-purple-200'
+                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                        }`}
+                        title="Выбрать реакцию"
+                      >
+                        <SmilePlus className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Popover Menu with reaction options */}
+                      {activePickerId === rev.id && (
+                        <div className="absolute right-0 bottom-full mb-2 p-1.5 rounded-2xl bg-zinc-900 border border-zinc-700/80 shadow-2xl flex items-center gap-1 z-30 animate-in fade-in zoom-in-95">
+                          {REACTION_OPTIONS.map((opt) => {
+                            const Icon = opt.icon;
+                            const isSelected = rev.userReaction === opt.type;
+                            return (
+                              <button
+                                key={opt.type}
+                                onClick={() => handleReactionClick(rev.id, opt.type)}
+                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                                  isSelected
+                                    ? opt.activeBg
+                                    : 'hover:bg-zinc-800 text-zinc-300 hover:text-white'
+                                }`}
+                                title={opt.label}
+                              >
+                                <Icon className={`w-4 h-4 ${opt.color} ${isSelected ? 'fill-current' : ''}`} />
+                                <span className="text-[11px] hidden sm:inline">{opt.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

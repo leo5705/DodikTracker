@@ -90,10 +90,24 @@ export const AdminContentTab: React.FC = () => {
 
   const handleToggleHide = async (item: any) => {
     try {
+      // Optimistically update local item state
+      setMediaList((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, isHidden: !i.isHidden } : i))
+      );
       const res = await authFetch(`/api/admin/content/${item.id}/toggle-hide`, { method: 'POST' });
-      if (!res.ok) throw new Error('Ошибка изменения видимости');
-      fetchContent();
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Ошибка изменения видимости');
+      }
+      const updated = await res.json();
+      setMediaList((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, isHidden: updated.isHidden } : i))
+      );
     } catch (err: any) {
+      // Revert on error
+      setMediaList((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, isHidden: item.isHidden } : i))
+      );
       alert(err.message);
     }
   };

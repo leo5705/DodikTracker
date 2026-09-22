@@ -5,18 +5,33 @@ import { eq, or } from 'drizzle-orm';
 // In-memory verification codes map shared with apiRouter
 export interface TelegramAuthCodeEntry {
   code: string;
+  type: 'LOGIN' | 'LINK';
   expiresAt: number;
+  createdAt: number;
   telegramUsername?: string;
-  telegramId?: string;
+  telegramId?: string; // Stable numeric user ID from Telegram
   telegramChatId?: string;
-  userId?: number; // If linking from settings
+  userId?: number; // Target user from authenticated website session (LINK only)
   isVerified?: boolean;
   resolvedUserId?: number;
+  attempts?: number;
+  error?: 'ALREADY_LINKED' | 'EXPIRED' | 'INVALID' | 'USER_NOT_FOUND';
+  alreadyLinkedUsername?: string;
 }
 
 export const telegramAuthCodes = new Map<string, TelegramAuthCodeEntry>();
 
-class TelegramBotManager {
+// Periodic cleanup of expired codes
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, entry] of telegramAuthCodes.entries()) {
+    if (now > entry.expiresAt) {
+      telegramAuthCodes.delete(code);
+    }
+  }
+}, 60 * 1000);
+
+export class TelegramBotManager {
   private token: string | null = null;
   private botUsername: string = 'DodikTrackerBot';
   private pollingActive: boolean = false;
@@ -160,13 +175,13 @@ class TelegramBotManager {
       } else if (text.startsWith('/link')) {
         const parts = text.split(' ');
         const code = parts[1]?.trim();
-        await this.handleLinkCommand(chatId, fromId, fromUsername, code);
+        await this.handleVerificationCommand(chatId, fromId, fromUsername, code);
       } else if (text.startsWith('/login')) {
         const parts = text.split(' ');
         const code = parts[1]?.trim();
-        await this.handleLoginCommand(chatId, fromId, fromUsername, code);
+        await this.handleVerificationCommand(chatId, fromId, fromUsername, code);
       } else if (text.startsWith('/status')) {
-        await this.handleStatusCommand(chatId, fromId, fromUsername);
+        await this.handleStatusCommand(chatId, fromId);
       } else if (text.startsWith('/disconnect') || text.startsWith('/unlink')) {
         await this.handleDisconnectCommand(chatId, fromId);
       } else if (text.startsWith('/notifications')) {
@@ -178,7 +193,7 @@ class TelegramBotManager {
       } else {
         // Unrecognized text or raw 6-digit code
         if (/^\d{6}$/.test(text)) {
-          await this.handleLinkCommand(chatId, fromId, fromUsername, text);
+          await this.handleVerificationCommand(chatId, fromId, fromUsername, text);
         } else {
           await this.sendMessage(
             chatId,
@@ -193,13 +208,14 @@ class TelegramBotManager {
 
   private async handleStartCommand(chatId: string, fromId: string, fromUsername: string | undefined, payload?: string) {
     if (payload) {
-      // User clicked a deep link with a code (e.g. t.me/bot?start=123456)
-      await this.handleLinkCommand(chatId, fromId, fromUsername, payload);
+      // User clicked a deep link with a code (e.g. t.me/bot?start=123456 or t.me/bot?start=link_123456)
+      const cleanCode = payload.replace(/^(link_|login_)/, '').trim();
+      await this.handleVerificationCommand(chatId, fromId, fromUsername, cleanCode);
       return;
     }
 
     // Check if user is already linked
-    const user = await this.findUserByTelegram(chatId, fromId, fromUsername);
+    const user = await this.findUserByTelegram(chatId, fromId);
     if (user) {
       await this.sendMessage(
         chatId,
@@ -216,7 +232,7 @@ class TelegramBotManager {
           `Чтобы привязать ваш Telegram к аккаунту Dodik Tracker:\n` +
           `1. Откройте Dodik Tracker в браузере\n` +
           `2. Перейдите в *Настройки → Telegram*\n` +
-          `3. Нажмите *«Сгенерировать код привязки»*\n` +
+          `3. Нажмите *«Привязать Telegram»*\n` +
           `4. Отправьте сюда полученный 6-значный код командой:\n` +
           `\`/link КОД\` (или просто отправьте 6 цифр)\n\n` +
           `После привязки вы будете получать важные уведомления о заявках в друзья, отзывах и релизах!`
@@ -224,96 +240,140 @@ class TelegramBotManager {
     }
   }
 
-  private async handleLinkCommand(chatId: string, fromId: string, fromUsername: string | undefined, code?: string) {
+  public async handleVerificationCommand(
+    chatId: string,
+    fromId: string,
+    fromUsername: string | undefined,
+    code?: string,
+    commandType?: 'LINK' | 'LOGIN'
+  ): Promise<{ success: boolean; message: string }> {
     if (!code) {
-      await this.sendMessage(
-        chatId,
-        `⚠️ Пожалуйста, укажите 6-значный код подтверждения.\nПример: \`/link 123456\``
-      );
-      return;
+      const msg = `⚠️ Пожалуйста, укажите 6-значный код подтверждения.\nПример: \`/link 123456\``;
+      await this.sendMessage(chatId, msg);
+      return { success: false, message: msg };
     }
 
-    const cleanCode = code.trim();
+    const cleanCode = code.trim().replace(/^(link_|login_)/, '');
     const stored = telegramAuthCodes.get(cleanCode);
 
     if (!stored || Date.now() > stored.expiresAt) {
-      await this.sendMessage(
-        chatId,
-        `❌ Код \`${cleanCode}\` недействителен или срок его действия истек (15 минут).\n` +
-          `Пожалуйста, запросите новый код в настройках Dodik Tracker.`
-      );
-      return;
+      const msg = `❌ Код \`${cleanCode}\` недействителен или срок его действия истек (15 минут).\n` +
+        `Пожалуйста, запросите новый код на сайте Dodik Tracker.`;
+      await this.sendMessage(chatId, msg);
+      return { success: false, message: msg };
     }
 
-    // If code was created for a specific logged-in user
-    if (stored.userId) {
+    // Replay attack prevention: already verified codes cannot be reused
+    if (stored.isVerified) {
+      const msg = `⚠️ Код \`${cleanCode}\` уже был успешно использован. Запросите новый код при необходимости.`;
+      await this.sendMessage(chatId, msg);
+      return { success: false, message: msg };
+    }
+
+    // Type compatibility check:
+    if (commandType === 'LOGIN' && stored.type === 'LINK') {
+      const msg = `⚠️ Этот код предназначен для привязки Telegram к профилю сайта через команду /link.`;
+      await this.sendMessage(chatId, msg);
+      return { success: false, message: msg };
+    }
+
+    if (commandType === 'LINK' && stored.type === 'LOGIN') {
+      const msg = `⚠️ Этот код предназначен для входа на сайт через команду /login.`;
+      await this.sendMessage(chatId, msg);
+      return { success: false, message: msg };
+    }
+
+    // SCENARIO 1: LINK TO EXISTING WEBSITE USER (Settings flow)
+    if (stored.type === 'LINK' || stored.userId) {
+      const targetUserId = stored.userId!;
+
+      // 1. Enforce Telegram Identity Uniqueness:
+      // Check if this Telegram account (fromId) is ALREADY linked to another user
+      const existingWithThisTg = await db
+        .select({ id: users.id, username: users.username, telegramId: users.telegramId })
+        .from(users)
+        .where(eq(users.telegramId, fromId))
+        .limit(1);
+
+      if (existingWithThisTg.length > 0 && existingWithThisTg[0].id !== targetUserId) {
+        stored.error = 'ALREADY_LINKED';
+        stored.alreadyLinkedUsername = existingWithThisTg[0].username;
+        const msg = `❌ Этот Telegram-аккаунт уже привязан к другому аккаунту Dodik Tracker (*${existingWithThisTg[0].username}*).\n\n` +
+          `Привязка отменена. Один Telegram может быть привязан только к одному профилю. Чтобы привязать его к новому аккаунту, сначала отвяжите его в настройках профиля *${existingWithThisTg[0].username}*.`;
+        await this.sendMessage(chatId, msg);
+        return { success: false, message: msg };
+      }
+
+      // Check target user in DB
+      const targetUser = (await db.select().from(users).where(eq(users.id, targetUserId)).limit(1))[0];
+      if (!targetUser) {
+        stored.error = 'USER_NOT_FOUND';
+        const msg = `❌ Ошибка: целевой пользователь сайта не найден.`;
+        await this.sendMessage(chatId, msg);
+        return { success: false, message: msg };
+      }
+
+      // 2. Perform linking strictly for the target user session
       await db
         .update(users)
         .set({
-          telegramChatId: chatId,
           telegramId: fromId,
+          telegramChatId: chatId,
           telegramUsername: fromUsername || null,
           updatedAt: new Date(),
         })
-        .where(eq(users.id, stored.userId));
+        .where(eq(users.id, targetUserId));
 
       stored.isVerified = true;
-      stored.resolvedUserId = stored.userId;
+      stored.resolvedUserId = targetUserId;
+      stored.telegramId = fromId;
+      stored.telegramUsername = fromUsername;
+      stored.telegramChatId = chatId;
+      stored.error = undefined;
 
-      const updatedUser = (await db.select().from(users).where(eq(users.id, stored.userId)).limit(1))[0];
-
-      await this.sendMessage(
-        chatId,
-        `✅ *Успешно привязано!*\n\nАккаунт Dodik Tracker: *${updatedUser.username}*\n` +
-          `Теперь вы будете получать уведомления в этот чат.`
-      );
-      return;
+      const msg = `✅ *Telegram успешно привязан!*\n\n` +
+        `• Аккаунт: *${targetUser.username}*\n` +
+        `• Telegram ID: \`${fromId}\`\n\n` +
+        `Теперь вы будете получать важные уведомления прямо в этот чат.`;
+      await this.sendMessage(chatId, msg);
+      return { success: true, message: msg };
     }
 
-    // If code was generated from login page
+    // SCENARIO 2: LOGIN VIA TELEGRAM (Auth flow)
     stored.isVerified = true;
-    stored.telegramUsername = fromUsername;
     stored.telegramId = fromId;
+    stored.telegramUsername = fromUsername;
     stored.telegramChatId = chatId;
-    stored.resolvedUserId = undefined;
 
-    // Check if user exists by telegram username
-    if (fromUsername) {
-      const existingUser = (
-        await db
-          .select()
-          .from(users)
-          .where(or(eq(users.telegramUsername, fromUsername), eq(users.username, `tg_${fromUsername}`)))
-          .limit(1)
-      )[0];
+    // Check if user already exists by stable Telegram ID
+    const existing = await db
+      .select({ id: users.id, username: users.username })
+      .from(users)
+      .where(eq(users.telegramId, fromId))
+      .limit(1);
 
-      if (existingUser) {
-        await db
-          .update(users)
-          .set({
-            telegramChatId: chatId,
-            telegramId: fromId,
-            telegramUsername: fromUsername,
-            updatedAt: new Date(),
-          })
-          .where(eq(users.id, existingUser.id));
-
-        stored.resolvedUserId = existingUser.id;
-      }
+    if (existing.length > 0) {
+      stored.resolvedUserId = existing[0].id;
+      const msg = `✅ *Вход подтвержден!*\n\nАккаунт: *${existing[0].username}*\nВернитесь на сайт Dodik Tracker для входа в профиль.`;
+      await this.sendMessage(chatId, msg);
+      return { success: true, message: msg };
+    } else {
+      const msg = `✅ *Код подтвержден!*\n\nВернитесь на сайт Dodik Tracker для завершения входа или создания профиля.`;
+      await this.sendMessage(chatId, msg);
+      return { success: true, message: msg };
     }
+  }
 
-    await this.sendMessage(
-      chatId,
-      `✅ Код подтвержден! Вернитесь на сайт Dodik Tracker — авторизация завершена.`
-    );
+  private async handleLinkCommand(chatId: string, fromId: string, fromUsername: string | undefined, code?: string) {
+    return await this.handleVerificationCommand(chatId, fromId, fromUsername, code, 'LINK');
   }
 
   private async handleLoginCommand(chatId: string, fromId: string, fromUsername: string | undefined, code?: string) {
-    await this.handleLinkCommand(chatId, fromId, fromUsername, code);
+    return await this.handleVerificationCommand(chatId, fromId, fromUsername, code, 'LOGIN');
   }
 
-  private async handleStatusCommand(chatId: string, fromId: string, fromUsername: string | undefined) {
-    const user = await this.findUserByTelegram(chatId, fromId, fromUsername);
+  private async handleStatusCommand(chatId: string, fromId: string) {
+    const user = await this.findUserByTelegram(chatId, fromId);
     if (!user) {
       await this.sendMessage(
         chatId,
@@ -326,6 +386,7 @@ class TelegramBotManager {
       chatId,
       `👤 *Профиль Dodik Tracker*\n\n` +
         `• Имя: *${user.username}*\n` +
+        `• Telegram ID: \`${user.telegramId || fromId}\`\n` +
         `• Email: ${user.email || 'не указан'}\n` +
         `• Роль: ${user.role}\n` +
         `• Уведомления в Telegram: ${user.telegramChatId ? 'Включены ✅' : 'Выключены ❌'}\n\n` +
@@ -377,7 +438,7 @@ class TelegramBotManager {
     await this.sendMessage(
       chatId,
       `📖 *Команды бота Dodik Tracker:*\n\n` +
-        `• \`/link <код>\` — привязать Telegram к аккаунту Dodik Tracker\n` +
+        `• \`/link <код>\` — привязать Telegram к вашему аккаунту Dodik Tracker\n` +
         `• \`/status\` — статус вашего профиля и привязки\n` +
         `• \`/notifications on|off\` — включить или выключить уведомления\n` +
         `• \`/disconnect\` — отвязать Telegram от аккаунта\n` +
@@ -385,19 +446,26 @@ class TelegramBotManager {
     );
   }
 
-  private async findUserByTelegram(chatId: string, fromId: string, fromUsername?: string) {
-    const conditions = [eq(users.telegramChatId, chatId), eq(users.telegramId, fromId)];
-    if (fromUsername) {
-      conditions.push(eq(users.telegramUsername, fromUsername.toLowerCase()));
+  public async findUserByTelegram(chatId: string, fromId?: string) {
+    // Primary: lookup by stable unique numeric telegramId
+    if (fromId) {
+      const byId = await db.select().from(users).where(eq(users.telegramId, fromId)).limit(1);
+      if (byId.length > 0) return byId[0];
     }
 
-    const rows = await db
-      .select()
-      .from(users)
-      .where(or(...conditions))
-      .limit(1);
+    // Secondary fallback: lookup by chatId (for legacy records where telegramId was null)
+    if (chatId) {
+      const byChat = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+      if (byChat.length > 0) {
+        // Backfill telegramId if missing and fromId provided
+        if (!byChat[0].telegramId && fromId) {
+          await db.update(users).set({ telegramId: fromId }).where(eq(users.id, byChat[0].id)).catch(() => {});
+        }
+        return byChat[0];
+      }
+    }
 
-    return rows.length > 0 ? rows[0] : null;
+    return null;
   }
 
   public async sendMessage(chatId: string | number, text: string, parseMode: string = 'Markdown') {

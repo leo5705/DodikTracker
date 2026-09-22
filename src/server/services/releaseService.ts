@@ -29,6 +29,7 @@ export interface ReleaseFilterOptions {
   page?: number;
   limit?: number;
   userId?: number;
+  isSuperAdmin?: boolean;
 }
 
 export interface ReleaseItem {
@@ -433,6 +434,10 @@ export class ReleaseService {
     const conditions: any[] = [
       sql`(${media.releaseDate} IS NOT NULL AND ${media.releaseDate} != '')`
     ];
+
+    if (!options.isSuperAdmin) {
+      conditions.push(eq(media.isHidden, false));
+    }
 
     // Scope filter (Upcoming vs Past vs All)
     if (scope === 'upcoming') {

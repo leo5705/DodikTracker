@@ -171,6 +171,28 @@ export const AuthGatekeeper: React.FC = () => {
     }
   };
 
+  // Auto-poll verification status when waiting for Telegram bot confirmation
+  useEffect(() => {
+    if (!tgCode || tab !== 'TELEGRAM') return;
+    let cancelled = false;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/auth/telegram/status?code=${tgCode}`);
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled && data.verified) {
+          clearInterval(intervalId);
+          handleVerifyTelegram();
+        }
+      } catch (_e) {}
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [tgCode, tab, tgInviteCode]);
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);

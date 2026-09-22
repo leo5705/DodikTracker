@@ -233,10 +233,13 @@ export const MiniMessenger: React.FC = () => {
   if (!dbUser) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end">
+    <div
+      id="floating-mini-messenger"
+      className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px)+0.75rem)] right-4 md:bottom-6 md:right-6 z-35 flex flex-col items-end pointer-events-none"
+    >
       {/* Messenger Panel */}
       {isOpen && (
-        <div className="w-80 sm:w-96 h-[500px] max-h-[80vh] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden mb-4 animate-in slide-in-from-bottom-5 duration-200">
+        <div className="pointer-events-auto w-[calc(100vw-2rem)] max-w-[22rem] sm:max-w-sm md:w-96 h-[480px] max-h-[calc(100dvh-5rem-env(safe-area-inset-bottom,0px)-4rem)] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden mb-3 animate-in slide-in-from-bottom-5 duration-200">
           
           {/* Header */}
           <div className="h-14 bg-zinc-900 border-b border-zinc-800 px-4 flex items-center justify-between shrink-0">
@@ -276,7 +279,11 @@ export const MiniMessenger: React.FC = () => {
                 Мессенджер
               </h3>
             )}
-            <button onClick={() => setIsOpen(false)} className="p-1.5 hover:bg-zinc-800 rounded-lg text-zinc-400 transition-colors">
+            <button
+              onClick={() => setIsOpen(false)}
+              className="p-1.5 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors"
+              title="Закрыть мессенджер"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -427,10 +434,12 @@ export const MiniMessenger: React.FC = () => {
 
       {/* Toggle Button */}
       <button
+        id="mini-messenger-toggle-btn"
         onClick={() => setIsOpen(!isOpen)}
-        className="relative w-14 h-14 rounded-full bg-purple-600 hover:bg-purple-500 shadow-xl shadow-purple-900/40 text-white flex items-center justify-center transition-transform hover:scale-105 active:scale-95"
+        className="pointer-events-auto relative w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-purple-600 hover:bg-purple-500 shadow-xl shadow-purple-900/40 text-white flex items-center justify-center transition-transform hover:scale-105 active:scale-95 touch-manipulation focus:outline-none ring-2 ring-[#0F0E12]"
+        title={isOpen ? 'Скрыть мессенджер' : 'Открыть мессенджер'}
       >
-        <MessageCircle className="w-6 h-6" />
+        <MessageCircle className="w-5 h-5 sm:w-6 sm:h-6" />
         
         {/* Total Unread Badge */}
         {!isOpen && dialogs.reduce((sum, d) => sum + d.unreadCount, 0) > 0 && (

@@ -26,6 +26,7 @@ interface GameHeroProps {
   onOpenReviewModal?: () => void;
   onOpenListModal?: () => void;
   onOpenDiagnosticModal?: () => void;
+  onOpenShareModal?: () => void;
 }
 
 export const GameHero: React.FC<GameHeroProps> = ({
@@ -36,6 +37,7 @@ export const GameHero: React.FC<GameHeroProps> = ({
   onOpenReviewModal,
   onOpenListModal,
   onOpenDiagnosticModal,
+  onOpenShareModal,
 }) => {
   const { navigate } = useRouter();
   const { dbUser } = useAuth();
@@ -56,6 +58,10 @@ export const GameHero: React.FC<GameHeroProps> = ({
   };
 
   const handleShare = async () => {
+    if (onOpenShareModal) {
+      onOpenShareModal();
+      return;
+    }
     const url = window.location.href;
     if (navigator.share) {
       try {

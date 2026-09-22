@@ -15,6 +15,7 @@ import {
   UnifiedGameSummary,
   UnifiedSeries,
 } from '../../types/unifiedGame.ts';
+import { deduplicateAndNormalizeStores } from '../../utils/storeNormalizer.ts';
 
 export interface MatchScoreResult {
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
@@ -340,21 +341,13 @@ export class GameMatcher {
       }
     });
 
-    // 10. Stores (RAWG verified stores)
-    const storesMap = new Map<string, UnifiedStore>();
-    (supplemental.stores || []).forEach((st) => storesMap.set(st.name.toLowerCase(), st));
-    (rawgGame?.stores || []).forEach((st) => {
-      const key = st.name.toLowerCase();
-      if (!storesMap.has(key)) {
-        storesMap.set(key, {
-          id: String(st.id),
-          name: st.name,
-          url: st.url,
-          domain: st.domain,
-          storeId: st.storeId,
-        });
-      }
-    });
+    // 10. Stores (Normalized and deduplicated across providers)
+    const combinedStores = [
+      ...(rawgGame?.stores || []),
+      ...(gmdbGame?.stores || []),
+      ...(supplemental.stores || []),
+    ];
+    const stores = deduplicateAndNormalizeStores(combinedStores);
 
     // 11. Multiplayer
     const multiplayer = gmdbGame?.multiplayer || (tagsSet.has('Multiplayer') || tagsSet.has('Co-op') ? { coop: tagsSet.has('Co-op') } : null);
@@ -390,7 +383,7 @@ export class GameMatcher {
       publishers: Array.from(pubsMap.values()),
       series: supplemental.series || null,
       dlcs: supplemental.dlcs || [],
-      stores: Array.from(storesMap.values()),
+      stores,
       screenshots: Array.from(screenshotsMap.values()),
       videos: Array.from(videosMap.values()),
       creators: supplemental.creators || [],

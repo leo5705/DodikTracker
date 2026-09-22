@@ -5,11 +5,12 @@ import { db } from '../../db/index.ts';
 import { userMedia, media } from '../../db/schema.ts';
 import { eq, and } from 'drizzle-orm';
 import { GameCatalogFilters } from '../../types/unifiedGame.ts';
+import { deduplicateAndNormalizeStores } from '../../utils/storeNormalizer.ts';
 
 export const gamesRouter = Router();
 
 // 1. GET /api/games/catalog - Browse games with filters
-gamesRouter.get('/catalog', async (req, res) => {
+gamesRouter.get('/catalog', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const filters: GameCatalogFilters = {
       genre: req.query.genre as string,
@@ -30,6 +31,20 @@ gamesRouter.get('/catalog', async (req, res) => {
     };
 
     const result = await UnifiedGameService.getInstance().getCatalog(filters);
+    const current = req.dbUser;
+    if (current?.role !== 'SUPER_ADMIN' && result.results.length > 0) {
+      const hiddenIds = new Set(
+        (
+          await db
+            .select({ id: media.id })
+            .from(media)
+            .where(and(eq(media.type, 'GAME'), eq(media.isHidden, true)))
+        ).map((m) => m.id)
+      );
+      result.results = result.results.filter(
+        (g) => !g.mediaId || !hiddenIds.has(g.mediaId)
+      );
+    }
     return res.json(result);
   } catch (err: any) {
     console.error('[GamesRouter] /catalog error:', err);
@@ -38,7 +53,7 @@ gamesRouter.get('/catalog', async (req, res) => {
 });
 
 // 2. GET /api/games/search - Deep search games across RAWG & GMDB
-gamesRouter.get('/search', async (req, res) => {
+gamesRouter.get('/search', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const query = (req.query.q as string) || (req.query.query as string) || '';
     const filters: GameCatalogFilters = {
@@ -53,6 +68,20 @@ gamesRouter.get('/search', async (req, res) => {
     };
 
     const result = await UnifiedGameService.getInstance().searchGames(query, filters);
+    const current = req.dbUser;
+    if (current?.role !== 'SUPER_ADMIN' && result.results.length > 0) {
+      const hiddenIds = new Set(
+        (
+          await db
+            .select({ id: media.id })
+            .from(media)
+            .where(and(eq(media.type, 'GAME'), eq(media.isHidden, true)))
+        ).map((m) => m.id)
+      );
+      result.results = result.results.filter(
+        (g) => !g.mediaId || !hiddenIds.has(g.mediaId)
+      );
+    }
     return res.json(result);
   } catch (err: any) {
     console.error('[GamesRouter] /search error:', err);
@@ -220,7 +249,7 @@ gamesRouter.get('/:id/dlc', async (req, res) => {
 gamesRouter.get('/:id/stores', async (req, res) => {
   try {
     const game = await UnifiedGameService.getInstance().getGameDetails(req.params.id);
-    return res.json(game?.stores || []);
+    return res.json(deduplicateAndNormalizeStores(game?.stores || []));
   } catch (err: any) {
     return res.status(500).json({ error: 'Ошибка получения магазинов' });
   }
@@ -237,10 +266,23 @@ gamesRouter.get('/:id/creators', async (req, res) => {
 });
 
 // 17. GET /api/games/:id/similar
-gamesRouter.get('/:id/similar', async (req, res) => {
+gamesRouter.get('/:id/similar', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const game = await UnifiedGameService.getInstance().getGameDetails(req.params.id);
-    return res.json(game?.similar || []);
+    let similar = game?.similar || [];
+    const current = req.dbUser;
+    if (current?.role !== 'SUPER_ADMIN' && similar.length > 0) {
+      const hiddenIds = new Set(
+        (
+          await db
+            .select({ id: media.id })
+            .from(media)
+            .where(and(eq(media.type, 'GAME'), eq(media.isHidden, true)))
+        ).map((m) => m.id)
+      );
+      similar = similar.filter((g: any) => !g.mediaId || !hiddenIds.has(g.mediaId));
+    }
+    return res.json(similar);
   } catch (err: any) {
     return res.status(500).json({ error: 'Ошибка получения похожих игр' });
   }
@@ -252,6 +294,19 @@ gamesRouter.get('/:id', optionalAuth, async (req: AuthRequest, res: Response) =>
     const game = await UnifiedGameService.getInstance().getGameDetails(req.params.id);
     if (!game) {
       return res.status(404).json({ error: 'Игра не найдена в единой базе Dodik Tracker' });
+    }
+
+    // Check if game is linked to a hidden media record and caller is not SUPER_ADMIN
+    const current = req.dbUser;
+    if (game.mediaId) {
+      const [mediaRow] = await db
+        .select({ isHidden: media.isHidden })
+        .from(media)
+        .where(eq(media.id, game.mediaId))
+        .limit(1);
+      if (mediaRow && mediaRow.isHidden && current?.role !== 'SUPER_ADMIN') {
+        return res.status(404).json({ error: 'Игра не найдена' });
+      }
     }
 
     // If user is authenticated, check for user library status

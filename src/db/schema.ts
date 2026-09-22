@@ -31,7 +31,9 @@ export const users = pgTable('users', {
   notificationSettings: text('notification_settings').notNull().default('{"friendRequests":true,"friendReviews":true,"likes":true,"comments":true,"newReleases":true,"lists":true}'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
-});
+}, (table) => ({
+  telegramIdIdx: uniqueIndex('users_telegram_id_unique').on(table.telegramId),
+}));
 
 // 2. Media Table
 export const media = pgTable('media', {
@@ -251,23 +253,33 @@ export const tierLists = pgTable('tier_lists', {
 export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  type: text('type').notNull(), // ACHIEVEMENT_UNLOCKED, FRIEND_REQUEST, FRIEND_ACCEPTED, NEW_MESSAGE, FRIEND_REVIEW, FRIEND_ACTIVITY, NEW_RELEASE, MENTION, SYSTEM, ADMIN_ALERT, LIKE, LIST_INVITE, LIST_FOLLOW
+  recipientUserId: integer('recipient_user_id').references(() => users.id, { onDelete: 'cascade' }),
+  type: text('type').notNull(), // FRIEND_REQUEST, FRIEND_ACCEPTED, REVIEW_LIKED, REVIEW_COMMENTED, FEEDBACK_REPLIED, CONTENT_COMPLETED, CONTENT_SHARED, TIER_LIST_INVITE, SYSTEM, ACHIEVEMENT, ADMIN_ANNOUNCEMENT, etc.
   title: text('title').notNull(),
   body: text('body').notNull(),
+  message: text('message'),
   content: text('content'),
   link: text('link'),
   relatedEntity: text('related_entity'),
+  entityType: text('entity_type'),
   relatedEntityId: text('related_entity_id'),
+  entityId: text('entity_id'),
   senderId: integer('sender_id').references(() => users.id, { onDelete: 'set null' }),
+  actorUserId: integer('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
   senderAvatar: text('sender_avatar'),
   senderUsername: text('sender_username'),
   metadataJson: text('metadata_json'),
+  metadata: text('metadata'),
+  dedupKey: text('dedup_key'),
   isRead: boolean('is_read').notNull().default(false),
   readAt: timestamp('read_at'),
   createdAt: timestamp('created_at').defaultNow(),
 }, (table) => {
   return {
     userIdIdx: index('notifications_user_id_idx').on(table.userId),
+    recipientUserIdIdx: index('notifications_recipient_user_id_idx').on(table.recipientUserId),
+    actorUserIdIdx: index('notifications_actor_user_id_idx').on(table.actorUserId),
+    dedupKeyIdx: index('notifications_dedup_key_idx').on(table.dedupKey),
     isReadIdx: index('notifications_is_read_idx').on(table.isRead),
     typeIdx: index('notifications_type_idx').on(table.type)
   };
@@ -347,6 +359,19 @@ export const reviews = pgTable('reviews', {
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
+
+// 23b. Review Reactions Table
+export const reviewReactions = pgTable('review_reactions', {
+  id: serial('id').primaryKey(),
+  reviewId: integer('review_id').references(() => reviews.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  type: text('type').notNull().default('LIKE'), // 'LIKE', 'HEART', 'CLAP', etc.
+  createdAt: timestamp('created_at').defaultNow(),
+}, (t) => ({
+  unqReaction: uniqueIndex('review_reactions_review_user_type_unq').on(t.reviewId, t.userId, t.type),
+  reviewIdIdx: index('review_reactions_review_id_idx').on(t.reviewId),
+  userIdIdx: index('review_reactions_user_id_idx').on(t.userId),
+}));
 
 // 24. Invite Codes Table
 export const inviteCodes = pgTable('invite_codes', {
@@ -441,9 +466,15 @@ export const mediaRelations = relations(media, ({ many }) => ({
   reviews: many(reviews),
 }));
 
-export const reviewsRelations = relations(reviews, ({ one }) => ({
+export const reviewsRelations = relations(reviews, ({ one, many }) => ({
   user: one(users, { fields: [reviews.userId], references: [users.id] }),
   media: one(media, { fields: [reviews.mediaId], references: [media.id] }),
+  reactions: many(reviewReactions),
+}));
+
+export const reviewReactionsRelations = relations(reviewReactions, ({ one }) => ({
+  review: one(reviews, { fields: [reviewReactions.reviewId], references: [reviews.id] }),
+  user: one(users, { fields: [reviewReactions.userId], references: [users.id] }),
 }));
 
 export const seasonsRelations = relations(seasons, ({ one, many }) => ({
@@ -595,10 +626,30 @@ export const reports = pgTable('reports', {
   createdAtIdx: index('reports_created_at_idx').on(table.createdAt),
 }));
 
-export const reportsRelations = relations(reports, ({ one }) => ({
+export const reportsRelations = relations(reports, ({ one, many }) => ({
   reporter: one(users, { fields: [reports.reporterId], references: [users.id], relationName: 'reportedReports' }),
   targetUser: one(users, { fields: [reports.targetUserId], references: [users.id], relationName: 'targetedReports' }),
   moderator: one(users, { fields: [reports.moderatorId], references: [users.id], relationName: 'moderatedReports' }),
+  replies: many(reportReplies),
+}));
+
+// 33.1 Feedback / Report Replies Table
+export const reportReplies = pgTable('report_replies', {
+  id: serial('id').primaryKey(),
+  reportId: integer('report_id').notNull().references(() => reports.id, { onDelete: 'cascade' }),
+  authorUserId: integer('author_user_id').references(() => users.id, { onDelete: 'set null' }),
+  message: text('message').notNull(),
+  isAdminResponse: boolean('is_admin_response').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  reportIdIdx: index('report_replies_report_id_idx').on(table.reportId),
+  authorIdx: index('report_replies_author_idx').on(table.authorUserId),
+  createdAtIdx: index('report_replies_created_at_idx').on(table.createdAt),
+}));
+
+export const reportRepliesRelations = relations(reportReplies, ({ one }) => ({
+  report: one(reports, { fields: [reportReplies.reportId], references: [reports.id] }),
+  author: one(users, { fields: [reportReplies.authorUserId], references: [users.id] }),
 }));
 
 // 34. News (CMS) Table

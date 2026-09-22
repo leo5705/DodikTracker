@@ -18,9 +18,11 @@ import {
   Loader2,
   Download,
   Upload,
+  Share2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
+import { useShare } from '../../context/ShareContext.tsx';
 import { formatMediaTypePath } from '../../utils/formatters.ts';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
 
@@ -39,6 +41,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 }) => {
   const { authFetch, dbUser, login } = useAuth();
   const { navigate } = useRouter();
+  const { openCompletionModal, openShareModal } = useShare();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState(selectedCategory);
@@ -111,9 +114,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         body: JSON.stringify({ status: newStatus }),
       });
       if (res.ok) {
+        const itemObj = items.find((it) => it.userMediaId === userMediaId);
         setItems((prev) =>
           prev.map((it) => (it.userMediaId === userMediaId ? { ...it, status: newStatus } : it))
         );
+
+        if (newStatus === 'COMPLETED' && itemObj) {
+          openCompletionModal({
+            mediaId: itemObj.mediaId,
+            title: itemObj.title,
+            type: itemObj.type,
+            posterUrl: itemObj.posterUrl,
+            rating: itemObj.rating || null,
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to update status:', err);
@@ -362,13 +376,33 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       >
                         {badge.label}
                       </span>
-                      <button
-                        onClick={() => setItemToDelete(item.userMediaId)}
-                        className="text-zinc-400 hover:text-red-400 p-1 transition-colors"
-                        title="Удалить из библиотеки"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-0.5">
+                        <button
+                          onClick={() =>
+                            openShareModal(
+                              {
+                                id: item.mediaId,
+                                title: item.title,
+                                type: item.type,
+                                posterUrl: item.posterUrl,
+                                rating: item.rating,
+                              },
+                              item.status === 'COMPLETED'
+                            )
+                          }
+                          className="text-zinc-400 hover:text-purple-400 p-1 transition-colors"
+                          title="Поделиться с друзьями"
+                        >
+                          <Share2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setItemToDelete(item.userMediaId)}
+                          className="text-zinc-400 hover:text-red-400 p-1 transition-colors"
+                          title="Удалить из библиотеки"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <h3

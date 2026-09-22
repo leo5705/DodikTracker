@@ -27,6 +27,7 @@ import {
   episodes,
   userEpisodes,
   reviews,
+  reviewReactions,
   inviteCodes,
   passwordResetTokens,
   directMessages,
@@ -119,13 +120,27 @@ apiRouter.get('/system/version', async (req, res) => {
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 20, // limit each IP to 20 requests per windowMs
-  message: { error: 'Слишком много попыток входа/регистрации. Попробуйте позже.' }
+  message: { error: 'Слишком много попыток входа/регистрации. Попробуйте позже.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: {
+    trustProxy: false,
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
 });
 
 const messageLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 30, // limit each IP to 30 messages per minute
-  message: { error: 'Слишком частая отправка сообщений. Подождите немного.' }
+  message: { error: 'Слишком частая отправка сообщений. Подождите немного.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: {
+    trustProxy: false,
+    xForwardedForHeader: false,
+    forwardedHeader: false,
+  },
 });
 
 export function setSessionCookie(res: Response, token: string) {
@@ -263,31 +278,37 @@ export async function sendAppNotification(
   notif: {
     type: string;
     title: string;
-    body: string;
+    body?: string;
+    message?: string;
     content?: string;
     relatedEntity?: string;
+    entityType?: string;
     relatedEntityId?: string;
+    entityId?: string;
     link?: string;
     senderId?: number;
+    actorUserId?: number;
     senderAvatar?: string;
     senderUsername?: string;
     metadata?: Record<string, any>;
+    dedupKey?: string;
   }
 ) {
   try {
-    await notificationService.notifyUser({
-      userId,
-      type: notif.type as any,
+    await notificationService.create({
+      recipientUserId: userId,
+      type: notif.type,
       title: notif.title,
-      body: notif.body,
+      message: notif.message || notif.body || '',
       content: notif.content,
-      relatedEntity: notif.relatedEntity,
-      relatedEntityId: notif.relatedEntityId,
+      entityType: notif.entityType || notif.relatedEntity,
+      entityId: notif.entityId || notif.relatedEntityId,
       link: notif.link,
-      senderId: notif.senderId,
+      actorUserId: notif.actorUserId !== undefined ? notif.actorUserId : notif.senderId,
       senderAvatar: notif.senderAvatar,
       senderUsername: notif.senderUsername,
       metadata: notif.metadata,
+      dedupKey: notif.dedupKey,
     });
   } catch (err) {
     console.error('Failed to create notification via notificationService:', err);
@@ -548,18 +569,17 @@ apiRouter.post('/auth/register', authLimiter, async (req, res) => {
         .catch(() => {});
 
       if (validatedInvite.creatorId) {
-        await db
-          .insert(notifications)
-          .values({
-            userId: validatedInvite.creatorId,
-            type: 'SYSTEM',
-            title: 'Инвайт использован',
-            body: `Пользователь @${newUser.username} успешно зарегистрировался по вашему инвайт-коду!`,
-            senderId: newUser.id,
-            senderUsername: newUser.username,
-            link: `/users/${newUser.username}`,
-          })
-          .catch(() => {});
+        await notificationService.create({
+          recipientUserId: validatedInvite.creatorId,
+          type: 'SYSTEM',
+          title: 'Инвайт использован',
+          message: `Пользователь @${newUser.username} успешно зарегистрировался по вашему инвайт-коду!`,
+          actorUserId: newUser.id,
+          senderUsername: newUser.username,
+          link: `/u/${newUser.username}`,
+          entityType: 'INVITE_CODE',
+          entityId: String(validatedInvite.id),
+        }).catch(() => {});
       }
     }
 
@@ -741,8 +761,8 @@ apiRouter.post('/auth/reset-password', async (req, res) => {
   }
 });
 
-// Check Telegram bot status
-apiRouter.get('/auth/telegram/status', async (_req, res) => {
+// Check Telegram bot status or code verification status
+apiRouter.get('/auth/telegram/status', async (req, res) => {
   try {
     const botToken = await telegramBot.getBotToken();
     const botSetting = await db
@@ -755,10 +775,20 @@ apiRouter.get('/auth/telegram/status', async (_req, res) => {
         ? botSetting[0].value.trim()
         : telegramBot.getUsername();
 
+    const code = req.query.code ? String(req.query.code).trim() : null;
+    let isCodeVerified = false;
+    if (code) {
+      const stored = telegramAuthCodes.get(code);
+      if (stored && stored.type === 'LOGIN' && stored.isVerified && Date.now() <= stored.expiresAt) {
+        isCodeVerified = true;
+      }
+    }
+
     res.json({
       configured: !!botToken,
       botUsername,
       botUrl: `https://t.me/${botUsername}`,
+      verified: isCodeVerified,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -790,15 +820,18 @@ apiRouter.post('/auth/telegram/request-code', async (req, res) => {
     const { telegramUsername } = req.body;
     const cleanTg = telegramUsername ? String(telegramUsername).replace('@', '').trim().toLowerCase() : undefined;
 
-    // Generate 6-digit code
+    // Generate 6-digit code for LOGIN
     const code = String(Math.floor(100000 + Math.random() * 900000));
     const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes
 
     telegramAuthCodes.set(code, {
       code,
+      type: 'LOGIN',
+      createdAt: Date.now(),
       expiresAt,
       telegramUsername: cleanTg,
       isVerified: false,
+      attempts: 0,
     });
 
     res.json({
@@ -806,7 +839,7 @@ apiRouter.post('/auth/telegram/request-code', async (req, res) => {
       code,
       expiresAt,
       botUsername,
-      botUrl: `https://t.me/${botUsername}?start=${code}`,
+      botUrl: `https://t.me/${botUsername}?start=login_${code}`,
       message: `Код подтверждения: ${code}. Отправьте команду /login ${code} боту @${botUsername}`,
     });
   } catch (err: any) {
@@ -836,14 +869,24 @@ apiRouter.post('/auth/telegram/link-code', requireAuth, async (req: AuthRequest,
       });
     }
 
+    // Invalidate any existing LINK codes for this user
+    for (const [existingCode, entry] of telegramAuthCodes.entries()) {
+      if (entry.userId === user.id && entry.type === 'LINK') {
+        telegramAuthCodes.delete(existingCode);
+      }
+    }
+
     const code = String(Math.floor(100000 + Math.random() * 900000));
     const expiresAt = Date.now() + 15 * 60 * 1000;
 
     telegramAuthCodes.set(code, {
       code,
+      type: 'LINK',
+      createdAt: Date.now(),
       expiresAt,
-      userId: user.id,
+      userId: user.id, // Strictly determined by server session!
       isVerified: false,
+      attempts: 0,
     });
 
     res.json({
@@ -851,7 +894,153 @@ apiRouter.post('/auth/telegram/link-code', requireAuth, async (req: AuthRequest,
       code,
       expiresAt,
       botUsername,
-      botUrl: `https://t.me/${botUsername}?start=${code}`,
+      botUrl: `https://t.me/${botUsername}?start=link_${code}`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Check status of linking process from Settings
+apiRouter.get('/auth/telegram/link-status', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const code = req.query.code ? String(req.query.code).trim() : null;
+
+    // Check if user is already linked in DB
+    const currentUser = (await db.select().from(users).where(eq(users.id, user.id)).limit(1))[0];
+    if (currentUser?.telegramId) {
+      if (code) telegramAuthCodes.delete(code);
+      return res.json({
+        status: 'LINKED',
+        user: sanitizeUser(currentUser),
+        telegramUsername: currentUser.telegramUsername,
+        telegramId: currentUser.telegramId,
+      });
+    }
+
+    if (!code) {
+      return res.json({ status: 'NOT_LINKED' });
+    }
+
+    const stored = telegramAuthCodes.get(code);
+    if (!stored || Date.now() > stored.expiresAt) {
+      return res.status(400).json({
+        status: 'EXPIRED',
+        error: 'Срок действия кода истек или код не найден. Запросите новый код.',
+      });
+    }
+
+    if (stored.userId !== user.id) {
+      return res.status(403).json({ error: 'Доступ запрещен. Код принадлежит другому пользователю.' });
+    }
+
+    if (stored.error === 'ALREADY_LINKED') {
+      telegramAuthCodes.delete(code);
+      return res.status(409).json({
+        status: 'ALREADY_LINKED',
+        error: 'Этот Telegram уже привязан к другому аккаунту.',
+        alreadyLinkedUsername: stored.alreadyLinkedUsername,
+      });
+    }
+
+    if (stored.isVerified) {
+      telegramAuthCodes.delete(code);
+      const updatedUser = (await db.select().from(users).where(eq(users.id, user.id)).limit(1))[0];
+      return res.json({
+        status: 'LINKED',
+        user: sanitizeUser(updatedUser),
+        telegramUsername: updatedUser.telegramUsername,
+        telegramId: updatedUser.telegramId,
+      });
+    }
+
+    res.json({ status: 'PENDING' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manual confirm link button from Settings
+apiRouter.post('/auth/telegram/confirm-link', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { code } = req.body;
+
+    if (!code || !String(code).trim()) {
+      return res.status(400).json({ error: 'Укажите 6-значный код привязки' });
+    }
+
+    const cleanCode = String(code).trim();
+    const stored = telegramAuthCodes.get(cleanCode);
+
+    if (!stored || Date.now() > stored.expiresAt) {
+      return res.status(400).json({
+        error: 'Недействительный или истекший код привязки. Запросите новый код.',
+      });
+    }
+
+    if (stored.userId !== user.id) {
+      return res.status(403).json({ error: 'Код привязки принадлежит другому пользователю.' });
+    }
+
+    if (stored.error === 'ALREADY_LINKED') {
+      telegramAuthCodes.delete(cleanCode);
+      return res.status(409).json({
+        error: 'Этот Telegram уже привязан к другому аккаунту.',
+        alreadyLinkedUsername: stored.alreadyLinkedUsername,
+      });
+    }
+
+    if (!stored.isVerified) {
+      const botSetting = await db
+        .select()
+        .from(systemSettings)
+        .where(eq(systemSettings.key, 'telegram_bot_username'))
+        .limit(1);
+      const botUsername =
+        botSetting.length > 0 && botSetting[0].value?.trim()
+          ? botSetting[0].value.trim()
+          : telegramBot.getUsername();
+
+      return res.status(400).json({
+        verified: false,
+        error: `Привязка ещё не подтверждена. Перейдите в бот @${botUsername} в Telegram и отправьте команду /link ${cleanCode}`,
+      });
+    }
+
+    telegramAuthCodes.delete(cleanCode);
+    const updatedUser = (await db.select().from(users).where(eq(users.id, user.id)).limit(1))[0];
+    res.json({
+      success: true,
+      message: 'Telegram успешно привязан!',
+      user: sanitizeUser(updatedUser),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Unlink Telegram from profile in Settings
+apiRouter.post('/auth/telegram/unlink', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+
+    await db
+      .update(users)
+      .set({
+        telegramId: null,
+        telegramChatId: null,
+        telegramUsername: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, user.id));
+
+    const updatedUser = (await db.select().from(users).where(eq(users.id, user.id)).limit(1))[0];
+    res.json({
+      success: true,
+      message: 'Telegram успешно отвязан от вашего аккаунта.',
+      user: sanitizeUser(updatedUser),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -876,6 +1065,22 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
       });
     }
 
+    // Rate limiting: max 5 verification attempts per code
+    stored.attempts = (stored.attempts || 0) + 1;
+    if (stored.attempts > 5) {
+      telegramAuthCodes.delete(cleanCode);
+      return res.status(429).json({
+        error: 'Превышено максимальное количество попыток проверки кода. Запросите новый код.',
+      });
+    }
+
+    // STRICT SEPARATION: LINK codes generated from Settings CANNOT be used for site login
+    if (stored.type === 'LINK' || stored.userId) {
+      return res.status(400).json({
+        error: 'Этот код предназначен для привязки Telegram в настройках профиля, а не для входа на сайт.',
+      });
+    }
+
     const botSetting = await db
       .select()
       .from(systemSettings)
@@ -886,44 +1091,25 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
         ? botSetting[0].value.trim()
         : telegramBot.getUsername();
 
-    // CRITICAL SECURITY FIX: Check that the Telegram bot actually verified this code!
-    if (!stored.isVerified) {
+    // Check that Telegram bot actually verified this login code
+    if (!stored.isVerified || !stored.telegramId) {
       return res.status(400).json({
         verified: false,
         error: `Авторизация ещё не подтверждена. Перейдите в бот @${botUsername} в Telegram и отправьте команду /login ${cleanCode}`,
       });
     }
 
-    const tgUsername = stored.telegramUsername || (stored.telegramId ? `tg_${stored.telegramId}` : 'telegram_user');
+    // ONE-TIME USE: Invalidate code immediately upon successful attempt to prevent replay
     const tgId = stored.telegramId;
     const tgChatId = stored.telegramChatId;
+    const tgUsername = stored.telegramUsername;
+    telegramAuthCodes.delete(cleanCode);
 
-    // Check if user exists
+    // Primary Identity Check: Look up user strictly by stable telegramId
     let userRecord: any = null;
-
-    if (stored.resolvedUserId) {
-      const found = await db.select().from(users).where(eq(users.id, stored.resolvedUserId)).limit(1);
-      if (found.length > 0) userRecord = found[0];
-    }
-
-    if (!userRecord && tgId) {
-      const found = await db.select().from(users).where(eq(users.telegramId, tgId)).limit(1);
-      if (found.length > 0) userRecord = found[0];
-    }
-
-    if (!userRecord && stored.telegramUsername) {
-      const found = await db
-        .select()
-        .from(users)
-        .where(
-          or(
-            eq(users.telegramUsername, stored.telegramUsername),
-            eq(users.username, `tg_${stored.telegramUsername}`),
-            eq(users.username, stored.telegramUsername)
-          )
-        )
-        .limit(1);
-      if (found.length > 0) userRecord = found[0];
+    const foundById = await db.select().from(users).where(eq(users.telegramId, tgId)).limit(1);
+    if (foundById.length > 0) {
+      userRecord = foundById[0];
     }
 
     if (!userRecord) {
@@ -974,12 +1160,12 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
         }
       }
 
-      const cleanUserPrefix = tgUsername.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 14) || 'user';
-      const generatedUsername = `tg_${cleanUserPrefix}_${Math.floor(Math.random() * 899 + 100)}`;
+      const rawPrefix = tgUsername ? tgUsername.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 14) : `tg_${tgId.slice(-4)}`;
+      const generatedUsername = `tg_${rawPrefix || 'user'}_${Math.floor(Math.random() * 899 + 100)}`;
       const customUid = `tg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
       const targetAdminUser = (process.env.INITIAL_ADMIN_USERNAME || process.env.ADMIN_USERNAME || '').trim().toLowerCase();
-      const shouldBeAdmin = (targetAdminUser && (targetAdminUser === generatedUsername.toLowerCase() || targetAdminUser === stored.telegramUsername?.toLowerCase())) || (isFirst && !targetAdminUser && process.env.ALLOW_FIRST_USER_ADMIN !== 'false');
+      const shouldBeAdmin = (targetAdminUser && (targetAdminUser === generatedUsername.toLowerCase() || targetAdminUser === tgUsername?.toLowerCase())) || (isFirst && !targetAdminUser && process.env.ALLOW_FIRST_USER_ADMIN !== 'false');
 
       const [created] = await db
         .insert(users)
@@ -987,8 +1173,8 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
           uid: customUid,
           username: generatedUsername,
           email: `${generatedUsername}@dodik.telegram`,
-          telegramUsername: stored.telegramUsername || null,
-          telegramId: tgId || null,
+          telegramUsername: tgUsername || null,
+          telegramId: tgId,
           telegramChatId: tgChatId || null,
           role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
           invitesLeft: 3,
@@ -1004,18 +1190,17 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
           .catch(() => {});
 
         if (validatedTgInvite.creatorId) {
-          await db
-            .insert(notifications)
-            .values({
-              userId: validatedTgInvite.creatorId,
-              type: 'SYSTEM',
-              title: 'Инвайт использован',
-              body: `Пользователь @${created.username} успешно зарегистрировался по вашему инвайт-коду через Telegram!`,
-              senderId: created.id,
-              senderUsername: created.username,
-              link: `/users/${created.username}`,
-            })
-            .catch(() => {});
+          await notificationService.create({
+            recipientUserId: validatedTgInvite.creatorId,
+            type: 'SYSTEM',
+            title: 'Инвайт использован',
+            message: `Пользователь @${created.username} успешно зарегистрировался по вашему инвайт-коду через Telegram!`,
+            actorUserId: created.id,
+            senderUsername: created.username,
+            link: `/u/${created.username}`,
+            entityType: 'INVITE_CODE',
+            entityId: String(validatedTgInvite.id),
+          }).catch(() => {});
         }
       }
 
@@ -1035,21 +1220,29 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
         });
       }
 
-      // Update telegram link if available
-      if (tgId || tgChatId || stored.telegramUsername) {
+      // Check blocked or banned
+      if (userRecord.isBlocked) {
+        return res.status(403).json({ error: 'Ваш аккаунт заблокирован администратором.' });
+      }
+
+      if (userRecord.bannedUntil && new Date(userRecord.bannedUntil) > new Date()) {
+        return res.status(403).json({
+          error: `Ваш аккаунт временно заблокирован до ${new Date(userRecord.bannedUntil).toLocaleString('ru-RU')}.${userRecord.banReason ? ` Причина: ${userRecord.banReason}` : ''}`,
+        });
+      }
+
+      // Refresh chat ID and username if changed
+      if (tgChatId || tgUsername) {
         await db
           .update(users)
           .set({
-            telegramId: tgId || userRecord.telegramId,
             telegramChatId: tgChatId || userRecord.telegramChatId,
-            telegramUsername: stored.telegramUsername || userRecord.telegramUsername,
+            telegramUsername: tgUsername || userRecord.telegramUsername,
             updatedAt: new Date(),
           })
           .where(eq(users.id, userRecord.id));
       }
     }
-
-    telegramAuthCodes.delete(cleanCode);
 
     const token = jwt.sign(
       { userId: userRecord.id, username: userRecord.username, email: userRecord.email, role: userRecord.role },
@@ -1539,8 +1732,14 @@ const mediaSearchHandler = async (req: any, res: any) => {
 
     // 1. Search local database with direct SQL conditions on first page
     let localFormatted: any[] = [];
+    const isSuperAdmin = req.dbUser?.role === 'SUPER_ADMIN';
+
     if (page === 1) {
       const localConditions: any[] = [];
+
+      if (!isSuperAdmin) {
+        localConditions.push(eq(media.isHidden, false));
+      }
 
       if (query && query.length >= 2) {
         localConditions.push(
@@ -1641,6 +1840,46 @@ const mediaSearchHandler = async (req: any, res: any) => {
       combined = combined.filter((item) => isMediaAllowedForTierCategory(item.type, categoryFilter));
     }
 
+    // Exclude hidden media for non-SUPER_ADMIN users
+    if (!isSuperAdmin && combined.length > 0) {
+      const explicitMediaIds = combined.map((i: any) => i.mediaId).filter(Boolean);
+      const extPairs = combined
+        .filter((i: any) => !i.mediaId && i.provider && i.externalId)
+        .map((i: any) => ({ provider: i.provider, externalId: String(i.externalId) }));
+
+      const hiddenIds = new Set<number>();
+      if (explicitMediaIds.length > 0) {
+        const hiddenMediaRows = await db
+          .select({ id: media.id })
+          .from(media)
+          .where(and(inArray(media.id, explicitMediaIds), eq(media.isHidden, true)));
+        hiddenMediaRows.forEach((r) => hiddenIds.add(r.id));
+      }
+
+      const hiddenExtKeys = new Set<string>();
+      if (extPairs.length > 0) {
+        const extConds = extPairs.map((p) =>
+          and(eq(mediaExternalIds.provider, p.provider), eq(mediaExternalIds.externalId, p.externalId))
+        );
+        const hiddenExtRows = await db
+          .select({
+            provider: mediaExternalIds.provider,
+            externalId: mediaExternalIds.externalId,
+          })
+          .from(mediaExternalIds)
+          .innerJoin(media, eq(mediaExternalIds.mediaId, media.id))
+          .where(and(or(...extConds), eq(media.isHidden, true)));
+
+        hiddenExtRows.forEach((r) => hiddenExtKeys.add(`${r.provider}:${r.externalId}`));
+      }
+
+      combined = combined.filter((item: any) => {
+        if (item.mediaId && hiddenIds.has(item.mediaId)) return false;
+        if (item.provider && item.externalId && hiddenExtKeys.has(`${item.provider}:${item.externalId}`)) return false;
+        return true;
+      });
+    }
+
     // Post-filter on rating and year if specified
     if (filters.ratingFrom !== undefined) {
       combined = combined.filter((i) => i.rating === undefined || i.rating >= filters.ratingFrom!);
@@ -1667,12 +1906,12 @@ const mediaSearchHandler = async (req: any, res: any) => {
   }
 };
 
-apiRouter.get('/media/search', mediaSearchHandler);
-apiRouter.get('/search', mediaSearchHandler);
-apiRouter.get('/media/catalog', mediaSearchHandler);
+apiRouter.get('/media/search', optionalAuth, mediaSearchHandler);
+apiRouter.get('/search', optionalAuth, mediaSearchHandler);
+apiRouter.get('/media/catalog', optionalAuth, mediaSearchHandler);
 
 // Trending items with pagination and filters
-apiRouter.get('/media/trending', async (req, res) => {
+apiRouter.get('/media/trending', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const rawType = req.query.type ? String(req.query.type).toUpperCase() : 'ALL';
     const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
@@ -1680,8 +1919,50 @@ apiRouter.get('/media/trending', async (req, res) => {
     const filters = parseUnifiedFilters(req.query);
 
     const trendingRes = await providerManager.getTrending(rawType, page, limit, filters);
+    let results = trendingRes.results || [];
+
+    const isSuperAdmin = req.dbUser?.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && results.length > 0) {
+      const explicitMediaIds = results.map((i: any) => i.mediaId).filter(Boolean);
+      const extPairs = results
+        .filter((i: any) => !i.mediaId && i.provider && i.externalId)
+        .map((i: any) => ({ provider: i.provider, externalId: String(i.externalId) }));
+
+      const hiddenIds = new Set<number>();
+      if (explicitMediaIds.length > 0) {
+        const hiddenMediaRows = await db
+          .select({ id: media.id })
+          .from(media)
+          .where(and(inArray(media.id, explicitMediaIds), eq(media.isHidden, true)));
+        hiddenMediaRows.forEach((r) => hiddenIds.add(r.id));
+      }
+
+      const hiddenExtKeys = new Set<string>();
+      if (extPairs.length > 0) {
+        const extConds = extPairs.map((p) =>
+          and(eq(mediaExternalIds.provider, p.provider), eq(mediaExternalIds.externalId, p.externalId))
+        );
+        const hiddenExtRows = await db
+          .select({
+            provider: mediaExternalIds.provider,
+            externalId: mediaExternalIds.externalId,
+          })
+          .from(mediaExternalIds)
+          .innerJoin(media, eq(mediaExternalIds.mediaId, media.id))
+          .where(and(or(...extConds), eq(media.isHidden, true)));
+
+        hiddenExtRows.forEach((r) => hiddenExtKeys.add(`${r.provider}:${r.externalId}`));
+      }
+
+      results = results.filter((item: any) => {
+        if (item.mediaId && hiddenIds.has(item.mediaId)) return false;
+        if (item.provider && item.externalId && hiddenExtKeys.has(`${item.provider}:${item.externalId}`)) return false;
+        return true;
+      });
+    }
+
     res.json({
-      results: trendingRes.results || [],
+      results,
       hasMore: Boolean(trendingRes.hasMore),
       page,
       limit,
@@ -1855,6 +2136,12 @@ apiRouter.get('/media/:id', optionalAuth, async (req: AuthRequest, res: Response
     }
 
     const item = found[0];
+
+    // If media is hidden and requester is not SUPER_ADMIN, return 404
+    if (item.isHidden && current?.role !== 'SUPER_ADMIN') {
+      return res.status(404).json({ error: 'Медиа не найдено' });
+    }
+
     const seasonsList = await db.select().from(seasons).where(eq(seasons.mediaId, item.id));
 
     // Look up external IDs for this item
@@ -2007,6 +2294,136 @@ apiRouter.get('/media/:id', optionalAuth, async (req: AuthRequest, res: Response
   }
 });
 
+// Share media with friends or specific users
+apiRouter.post('/media/:id/share', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const mediaId = parseInt(req.params.id, 10);
+    const { targetUserIds, targetUserId, recipientUserId, recipientUsername, note, rating, isCompletion } = req.body;
+
+    let targetIds: number[] = [];
+    if (Array.isArray(targetUserIds)) {
+      targetIds = targetUserIds.map((id: any) => parseInt(id, 10)).filter((id: number) => !isNaN(id) && id !== user.id);
+    } else if (targetUserId || recipientUserId) {
+      const singleId = parseInt(String(targetUserId || recipientUserId), 10);
+      if (!isNaN(singleId) && singleId !== user.id) {
+        targetIds = [singleId];
+      }
+    } else if (recipientUsername) {
+      const [foundUser] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.username, String(recipientUsername).trim()))
+        .limit(1);
+      if (foundUser && foundUser.id !== user.id) {
+        targetIds = [foundUser.id];
+      }
+    }
+
+    if (targetIds.length === 0) {
+      return res.status(400).json({ error: 'Укажите пользователей, с которыми хотите поделиться' });
+    }
+
+    const [mediaItem] = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
+    if (!mediaItem) {
+      return res.status(404).json({ error: 'Контент не найден' });
+    }
+
+    const mediaTitle = mediaItem.title || mediaItem.originalTitle || 'контент';
+    const alreadyShared: number[] = [];
+    let sentCount = 0;
+
+    // Check recent shares within the last 1 hour to prevent notification spam
+    const oneHourAgo = new Date(Date.now() - 3600 * 1000);
+    const recentNotifs = await db
+      .select({ recipientUserId: notifications.recipientUserId })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.actorUserId, user.id),
+          eq(notifications.type, 'CONTENT_SHARED'),
+          eq(notifications.entityId, String(mediaId)),
+          gte(notifications.createdAt, oneHourAgo)
+        )
+      );
+
+    const recentRecipients = new Set(recentNotifs.map((n) => n.recipientUserId));
+
+    for (const rid of targetIds) {
+      if (recentRecipients.has(rid)) {
+        alreadyShared.push(rid);
+        continue;
+      }
+
+      await notificationService.notifyContentShared(
+        { id: user.id, username: user.username, avatar: user.avatar },
+        rid,
+        mediaTitle,
+        mediaItem.id,
+        mediaItem.type,
+        {
+          note: note ? String(note).trim() : undefined,
+          rating: rating !== undefined && rating !== null ? Number(rating) : undefined,
+          isCompletion: Boolean(isCompletion),
+        }
+      );
+      sentCount++;
+    }
+
+    // Create activity record if at least one notification was sent
+    if (sentCount > 0) {
+      await db.insert(activities).values({
+        userId: user.id,
+        type: 'CONTENT_SHARED',
+        mediaId: mediaItem.id,
+        details: isCompletion
+          ? `Поделился завершением «${mediaTitle}» с друзьями`
+          : `Поделился «${mediaTitle}» с друзьями`,
+      }).catch((e) => console.warn('[Activity insert] error:', e));
+    }
+
+    res.json({
+      ok: true,
+      sentCount,
+      alreadyShared,
+      message: sentCount > 0
+        ? `Вы поделились «${mediaTitle}» (${sentCount} ${sentCount === 1 ? 'получатель' : 'получателей'})!`
+        : 'Вы уже недавно делились этим контентом с выбранными пользователями.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Check who we already shared this media with recently (within 24h)
+apiRouter.get('/media/:id/share-status', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const mediaId = parseInt(req.params.id, 10);
+    const oneDayAgo = new Date(Date.now() - 24 * 3600 * 1000);
+
+    const recentNotifs = await db
+      .select({
+        recipientUserId: notifications.recipientUserId,
+        createdAt: notifications.createdAt,
+      })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.actorUserId, user.id),
+          eq(notifications.type, 'CONTENT_SHARED'),
+          eq(notifications.entityId, String(mediaId)),
+          gte(notifications.createdAt, oneDayAgo)
+        )
+      );
+
+    const sharedUserIds = Array.from(new Set(recentNotifs.map((n) => n.recipientUserId)));
+    res.json({ sharedUserIds });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Rate a media item directly (sets userMedia rating and updates Dodik aggregate)
 apiRouter.post('/media/:id/rate', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -2030,12 +2447,46 @@ apiRouter.post('/media/:id/rate', requireAuth, async (req: AuthRequest, res: Res
         .set({ rating: cleanRating, updatedAt: new Date() })
         .where(eq(userMedia.id, existing[0].id));
     } else {
+      // Find media type to assign sensible default status (PLANNING / PLAN_TO_WATCH)
+      const [mediaRecord] = await db
+        .select({ type: media.type, title: media.title, originalTitle: media.originalTitle })
+        .from(media)
+        .where(eq(media.id, mediaId))
+        .limit(1);
+
+      const defaultStatus = (mediaRecord?.type === 'GAME') ? 'PLANNING' : 'PLAN_TO_WATCH';
+
       await db.insert(userMedia).values({
         userId: user.id,
         mediaId,
         rating: cleanRating,
-        status: 'COMPLETED',
+        status: defaultStatus,
       });
+
+      // Log History for adding via rating
+      await db.insert(mediaHistory).values({
+        userId: user.id,
+        mediaId,
+        action: 'ADDED',
+        details: `Добавлено через оценку: ${cleanRating}/10`,
+      }).catch(() => {});
+    }
+
+    if (cleanRating !== null) {
+      // Log rating action
+      await db.insert(mediaHistory).values({
+        userId: user.id,
+        mediaId,
+        action: 'RATED',
+        details: `Оценка: ${cleanRating}/10`,
+      }).catch(() => {});
+
+      await db.insert(activities).values({
+        userId: user.id,
+        type: 'MEDIA_RATED',
+        mediaId,
+        details: `${cleanRating}/10`,
+      }).catch(() => {});
     }
 
     // Recalculate dodikRating
@@ -2096,29 +2547,82 @@ apiRouter.get('/media/:id/reviews', optionalAuth, async (req: AuthRequest, res: 
       .orderBy(desc(reviews.createdAt));
 
     let userLikedReviewIds = new Set<number>();
-    if (current && reviewRows.length > 0) {
+    let userReactionMap = new Map<number, string>();
+    let reactionsCountMap = new Map<number, Record<string, number>>();
+
+    if (reviewRows.length > 0) {
       const reviewIds = reviewRows.map((r) => r.id);
-      const userLikes = await db
-        .select()
-        .from(likes)
-        .where(
-          and(
-            eq(likes.userId, current.id),
-            eq(likes.targetType, 'REVIEW'),
-            inArray(likes.targetId, reviewIds)
-          )
-        );
-      userLikedReviewIds = new Set(userLikes.map((l) => l.targetId));
+
+      // Fetch review reactions from review_reactions table
+      const reactionsList = await db
+        .select({
+          reviewId: reviewReactions.reviewId,
+          userId: reviewReactions.userId,
+          type: reviewReactions.type,
+        })
+        .from(reviewReactions)
+        .where(inArray(reviewReactions.reviewId, reviewIds));
+
+      for (const rx of reactionsList) {
+        if (!reactionsCountMap.has(rx.reviewId)) {
+          reactionsCountMap.set(rx.reviewId, {});
+        }
+        const counts = reactionsCountMap.get(rx.reviewId)!;
+        counts[rx.type] = (counts[rx.type] || 0) + 1;
+
+        if (current && rx.userId === current.id) {
+          userReactionMap.set(rx.reviewId, rx.type);
+          if (rx.type === 'LIKE') {
+            userLikedReviewIds.add(rx.reviewId);
+          }
+        }
+      }
+
+      // Also check legacy likes table if current user liked
+      if (current) {
+        const legacyLikes = await db
+          .select()
+          .from(likes)
+          .where(
+            and(
+              eq(likes.userId, current.id),
+              eq(likes.targetType, 'REVIEW'),
+              inArray(likes.targetId, reviewIds)
+            )
+          );
+        for (const l of legacyLikes) {
+          userLikedReviewIds.add(l.targetId);
+          if (!userReactionMap.has(l.targetId)) {
+            userReactionMap.set(l.targetId, 'LIKE');
+          }
+        }
+      }
     }
 
-    const formatted = reviewRows.map((r) => ({
-      ...r,
-      score: r.rating,
-      username: r.authorUsername,
-      avatar: r.authorAvatar,
-      userLiked: userLikedReviewIds.has(r.id),
-      isOwn: current ? current.id === r.userId : false,
-    }));
+    const formatted = reviewRows.map((r) => {
+      const counts = reactionsCountMap.get(r.id) || {};
+      const calculatedLikes = (counts['LIKE'] || 0) > 0 ? (counts['LIKE'] || 0) : (r.likesCount || 0);
+
+      return {
+        ...r,
+        score: r.rating,
+        authorUsername: r.authorUsername,
+        authorAvatar: r.authorAvatar,
+        username: r.authorUsername,
+        avatar: r.authorAvatar,
+        user: {
+          id: r.userId,
+          username: r.authorUsername,
+          displayName: r.authorUsername,
+          avatarUrl: r.authorAvatar || undefined,
+        },
+        userLiked: userLikedReviewIds.has(r.id),
+        userReaction: userReactionMap.get(r.id) || (userLikedReviewIds.has(r.id) ? 'LIKE' : null),
+        reactions: counts,
+        likesCount: calculatedLikes,
+        isOwn: current ? current.id === r.userId : false,
+      };
+    });
 
     res.json(formatted);
   } catch (err: any) {
@@ -2257,11 +2761,19 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
           .set({ rating: effectiveRating, updatedAt: new Date() })
           .where(eq(userMedia.id, um[0].id));
       } else {
+        const [targetMedia] = await db
+          .select({ type: media.type })
+          .from(media)
+          .where(eq(media.id, mediaId))
+          .limit(1);
+
+        const defaultStatus = (targetMedia?.type === 'GAME') ? 'PLANNING' : 'PLAN_TO_WATCH';
+
         await db.insert(userMedia).values({
           userId: user.id,
           mediaId,
           rating: effectiveRating,
-          status: 'COMPLETED',
+          status: defaultStatus,
         });
       }
     }
@@ -2275,8 +2787,17 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
       username: user.username,
       avatar: user.avatar,
       authorRole: user.role,
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.username,
+        avatarUrl: user.avatar || undefined,
+      },
       isOwn: true,
       userLiked: false,
+      userReaction: null,
+      reactions: {},
+      likesCount: savedReview.likesCount || 0,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -2303,6 +2824,18 @@ apiRouter.put(['/reviews/:id', '/media/:mediaId/reviews/:id'], requireAuth, asyn
       return res.status(403).json({ error: 'Нет прав для редактирования этого отзыва' });
     }
 
+    // Always fetch the real author of the review, regardless of whether owner or admin is editing
+    const [authorUser] = await db
+      .select({
+        id: users.id,
+        username: users.username,
+        avatar: users.avatar,
+        role: users.role,
+      })
+      .from(users)
+      .where(eq(users.id, reviewItem.userId))
+      .limit(1);
+
     const [updated] = await db
       .update(reviews)
       .set({
@@ -2322,14 +2855,24 @@ apiRouter.put(['/reviews/:id', '/media/:mediaId/reviews/:id'], requireAuth, asyn
         .where(and(eq(userMedia.userId, reviewItem.userId), eq(userMedia.mediaId, reviewItem.mediaId)));
     }
 
+    const authorUsername = authorUser ? authorUser.username : user.username;
+    const authorAvatar = authorUser ? authorUser.avatar : user.avatar;
+    const authorRole = authorUser ? authorUser.role : user.role;
+
     res.json({
       ...updated,
       score: updated.rating,
-      authorUsername: user.username,
-      authorAvatar: user.avatar,
-      username: user.username,
-      avatar: user.avatar,
-      authorRole: user.role,
+      authorUsername,
+      authorAvatar,
+      username: authorUsername,
+      avatar: authorAvatar,
+      authorRole,
+      user: {
+        id: reviewItem.userId,
+        username: authorUsername,
+        displayName: authorUsername,
+        avatarUrl: authorAvatar || undefined,
+      },
       isOwn: isOwner,
       userLiked: false,
     });
@@ -2359,32 +2902,225 @@ apiRouter.delete(['/reviews/:id', '/media/:mediaId/reviews/:id'], requireAuth, a
   }
 });
 
-// Like / unlike review
-apiRouter.post('/reviews/:id/like', requireAuth, async (req: AuthRequest, res: Response) => {
+// Helper to calculate total reactions count for a review
+async function getReviewReactionStats(reviewId: number) {
+  const allReactions = await db
+    .select({ type: reviewReactions.type })
+    .from(reviewReactions)
+    .where(eq(reviewReactions.reviewId, reviewId));
+
+  const reactionsCount: Record<string, number> = {};
+  for (const r of allReactions) {
+    reactionsCount[r.type] = (reactionsCount[r.type] || 0) + 1;
+  }
+  const totalLikes = reactionsCount['LIKE'] || 0;
+  return { reactionsCount, totalLikes };
+}
+
+// React to a review (POST /reviews/:id/react or POST /media/:mediaId/reviews/:id/react)
+apiRouter.post(['/reviews/:id/react', '/media/:mediaId/reviews/:id/react'], requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
     const id = parseInt(req.params.id, 10);
+    const reactionType = (req.body.type || 'LIKE').toUpperCase();
 
-    const existing = await db
-      .select()
-      .from(likes)
+    const reviewItem = (await db.select().from(reviews).where(eq(reviews.id, id)).limit(1))[0];
+    if (!reviewItem) {
+      return res.status(404).json({ error: 'Отзыв не найден' });
+    }
+
+    const existingReaction = (
+      await db
+        .select()
+        .from(reviewReactions)
+        .where(
+          and(
+            eq(reviewReactions.reviewId, id),
+            eq(reviewReactions.userId, user.id),
+            eq(reviewReactions.type, reactionType)
+          )
+        )
+        .limit(1)
+    )[0];
+
+    let userReaction: string | null = null;
+    let isLiked = false;
+
+    if (existingReaction) {
+      // Toggle off / remove reaction
+      await db.delete(reviewReactions).where(eq(reviewReactions.id, existingReaction.id));
+      if (reactionType === 'LIKE') {
+        await db.delete(likes).where(
+          and(
+            eq(likes.userId, user.id),
+            eq(likes.targetType, 'REVIEW'),
+            eq(likes.targetId, id)
+          )
+        );
+      }
+      userReaction = null;
+      isLiked = false;
+    } else {
+      // Add reaction
+      try {
+        await db.insert(reviewReactions).values({
+          reviewId: id,
+          userId: user.id,
+          type: reactionType,
+        });
+      } catch (e: any) {
+        if (e.code !== '23505') throw e;
+      }
+
+      if (reactionType === 'LIKE') {
+        try {
+          await db.insert(likes).values({
+            userId: user.id,
+            targetType: 'REVIEW',
+            targetId: id,
+          });
+        } catch (e: any) {
+          if (e.code !== '23505') throw e;
+        }
+      }
+
+      userReaction = reactionType;
+      isLiked = reactionType === 'LIKE';
+
+      // Notify review author and check achievements
+      if (reviewItem.userId !== user.id) {
+        notificationService
+          .notifyReviewLiked(
+            { id: user.id, username: user.username, avatar: user.avatar },
+            reviewItem.userId,
+            id,
+            undefined,
+            reviewItem.mediaId
+          )
+          .catch(() => {});
+        achievementService.checkAndUnlock(reviewItem.userId, 'LIKE_RECEIVED').catch(() => {});
+      }
+    }
+
+    const { reactionsCount, totalLikes } = await getReviewReactionStats(id);
+    await db.update(reviews).set({ likesCount: totalLikes }).where(eq(reviews.id, id));
+
+    return res.json({
+      success: true,
+      liked: isLiked,
+      isLiked,
+      userReaction,
+      reactions: reactionsCount,
+      likesCount: totalLikes,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete specific reaction (DELETE /reviews/:id/react or /media/:mediaId/reviews/:id/react)
+apiRouter.delete(['/reviews/:id/react', '/media/:mediaId/reviews/:id/react'], requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const id = parseInt(req.params.id, 10);
+    const reactionType = (req.body.type || (req.query.type as string) || 'LIKE').toUpperCase();
+
+    // Security: Only delete reactions belonging to the authenticated current user (user.id)
+    await db
+      .delete(reviewReactions)
       .where(
+        and(
+          eq(reviewReactions.reviewId, id),
+          eq(reviewReactions.userId, user.id),
+          eq(reviewReactions.type, reactionType)
+        )
+      );
+
+    if (reactionType === 'LIKE') {
+      await db.delete(likes).where(
         and(
           eq(likes.userId, user.id),
           eq(likes.targetType, 'REVIEW'),
           eq(likes.targetId, id)
         )
-      )
-      .limit(1);
+      );
+    }
 
-    if (existing.length > 0) {
-      await db.delete(likes).where(eq(likes.id, existing[0].id));
+    const { reactionsCount, totalLikes } = await getReviewReactionStats(id);
+    await db.update(reviews).set({ likesCount: totalLikes }).where(eq(reviews.id, id));
+
+    return res.json({
+      success: true,
+      liked: false,
+      isLiked: false,
+      userReaction: null,
+      reactions: reactionsCount,
+      likesCount: totalLikes,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Like / unlike review (supports both /reviews/:id/like and /media/:mediaId/reviews/:id/like)
+apiRouter.post(['/reviews/:id/like', '/media/:mediaId/reviews/:id/like'], requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const id = parseInt(req.params.id, 10);
+
+    const reviewItem = (await db.select().from(reviews).where(eq(reviews.id, id)).limit(1))[0];
+    if (!reviewItem) {
+      return res.status(404).json({ error: 'Отзыв не найден' });
+    }
+
+    const existingReaction = (
       await db
-        .update(reviews)
-        .set({ likesCount: sql`GREATEST(0, ${reviews.likesCount} - 1)` })
-        .where(eq(reviews.id, id));
-      return res.json({ liked: false });
+        .select()
+        .from(reviewReactions)
+        .where(
+          and(
+            eq(reviewReactions.reviewId, id),
+            eq(reviewReactions.userId, user.id),
+            eq(reviewReactions.type, 'LIKE')
+          )
+        )
+        .limit(1)
+    )[0];
+
+    const existingLegacy = (
+      await db
+        .select()
+        .from(likes)
+        .where(
+          and(
+            eq(likes.userId, user.id),
+            eq(likes.targetType, 'REVIEW'),
+            eq(likes.targetId, id)
+          )
+        )
+        .limit(1)
+    )[0];
+
+    let liked = false;
+    if (existingReaction || existingLegacy) {
+      if (existingReaction) {
+        await db.delete(reviewReactions).where(eq(reviewReactions.id, existingReaction.id));
+      }
+      if (existingLegacy) {
+        await db.delete(likes).where(eq(likes.id, existingLegacy.id));
+      }
+      liked = false;
     } else {
+      try {
+        await db.insert(reviewReactions).values({
+          reviewId: id,
+          userId: user.id,
+          type: 'LIKE',
+        });
+      } catch (err: any) {
+        if (err.code !== '23505') throw err;
+      }
+
       try {
         await db.insert(likes).values({
           userId: user.id,
@@ -2392,31 +3128,113 @@ apiRouter.post('/reviews/:id/like', requireAuth, async (req: AuthRequest, res: R
           targetId: id,
         });
       } catch (err: any) {
-        if (err.code === '23505') return res.json({ liked: true });
-        throw err;
+        if (err.code !== '23505') throw err;
       }
-      await db
-        .update(reviews)
-        .set({ likesCount: sql`${reviews.likesCount} + 1` })
-        .where(eq(reviews.id, id));
+      liked = true;
 
       // Notify review author
-      const reviewItem = (await db.select().from(reviews).where(eq(reviews.id, id)).limit(1))[0];
-      if (reviewItem && reviewItem.userId !== user.id) {
-        sendAppNotification(reviewItem.userId, {
-          type: 'LIKE',
-          title: 'Новый лайк',
-          body: `@${user.username} оценил(а) вашу рецензию`,
-          link: `/media/any/${reviewItem.mediaId}`,
-          senderId: user.id,
-          senderUsername: user.username,
-          senderAvatar: user.avatar,
-        });
-        // Trigger achievement check for receiving likes
+      if (reviewItem.userId !== user.id) {
+        notificationService.notifyReviewLiked(
+          { id: user.id, username: user.username, avatar: user.avatar },
+          reviewItem.userId,
+          id,
+          undefined,
+          reviewItem.mediaId
+        ).catch(() => {});
         achievementService.checkAndUnlock(reviewItem.userId, 'LIKE_RECEIVED').catch(() => {});
       }
-      return res.json({ liked: true });
     }
+
+    const { reactionsCount, totalLikes } = await getReviewReactionStats(id);
+    await db.update(reviews).set({ likesCount: totalLikes }).where(eq(reviews.id, id));
+
+    return res.json({
+      liked,
+      isLiked: liked,
+      userReaction: liked ? 'LIKE' : null,
+      reactions: reactionsCount,
+      likesCount: totalLikes,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get comments for a review
+apiRouter.get('/reviews/:id/comments', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const reviewComments = await db
+      .select({
+        id: comments.id,
+        content: comments.content,
+        parentId: comments.parentId,
+        createdAt: comments.createdAt,
+        user: {
+          id: users.id,
+          username: users.username,
+          avatar: users.avatar,
+        },
+      })
+      .from(comments)
+      .innerJoin(users, eq(comments.userId, users.id))
+      .where(and(eq(comments.targetType, 'REVIEW'), eq(comments.targetId, id), eq(comments.isHidden, false)))
+      .orderBy(comments.createdAt);
+
+    res.json(reviewComments);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Post a comment to a review
+apiRouter.post('/reviews/:id/comments', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const id = parseInt(req.params.id, 10);
+    const { content, parentId } = req.body;
+
+    if (!content || !String(content).trim()) {
+      return res.status(400).json({ error: 'Комментарий не может быть пустым' });
+    }
+
+    const trimmed = String(content).trim();
+    const [reviewItem] = await db.select().from(reviews).where(eq(reviews.id, id)).limit(1);
+    if (!reviewItem) {
+      return res.status(404).json({ error: 'Рецензия не найдена' });
+    }
+
+    const [newComment] = await db
+      .insert(comments)
+      .values({
+        userId: user.id,
+        targetType: 'REVIEW',
+        targetId: id,
+        content: trimmed,
+        parentId: parentId ? parseInt(parentId, 10) : null,
+      })
+      .returning();
+
+    // Notify review author (if not self)
+    if (reviewItem.userId !== user.id) {
+      notificationService.notifyReviewCommented(
+        { id: user.id, username: user.username, avatar: user.avatar },
+        reviewItem.userId,
+        id,
+        trimmed,
+        undefined,
+        reviewItem.mediaId
+      ).catch(() => {});
+    }
+
+    res.json({
+      ...newComment,
+      user: {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -2606,40 +3424,6 @@ apiRouter.post('/library', requireAuth, async (req: AuthRequest, res: Response) 
       achievementService.checkAndUnlock(user.id, 'MEDIA_COMPLETED', { mediaId: targetMediaId }).catch(() => {});
     }
 
-    // Dispatch FRIEND_ACTIVITY to friends
-    (async () => {
-      try {
-        const friendsList = await db
-          .select()
-          .from(friendRequests)
-          .where(
-            and(
-              eq(friendRequests.status, 'ACCEPTED'),
-              or(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, user.id))
-            )
-          );
-        const friendIds = friendsList.map((f) => (f.senderId === user.id ? f.receiverId : f.senderId));
-        if (friendIds.length > 0) {
-          const [mItem] = await db.select().from(media).where(eq(media.id, targetMediaId)).limit(1);
-          const mTitle = mItem?.title || mItem?.originalTitle || 'контент';
-          const actText = defaultStatus === 'COMPLETED'
-            ? `завершил(а) просмотр «${mTitle}»`
-            : `добавил(а) «${mTitle}» в список (${defaultStatus})`;
-
-          for (const fid of friendIds) {
-            notificationService.notifyFriendActivity(
-              { id: user.id, username: user.username, avatar: user.avatar },
-              fid,
-              actText,
-              `/media/${mItem?.type?.toLowerCase() || 'any'}/${targetMediaId}`
-            ).catch(() => {});
-          }
-        }
-      } catch (err) {
-        console.warn('[Activity Notification] Dispatch error:', err);
-      }
-    })();
-
     res.json(userMediaEntry);
   } catch (err: any) {
     console.error('Add library error:', err);
@@ -2686,6 +3470,16 @@ apiRouter.put('/library/:id', requireAuth, async (req: AuthRequest, res: Respons
     if (status && status !== prev.status) {
       if (status === 'COMPLETED') {
         achievementService.checkAndUnlock(user.id, 'MEDIA_COMPLETED', { mediaId: prev.mediaId }).catch(() => {});
+        db.select().from(media).where(eq(media.id, prev.mediaId)).limit(1).then(([m]) => {
+          if (m) {
+            notificationService.notifyContentCompleted(
+              user.id,
+              m.title || m.originalTitle || 'контент',
+              m.id,
+              m.type
+            ).catch(() => {});
+          }
+        }).catch(() => {});
       }
       await db.insert(mediaHistory).values({
         userId: user.id,
@@ -4098,8 +4892,14 @@ apiRouter.get('/lists/my', requireAuth, async (req: AuthRequest, res: Response) 
     const roleMap = new Map(memberships.map((m) => [m.listId, m.role]));
 
     // Get item counts and preview items for each list
+    const isSuperAdmin = user.role === 'SUPER_ADMIN';
     const enriched = await Promise.all(
       myLists.map(async (l) => {
+        const itemConds = [eq(listItems.listId, l.id)];
+        if (!isSuperAdmin) {
+          itemConds.push(eq(media.isHidden, false));
+        }
+
         const items = await db
           .select({
             id: listItems.id,
@@ -4110,7 +4910,7 @@ apiRouter.get('/lists/my', requireAuth, async (req: AuthRequest, res: Response) 
           })
           .from(listItems)
           .innerJoin(media, eq(listItems.mediaId, media.id))
-          .where(eq(listItems.listId, l.id))
+          .where(and(...itemConds))
           .orderBy(listItems.orderIndex);
 
         const followersCount = await db
@@ -4171,6 +4971,11 @@ apiRouter.get('/lists/following/my', requireAuth, async (req: AuthRequest, res: 
 
     const enriched = await Promise.all(
       followedLists.map(async (l) => {
+        const itemConds = [eq(listItems.listId, l.id)];
+        if (user.role !== 'SUPER_ADMIN') {
+          itemConds.push(eq(media.isHidden, false));
+        }
+
         const items = await db
           .select({
             id: listItems.id,
@@ -4181,7 +4986,7 @@ apiRouter.get('/lists/following/my', requireAuth, async (req: AuthRequest, res: 
           })
           .from(listItems)
           .innerJoin(media, eq(listItems.mediaId, media.id))
-          .where(eq(listItems.listId, l.id))
+          .where(and(...itemConds))
           .orderBy(listItems.orderIndex);
 
         return {
@@ -4390,6 +5195,11 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
     }
 
     // Fetch items with media and addedBy user details
+    const listConditions: any[] = [eq(listItems.listId, id)];
+    if (user?.role !== 'SUPER_ADMIN') {
+      listConditions.push(eq(media.isHidden, false));
+    }
+
     const rawItems = await db
       .select({
         id: listItems.id,
@@ -4411,7 +5221,7 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
       .from(listItems)
       .innerJoin(media, eq(listItems.mediaId, media.id))
       .leftJoin(users, eq(listItems.addedById, users.id))
-      .where(eq(listItems.listId, id))
+      .where(and(...listConditions))
       .orderBy(listItems.orderIndex, listItems.id);
 
     // Determine current user's role
@@ -6048,17 +6858,21 @@ apiRouter.put('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: Resp
     const id = parseInt(req.params.id, 10);
     const { title, description, category, tiersJson, itemsJson, visibility } = req.body;
 
-    const existing = await db
+    const [existing] = await db
       .select()
       .from(tierLists)
-      .where(and(eq(tierLists.id, id), eq(tierLists.ownerId, user.id)))
+      .where(eq(tierLists.id, id))
       .limit(1);
 
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Тир-лист не найден или нет прав' });
+    if (!existing) {
+      return res.status(404).json({ error: 'Тир-лист не найден' });
     }
 
-    const targetCategory = (category || existing[0].category || 'MOVIES_TV').toUpperCase();
+    if (existing.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'У вас нет прав на редактирование этого тир-листа' });
+    }
+
+    const targetCategory = (category || existing.category || 'MOVIES_TV').toUpperCase();
 
     // Backend-enforced category locking validation
     if (targetCategory && targetCategory !== 'ALL' && itemsJson) {
@@ -6086,15 +6900,15 @@ apiRouter.put('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: Resp
     const [updated] = await db
       .update(tierLists)
       .set({
-        title: title !== undefined ? title.trim() : existing[0].title,
-        description: description !== undefined ? (description ? description.trim() : null) : existing[0].description,
+        title: title !== undefined ? title.trim() : existing.title,
+        description: description !== undefined ? (description ? description.trim() : null) : existing.description,
         category: targetCategory,
-        tiersJson: tiersJson !== undefined ? (typeof tiersJson === 'string' ? tiersJson : JSON.stringify(tiersJson)) : existing[0].tiersJson,
-        itemsJson: itemsJson !== undefined ? (typeof itemsJson === 'string' ? itemsJson : JSON.stringify(itemsJson)) : existing[0].itemsJson,
-        visibility: visibility || existing[0].visibility,
+        tiersJson: tiersJson !== undefined ? (typeof tiersJson === 'string' ? tiersJson : JSON.stringify(tiersJson)) : existing.tiersJson,
+        itemsJson: itemsJson !== undefined ? (typeof itemsJson === 'string' ? itemsJson : JSON.stringify(itemsJson)) : existing.itemsJson,
+        visibility: visibility || existing.visibility,
         updatedAt: new Date(),
       })
-      .where(and(eq(tierLists.id, id), eq(tierLists.ownerId, user.id)))
+      .where(eq(tierLists.id, id))
       .returning();
 
     // Trigger tier list completion check
@@ -6122,7 +6936,7 @@ apiRouter.delete('/tier-lists/:id', requireAuth, async (req: AuthRequest, res: R
       return res.status(404).json({ error: 'Тир-лист не найден' });
     }
 
-    if (existing[0].ownerId !== user.id && user.role !== 'ADMIN') {
+    if (existing[0].ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
       return res.status(403).json({ error: 'Нет прав на удаление этого тир-листа' });
     }
 
@@ -6153,7 +6967,7 @@ apiRouter.post('/tier-lists/:id/add-media', requireAuth, async (req: AuthRequest
     }
 
     // 2. User has OWNER/ADMIN
-    if (tierList.ownerId !== user.id && user.role !== 'ADMIN') {
+    if (tierList.ownerId !== user.id && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
       return res.status(403).json({ error: 'У вас нет прав на редактирование этого тир-листа' });
     }
 
@@ -6307,6 +7121,49 @@ apiRouter.get('/tier-lists/:id', optionalAuth, async (req: AuthRequest, res: Res
   }
 });
 
+// Invite a user to check out / collaborate on a tier list
+apiRouter.post('/tier-lists/:id/invite', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const id = parseInt(req.params.id, 10);
+    const { recipientUserId, recipientUsername } = req.body;
+
+    let targetUserId = recipientUserId ? parseInt(recipientUserId, 10) : undefined;
+    if (!targetUserId && recipientUsername) {
+      const [foundUser] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.username, String(recipientUsername).trim()))
+        .limit(1);
+      if (foundUser) targetUserId = foundUser.id;
+    }
+
+    if (!targetUserId) {
+      return res.status(400).json({ error: 'Укажите пользователя для приглашения' });
+    }
+
+    if (targetUserId === user.id) {
+      return res.status(400).json({ error: 'Нельзя пригласить самого себя' });
+    }
+
+    const [tierList] = await db.select().from(tierLists).where(eq(tierLists.id, id)).limit(1);
+    if (!tierList) {
+      return res.status(404).json({ error: 'Тир-лист не найден' });
+    }
+
+    await notificationService.notifyTierListInvite(
+      { id: user.id, username: user.username, avatar: user.avatar },
+      targetUserId,
+      tierList.id,
+      tierList.title
+    );
+
+    res.json({ ok: true, message: `Приглашение в тир-лист «${tierList.title}» отправлено!` });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 9. ROULETTE (CONTENT RANDOMIZER)
 // ==========================================
@@ -6451,6 +7308,9 @@ async function getRouletteCandidateMedia(options: {
   } else {
     // From entire media catalog
     const conditions: any[] = [];
+    if (user?.role !== 'SUPER_ADMIN') {
+      conditions.push(eq(media.isHidden, false));
+    }
     if (category && category !== 'ALL') {
       if (category === 'MOVIES_TV') {
         conditions.push(inArray(media.type, ['MOVIE', 'TV']));
@@ -6768,6 +7628,7 @@ const handleGetReleases = async (req: AuthRequest, res: Response) => {
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 30,
       userId: user?.id,
+      isSuperAdmin: user?.role === 'SUPER_ADMIN',
     });
 
     res.json(result);
@@ -6878,6 +7739,7 @@ apiRouter.get('/calendar/export.ics', optionalAuth, async (req: AuthRequest, res
       dateTo: date_to,
       followedOnly: followed === 'true' || followed === '1',
       userId: user?.id,
+      isSuperAdmin: user?.role === 'SUPER_ADMIN',
       limit: 200,
     });
 
@@ -6926,31 +7788,58 @@ apiRouter.get('/notifications', requireAuth, async (req: AuthRequest, res: Respo
     const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 40, 1), 100);
     const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
 
-    const conditions = [eq(notifications.userId, user.id)];
+    const userCondition = or(
+      eq(notifications.recipientUserId, user.id),
+      eq(notifications.userId, user.id)
+    )!;
+
+    const conditions = [userCondition];
 
     if (filter === 'unread') {
       conditions.push(eq(notifications.isRead, false));
     } else if (filter === 'achievements') {
-      conditions.push(eq(notifications.type, 'ACHIEVEMENT_UNLOCKED'));
+      conditions.push(
+        or(
+          eq(notifications.type, 'ACHIEVEMENT'),
+          eq(notifications.type, 'ACHIEVEMENT_UNLOCKED')
+        )!
+      );
     } else if (filter === 'social') {
       conditions.push(
         or(
           eq(notifications.type, 'FRIEND_REQUEST'),
           eq(notifications.type, 'FRIEND_ACCEPTED'),
+          eq(notifications.type, 'REVIEW_LIKED'),
+          eq(notifications.type, 'LIKE'),
+          eq(notifications.type, 'REVIEW_COMMENTED'),
+          eq(notifications.type, 'COMMENT'),
+          eq(notifications.type, 'CONTENT_SHARED'),
+          eq(notifications.type, 'TIER_LIST_INVITE'),
           eq(notifications.type, 'NEW_MESSAGE'),
           eq(notifications.type, 'FRIEND_REVIEW'),
           eq(notifications.type, 'FRIEND_ACTIVITY'),
           eq(notifications.type, 'MENTION'),
-          eq(notifications.type, 'LIKE'),
-          eq(notifications.type, 'COMMENT')
+          eq(notifications.type, 'LIST_INVITE'),
+          eq(notifications.type, 'LIST_FOLLOW')
+        )!
+      );
+    } else if (filter === 'content') {
+      conditions.push(
+        or(
+          eq(notifications.type, 'CONTENT_COMPLETED'),
+          eq(notifications.type, 'CONTENT_SHARED'),
+          eq(notifications.type, 'NEW_RELEASE'),
+          eq(notifications.type, 'LIST_INVITE'),
+          eq(notifications.type, 'LIST_FOLLOW')
         )!
       );
     } else if (filter === 'system') {
       conditions.push(
         or(
-          eq(notifications.type, 'SYSTEM'),
+          eq(notifications.type, 'FEEDBACK_REPLIED'),
+          eq(notifications.type, 'ADMIN_ANNOUNCEMENT'),
           eq(notifications.type, 'ADMIN_ALERT'),
-          eq(notifications.type, 'NEW_RELEASE')
+          eq(notifications.type, 'SYSTEM')
         )!
       );
     }
@@ -6967,10 +7856,55 @@ apiRouter.get('/notifications', requireAuth, async (req: AuthRequest, res: Respo
     const [unreadCountResult] = await db
       .select({ count: sql<number>`count(*)` })
       .from(notifications)
-      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+      .where(and(userCondition, eq(notifications.isRead, false)));
+
+    const normalized = notifs.map((n) => {
+      let parsedMetadata: any = null;
+      if (n.metadata) {
+        try {
+          parsedMetadata = typeof n.metadata === 'string' ? JSON.parse(n.metadata) : n.metadata;
+        } catch {}
+      } else if (n.metadataJson) {
+        try {
+          parsedMetadata = JSON.parse(n.metadataJson);
+        } catch {}
+      }
+
+      const recipientId = n.recipientUserId || n.userId;
+      const msg = n.message || n.body;
+      const actorId = n.actorUserId !== undefined ? n.actorUserId : (n.senderId || null);
+      const entType = n.entityType || n.relatedEntity || null;
+      const entId = n.entityId || n.relatedEntityId || null;
+
+      return {
+        id: n.id,
+        recipientUserId: recipientId,
+        userId: recipientId,
+        type: n.type,
+        title: n.title,
+        message: msg,
+        body: msg,
+        actorUserId: actorId,
+        senderId: actorId,
+        entityType: entType,
+        relatedEntity: entType,
+        entityId: entId,
+        relatedEntityId: entId,
+        metadata: parsedMetadata,
+        metadataJson: n.metadataJson || (parsedMetadata ? JSON.stringify(parsedMetadata) : null),
+        dedupKey: n.dedupKey,
+        content: n.content || msg,
+        link: n.link,
+        senderAvatar: n.senderAvatar,
+        senderUsername: n.senderUsername,
+        isRead: n.isRead,
+        readAt: n.readAt,
+        createdAt: n.createdAt,
+      };
+    });
 
     res.json({
-      notifications: notifs,
+      notifications: normalized,
       unreadCount: Number(unreadCountResult?.count || 0),
     });
   } catch (err: any) {
@@ -6985,7 +7919,12 @@ apiRouter.get('/notifications/unread-count', requireAuth, async (req: AuthReques
     const [countResult] = await db
       .select({ count: sql<number>`count(*)` })
       .from(notifications)
-      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+      .where(
+        and(
+          or(eq(notifications.recipientUserId, user.id), eq(notifications.userId, user.id)),
+          eq(notifications.isRead, false)
+        )
+      );
 
     res.json({ unreadCount: Number(countResult?.count || 0) });
   } catch (err: any) {
@@ -7007,7 +7946,6 @@ apiRouter.get('/notifications/stream-token', requireAuth, async (req: AuthReques
     res.status(500).json({ error: err.message });
   }
 });
-
 
 // Real-Time SSE Stream for Notifications & Alerts
 apiRouter.get('/notifications/stream', requireAuth, async (req: AuthRequest, res: Response) => {
@@ -7082,13 +8020,23 @@ apiRouter.put('/notifications/:id/read', requireAuth, async (req: AuthRequest, r
     await db
       .update(notifications)
       .set({ isRead: true, readAt: new Date() })
-      .where(and(eq(notifications.id, id), eq(notifications.userId, user.id)));
+      .where(
+        and(
+          eq(notifications.id, id),
+          or(eq(notifications.recipientUserId, user.id), eq(notifications.userId, user.id))
+        )
+      );
 
     // Recompute and emit updated count via SSE
     const [countResult] = await db
       .select({ count: sql<number>`count(*)` })
       .from(notifications)
-      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+      .where(
+        and(
+          or(eq(notifications.recipientUserId, user.id), eq(notifications.userId, user.id)),
+          eq(notifications.isRead, false)
+        )
+      );
     const unreadCount = Number(countResult?.count || 0);
 
     notificationService.sendSSEEvent(user.id, 'unread_count', { unreadCount });
@@ -7106,7 +8054,12 @@ apiRouter.put('/notifications/read-all', requireAuth, async (req: AuthRequest, r
     await db
       .update(notifications)
       .set({ isRead: true, readAt: new Date() })
-      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+      .where(
+        and(
+          or(eq(notifications.recipientUserId, user.id), eq(notifications.userId, user.id)),
+          eq(notifications.isRead, false)
+        )
+      );
 
     notificationService.sendSSEEvent(user.id, 'unread_count', { unreadCount: 0 });
 
@@ -7123,12 +8076,22 @@ apiRouter.delete('/notifications/:id', requireAuth, async (req: AuthRequest, res
     const id = parseInt(req.params.id, 10);
     await db
       .delete(notifications)
-      .where(and(eq(notifications.id, id), eq(notifications.userId, user.id)));
+      .where(
+        and(
+          eq(notifications.id, id),
+          or(eq(notifications.recipientUserId, user.id), eq(notifications.userId, user.id))
+        )
+      );
 
     const [countResult] = await db
       .select({ count: sql<number>`count(*)` })
       .from(notifications)
-      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, false)));
+      .where(
+        and(
+          or(eq(notifications.recipientUserId, user.id), eq(notifications.userId, user.id)),
+          eq(notifications.isRead, false)
+        )
+      );
     const unreadCount = Number(countResult?.count || 0);
 
     notificationService.sendSSEEvent(user.id, 'unread_count', { unreadCount });
@@ -7145,7 +8108,12 @@ apiRouter.delete('/notifications/clear-read', requireAuth, async (req: AuthReque
     const user = req.dbUser!;
     await db
       .delete(notifications)
-      .where(and(eq(notifications.userId, user.id), eq(notifications.isRead, true)));
+      .where(
+        and(
+          or(eq(notifications.recipientUserId, user.id), eq(notifications.userId, user.id)),
+          eq(notifications.isRead, true)
+        )
+      );
 
     res.json({ ok: true });
   } catch (err: any) {

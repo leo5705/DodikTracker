@@ -173,9 +173,12 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
 
   const isOwner = dbUser && (dbUser.id === tierList?.ownerId || dbUser.role === 'ADMIN' || dbUser.role === 'SUPER_ADMIN');
 
+  // Ensure edit mode is strictly disabled for non-owners
+  const canEdit = Boolean(isOwner && isEditMode);
+
   // Save changes to backend
   const handleSaveChanges = async () => {
-    if (!tierList) return;
+    if (!tierList || !isOwner) return;
     setSaving(true);
     setSavedSuccess(false);
     setSaveError(null);
@@ -231,7 +234,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
     posterUrl?: string;
     year?: number;
   }) => {
-    if (items.some((i) => i.id === newMedia.id)) return;
+    if (!isOwner || items.some((i) => i.id === newMedia.id)) return;
 
     setItems((prev) => [
       ...prev,
@@ -248,6 +251,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
 
   // Move item to tier
   const handleMoveItem = (itemId: number, targetTierId: string) => {
+    if (!isOwner) return;
     setItems((prev) =>
       prev.map((it) => (it.id === itemId ? { ...it, tierId: targetTierId } : it))
     );
@@ -255,19 +259,20 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
 
   // Remove item from tier list
   const handleRemoveItem = (itemId: number) => {
+    if (!isOwner) return;
     setItems((prev) => prev.filter((it) => it.id !== itemId));
   };
 
   // Native HTML5 Drag and Drop handlers
   const handleDragStart = (e: React.DragEvent, itemId: number) => {
-    if (!isEditMode) return;
+    if (!canEdit) return;
     setDraggedItemId(itemId);
     e.dataTransfer.setData('text/plain', String(itemId));
     e.dataTransfer.effectAllowed = 'move';
   };
 
   const handleDragOver = (e: React.DragEvent, tierId: string) => {
-    if (!isEditMode) return;
+    if (!canEdit) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (dragOverZone !== tierId) {
@@ -276,14 +281,14 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
   };
 
   const handleDragLeave = (e: React.DragEvent, tierId: string) => {
-    if (!isEditMode) return;
+    if (!canEdit) return;
     if (dragOverZone === tierId) {
       setDragOverZone(null);
     }
   };
 
   const handleDrop = (e: React.DragEvent, targetTierId: string) => {
-    if (!isEditMode) return;
+    if (!canEdit) return;
     e.preventDefault();
     setDragOverZone(null);
     const idStr = e.dataTransfer.getData('text/plain');
@@ -301,12 +306,14 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
 
   // Tier operations
   const handleUpdateTierLabel = (tierId: string, newLabel: string) => {
+    if (!isOwner) return;
     setTiers((prev) =>
       prev.map((t) => (t.id === tierId ? { ...t, label: newLabel } : t))
     );
   };
 
   const handleUpdateTierColor = (tierId: string, newColor: string) => {
+    if (!isOwner) return;
     setTiers((prev) =>
       prev.map((t) => (t.id === tierId ? { ...t, color: newColor } : t))
     );
@@ -314,6 +321,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
   };
 
   const handleAddTier = () => {
+    if (!isOwner) return;
     const newId = `tier_${Date.now()}`;
     const nextColor =
       TIER_COLOR_PRESETS[tiers.length % TIER_COLOR_PRESETS.length].value;
@@ -328,6 +336,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
   };
 
   const handleDeleteTier = (tierId: string) => {
+    if (!isOwner) return;
     // Move all items in deleted tier to unranked
     setItems((prev) =>
       prev.map((it) => (it.tierId === tierId ? { ...it, tierId: 'unranked' } : it))
@@ -336,6 +345,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
   };
 
   const handleMoveTierOrder = (index: number, direction: 'up' | 'down') => {
+    if (!isOwner) return;
     const newTiers = [...tiers];
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= newTiers.length) return;
@@ -348,6 +358,7 @@ export const TierListDetailView: React.FC<TierListDetailViewProps> = ({ tierList
 
   // Delete tier list
   const handleDeleteTierList = async () => {
+    if (!isOwner) return;
     setDeleting(true);
     try {
       const res = await authFetch(`/api/tier-lists/${tierListId}`, { method: 'DELETE' });

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
+import { useShare } from '../../context/ShareContext.tsx';
 import { UnifiedContentItem, ContentType, ContentReview } from '../../types/content.ts';
 import { normalizeMediaToUnified } from '../../utils/contentAdapter.ts';
 import { formatMediaTypePath } from '../common/MediaCard.tsx';
@@ -48,6 +49,7 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
 }) => {
   const { authFetch, dbUser, login } = useAuth();
   const { navigate, goBack } = useRouter();
+  const { openCompletionModal, openShareModal } = useShare();
 
   const [rawMedia, setRawMedia] = useState<any>(null);
   const [contentItem, setContentItem] = useState<UnifiedContentItem | null>(null);
@@ -113,14 +115,21 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
           data.map((r: any) => ({
             id: r.id,
             userId: r.userId,
-            user: r.user,
+            user: {
+              id: r.userId,
+              username: r.user?.username || r.authorUsername || r.username || 'Пользователь',
+              displayName: r.user?.displayName || r.authorUsername || r.username || 'Пользователь',
+              avatarUrl: r.user?.avatarUrl || r.authorAvatar || r.avatar || undefined,
+            },
             score: r.score || r.rating,
             rating: r.rating || r.score,
             title: r.title,
             content: r.content,
             containsSpoilers: Boolean(r.containsSpoilers),
             likesCount: r.likesCount || 0,
-            isLiked: Boolean(r.isLiked),
+            isLiked: Boolean(r.isLiked || r.userLiked),
+            userReaction: r.userReaction || (r.isLiked || r.userLiked ? 'LIKE' : null),
+            reactions: r.reactions || {},
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
           }))
@@ -178,6 +187,16 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
             },
           };
         });
+
+        if (effectiveStatus === 'COMPLETED') {
+          openCompletionModal({
+            mediaId: Number(contentItem?.id || mediaId),
+            title: contentItem?.title || contentItem?.originalTitle || 'Контент',
+            type: contentItem?.type,
+            posterUrl: contentItem?.posterUrl,
+            rating: currentTracking.rating || currentTracking.score || null,
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to update status:', err);
@@ -305,29 +324,37 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
     }
   };
 
-  // Handle Like Review
-  const handleLikeReview = async (reviewId: number) => {
+  // Handle React to Review (like or custom reaction)
+  const handleReactReview = async (reviewId: number, type: string = 'LIKE') => {
     if (!dbUser) {
       await login();
       return;
     }
     const targetId = contentItem?.id || mediaId;
     try {
-      const res = await authFetch(`/api/media/${targetId}/reviews/${reviewId}/like`, {
+      const res = await authFetch(`/api/media/${targetId}/reviews/${reviewId}/react`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
       });
       if (res.ok) {
         const data = await res.json();
         setReviewsList((prev) =>
           prev.map((r) =>
             r.id === reviewId
-              ? { ...r, likesCount: data.likesCount, isLiked: data.isLiked }
+              ? {
+                  ...r,
+                  likesCount: data.likesCount ?? r.likesCount,
+                  isLiked: Boolean(data.isLiked),
+                  userReaction: data.userReaction ?? null,
+                  reactions: data.reactions ?? r.reactions,
+                }
               : r
           )
         );
       }
     } catch (err) {
-      console.error('Failed to like review:', err);
+      console.error('Failed to react to review:', err);
     }
   };
 
@@ -423,6 +450,18 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
           setShowReviewModal(true);
         }}
         onOpenListModal={() => setShowAddToList(true)}
+        onOpenShareModal={() =>
+          openShareModal(
+            {
+              id: Number(contentItem.id || mediaId),
+              title: contentItem.title || contentItem.originalTitle || 'Контент',
+              type: contentItem.type,
+              posterUrl: contentItem.posterUrl,
+              rating: contentItem.userTracking?.rating || contentItem.userTracking?.score || null,
+            },
+            contentItem.userTracking?.status === 'COMPLETED'
+          )
+        }
       />
 
       {/* 2. Structured Sections Grid */}
@@ -493,7 +532,8 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
             setShowReviewModal(true);
           }}
           onDeleteReview={async (id) => setReviewToDelete(id)}
-          onLikeReview={handleLikeReview}
+          onLikeReview={(id) => handleReactReview(id, 'LIKE')}
+          onReactReview={handleReactReview}
         />
 
         {/* Similar Recommendations */}

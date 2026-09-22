@@ -30,6 +30,7 @@ interface ContentHeroProps {
   onOpenRatingModal?: () => void;
   onOpenReviewModal?: () => void;
   onOpenListModal?: () => void;
+  onOpenShareModal?: () => void;
 }
 
 export const ContentHero: React.FC<ContentHeroProps> = ({
@@ -40,6 +41,7 @@ export const ContentHero: React.FC<ContentHeroProps> = ({
   onOpenRatingModal,
   onOpenReviewModal,
   onOpenListModal,
+  onOpenShareModal,
 }) => {
   const { navigate } = useRouter();
   const { dbUser } = useAuth();
@@ -62,6 +64,10 @@ export const ContentHero: React.FC<ContentHeroProps> = ({
   };
 
   const handleShare = async () => {
+    if (onOpenShareModal) {
+      onOpenShareModal();
+      return;
+    }
     const url = window.location.href;
     if (navigator.share) {
       try {

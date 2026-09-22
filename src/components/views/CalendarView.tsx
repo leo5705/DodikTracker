@@ -372,7 +372,7 @@ export const CalendarView: React.FC = () => {
       {/* Toast Feedback */}
       {feedback && (
         <div
-          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl border text-xs font-semibold shadow-2xl backdrop-blur-md animate-in slide-in-from-bottom-3 duration-200 ${
+          className={`fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px)+1rem)] md:bottom-6 right-4 sm:right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl border text-xs font-semibold shadow-2xl backdrop-blur-md animate-in slide-in-from-bottom-3 duration-200 pointer-events-auto ${
             feedback.type === 'success'
               ? 'bg-emerald-950/90 text-emerald-200 border-emerald-700/50'
               : 'bg-rose-950/90 text-rose-200 border-rose-700/50'

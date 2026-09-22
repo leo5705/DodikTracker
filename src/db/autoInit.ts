@@ -1,8 +1,21 @@
 import { Pool } from 'pg';
 
 export async function runAutoMigrations(pool: Pool) {
+  let adminPool: Pool | null = null;
   try {
-    const client = await pool.connect();
+    if (process.env.SQL_ADMIN_USER && process.env.SQL_ADMIN_PASSWORD) {
+      adminPool = new Pool({
+        host: process.env.SQL_HOST || 'localhost',
+        port: parseInt(process.env.SQL_PORT || '5432', 10),
+        user: process.env.SQL_ADMIN_USER,
+        password: String(process.env.SQL_ADMIN_PASSWORD),
+        database: process.env.SQL_DB_NAME,
+        max: 1,
+      });
+    }
+
+    const targetPool = adminPool || pool;
+    const client = await targetPool.connect();
     try {
       await client.query(`
         -- 1. Users Table
@@ -220,23 +233,31 @@ export async function runAutoMigrations(pool: Pool) {
         CREATE TABLE IF NOT EXISTS "notifications" (
           "id" serial PRIMARY KEY,
           "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "recipient_user_id" integer REFERENCES "users"("id") ON DELETE CASCADE,
           "type" text NOT NULL,
           "title" text NOT NULL,
           "body" text NOT NULL,
+          "message" text,
           "content" text,
           "link" text,
           "related_entity" text,
+          "entity_type" text,
           "related_entity_id" text,
+          "entity_id" text,
           "sender_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
+          "actor_user_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
           "sender_avatar" text,
           "sender_username" text,
           "metadata_json" text,
+          "metadata" text,
+          "dedup_key" text,
           "is_read" boolean NOT NULL DEFAULT false,
           "read_at" timestamp,
           "created_at" timestamp DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS "notifications_user_id_idx" ON "notifications"("user_id");
         CREATE INDEX IF NOT EXISTS "notifications_is_read_idx" ON "notifications"("is_read");
+        CREATE INDEX IF NOT EXISTS "notifications_type_idx" ON "notifications"("type");
 
         -- Direct Messages Table
         CREATE TABLE IF NOT EXISTS "direct_messages" (
@@ -307,6 +328,18 @@ export async function runAutoMigrations(pool: Pool) {
           "created_at" timestamp DEFAULT now(),
           "updated_at" timestamp DEFAULT now()
         );
+
+        -- 23b. Review Reactions Table
+        CREATE TABLE IF NOT EXISTS "review_reactions" (
+          "id" serial PRIMARY KEY,
+          "review_id" integer NOT NULL REFERENCES "reviews"("id") ON DELETE CASCADE,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "type" text NOT NULL DEFAULT 'LIKE',
+          "created_at" timestamp DEFAULT now()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "review_reactions_review_user_type_unq" ON "review_reactions"("review_id", "user_id", "type");
+        CREATE INDEX IF NOT EXISTS "review_reactions_review_id_idx" ON "review_reactions"("review_id");
+        CREATE INDEX IF NOT EXISTS "review_reactions_user_id_idx" ON "review_reactions"("user_id");
 
         -- 24. Invite Codes Table
         CREATE TABLE IF NOT EXISTS "invite_codes" (
@@ -453,6 +486,19 @@ export async function runAutoMigrations(pool: Pool) {
         CREATE INDEX IF NOT EXISTS "reports_target_user_id_idx" ON "reports"("target_user_id");
         CREATE INDEX IF NOT EXISTS "reports_created_at_idx" ON "reports"("created_at");
 
+        -- 33.1 Report / Feedback Replies Table
+        CREATE TABLE IF NOT EXISTS "report_replies" (
+          "id" serial PRIMARY KEY,
+          "report_id" integer NOT NULL REFERENCES "reports"("id") ON DELETE CASCADE,
+          "author_user_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
+          "message" text NOT NULL,
+          "is_admin_response" boolean NOT NULL DEFAULT false,
+          "created_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "report_replies_report_id_idx" ON "report_replies"("report_id");
+        CREATE INDEX IF NOT EXISTS "report_replies_author_idx" ON "report_replies"("author_user_id");
+        CREATE INDEX IF NOT EXISTS "report_replies_created_at_idx" ON "report_replies"("created_at");
+
         -- 34. News (CMS) Table
         CREATE TABLE IF NOT EXISTS "news" (
           "id" serial PRIMARY KEY,
@@ -528,6 +574,29 @@ export async function runAutoMigrations(pool: Pool) {
         ALTER TABLE "tier_lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "reviews" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "invite_codes" ADD COLUMN IF NOT EXISTS "is_active" boolean NOT NULL DEFAULT true;
+        ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "recipient_user_id" integer REFERENCES "users"("id") ON DELETE CASCADE;
+        ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "message" text;
+        ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "actor_user_id" integer REFERENCES "users"("id") ON DELETE SET NULL;
+        ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "entity_type" text;
+        ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "entity_id" text;
+        ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "metadata" text;
+        ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "dedup_key" text;
+      `);
+
+      // 36b. Execute indexes & updates after columns are guaranteed in catalog
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS "notifications_recipient_user_id_idx" ON "notifications"("recipient_user_id");
+        CREATE INDEX IF NOT EXISTS "notifications_actor_user_id_idx" ON "notifications"("actor_user_id");
+        CREATE INDEX IF NOT EXISTS "notifications_dedup_key_idx" ON "notifications"("dedup_key");
+        CREATE INDEX IF NOT EXISTS "notifications_type_idx" ON "notifications"("type");
+        UPDATE "notifications" SET
+          "recipient_user_id" = COALESCE("recipient_user_id", "user_id"),
+          "message" = COALESCE("message", "body"),
+          "actor_user_id" = COALESCE("actor_user_id", "sender_id"),
+          "entity_type" = COALESCE("entity_type", "related_entity"),
+          "entity_id" = COALESCE("entity_id", "related_entity_id"),
+          "metadata" = COALESCE("metadata", "metadata_json")
+        WHERE "recipient_user_id" IS NULL OR "message" IS NULL;
 
         -- 37. Deduplicate existing records before applying unique constraints
         UPDATE "tier_lists" SET visibility = 'FRIENDS' WHERE visibility = 'FRIENDS_ONLY';
@@ -546,6 +615,30 @@ export async function runAutoMigrations(pool: Pool) {
         CREATE UNIQUE INDEX IF NOT EXISTS "friend_requests_sender_receiver_unq" ON "friend_requests"("sender_id", "receiver_id");
         CREATE UNIQUE INDEX IF NOT EXISTS "user_media_user_media_unq" ON "user_media"("user_id", "media_id");
         CREATE UNIQUE INDEX IF NOT EXISTS "likes_user_target_unq" ON "likes"("user_id", "target_type", "target_id");
+
+        -- 38. Safe Telegram Identity unique index
+        -- First, clean any duplicates by keeping the most recently updated account and setting duplicates to NULL
+        WITH ranked_tg_dupes AS (
+          SELECT id, telegram_id,
+                 ROW_NUMBER() OVER(PARTITION BY telegram_id ORDER BY updated_at DESC NULLS LAST, id DESC) as rn
+          FROM users
+          WHERE telegram_id IS NOT NULL AND telegram_id != ''
+        )
+        UPDATE users
+        SET telegram_id = NULL
+        WHERE id IN (
+          SELECT id FROM ranked_tg_dupes WHERE rn > 1
+        );
+
+        -- Backfill telegram_id from numeric telegram_chat_id for legacy records if telegram_id is null and no conflict exists
+        UPDATE users
+        SET telegram_id = telegram_chat_id
+        WHERE telegram_id IS NULL 
+          AND telegram_chat_id IS NOT NULL 
+          AND telegram_chat_id ~ '^[0-9]+$'
+          AND telegram_chat_id NOT IN (SELECT telegram_id FROM users WHERE telegram_id IS NOT NULL);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS "users_telegram_id_unique" ON "users"("telegram_id") WHERE "telegram_id" IS NOT NULL;
       `);
       console.log('[AutoInit] Database tables and indexes verified successfully.');
     } finally {
@@ -553,5 +646,9 @@ export async function runAutoMigrations(pool: Pool) {
     }
   } catch (err) {
     console.error('[AutoInit] Failed to ensure database tables:', err);
+  } finally {
+    if (adminPool) {
+      await adminPool.end().catch(() => {});
+    }
   }
 }

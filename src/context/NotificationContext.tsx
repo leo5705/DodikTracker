@@ -18,6 +18,7 @@ interface NotificationContextType {
   clearReadNotifications: () => Promise<void>;
   dismissToast: (id: string) => void;
   triggerTestToast: () => void;
+  showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 const NotificationContext = createContext<NotificationContextType | null>(null);
@@ -194,15 +195,21 @@ export const NotificationProvider: React.FC<{
 
   // Test toast helper
   const triggerTestToast = useCallback(() => {
+    const uid = dbUser?.id || 0;
     pushToast({
       id: Date.now(),
-      userId: dbUser?.id || 0,
+      recipientUserId: uid,
+      userId: uid,
       type: 'ACHIEVEMENT_UNLOCKED',
       title: 'Первооткрыватель системы!',
+      message: 'Тестовое push-уведомление успешно доставлено в режиме реального времени.',
       body: 'Тестовое push-уведомление успешно доставлено в режиме реального времени.',
       isRead: false,
       createdAt: new Date().toISOString(),
       link: '/achievements',
+      entityType: 'ACHIEVEMENT',
+      metadata: null,
+      actorUserId: null,
     });
   }, [dbUser, pushToast]);
 
@@ -339,6 +346,28 @@ export const NotificationProvider: React.FC<{
     }
   };
 
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+      const typeMap: Record<string, string> = {
+        success: 'SYSTEM',
+        error: 'ADMIN_ALERT',
+        info: 'SYSTEM',
+      };
+      pushToast({
+        id: Math.floor(Math.random() * 1000000),
+        recipientUserId: dbUser?.id || 0,
+        userId: dbUser?.id || 0,
+        type: type === 'success' ? 'ACHIEVEMENT_UNLOCKED' : typeMap[type] || 'SYSTEM',
+        title: type === 'success' ? 'Успешно' : type === 'error' ? 'Внимание' : 'Информация',
+        message: message,
+        body: message,
+        isRead: false,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [dbUser?.id, pushToast]
+  );
+
   return (
     <NotificationContext.Provider
       value={{
@@ -355,6 +384,7 @@ export const NotificationProvider: React.FC<{
         clearReadNotifications,
         dismissToast,
         triggerTestToast,
+        showToast,
       }}
     >
       {children}
@@ -373,4 +403,16 @@ export const useNotifications = () => {
     throw new Error('useNotifications must be used within a NotificationProvider');
   }
   return ctx;
+};
+
+export const useToast = () => {
+  const ctx = useContext(NotificationContext);
+  if (!ctx) {
+    return {
+      showToast: (msg: string) => console.log(msg),
+    };
+  }
+  return {
+    showToast: ctx.showToast,
+  };
 };

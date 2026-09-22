@@ -452,7 +452,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       {/* Mobile Bottom Navigation */}
       <nav
         id="mobile-bottom-nav"
-        className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-[#0F0E12]/95 backdrop-blur-xl border-t border-[#252233] flex items-center justify-around px-2 z-40"
+        className="md:hidden fixed bottom-0 left-0 right-0 h-[calc(4rem+env(safe-area-inset-bottom,0px))] pb-safe bg-[#0F0E12]/95 backdrop-blur-xl border-t border-[#252233] flex items-center justify-around px-1 z-40"
       >
         {[
           { id: 'home', label: 'Главная', icon: Compass },
@@ -468,12 +468,12 @@ export const Navigation: React.FC<NavigationProps> = ({
             <button
               key={item.id}
               onClick={() => handleTabClick(item.id as ActiveTab)}
-              className={`flex flex-col items-center justify-center w-14 py-1 text-[10px] font-medium transition-colors ${
+              className={`flex flex-col items-center justify-center flex-1 max-w-[4.5rem] py-1 text-[10px] font-medium transition-colors touch-manipulation select-none ${
                 isActive ? 'text-[#AC82FF] font-semibold' : 'text-[#9A94AA] hover:text-[#F3F1F8]'
               }`}
             >
               <Icon className={`w-5 h-5 mb-0.5 ${isActive ? 'text-[#9B6BFF]' : 'text-[#9A94AA]'}`} />
-              <span>{item.label}</span>
+              <span className="truncate max-w-full">{item.label}</span>
             </button>
           );
         })}

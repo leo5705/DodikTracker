@@ -33,7 +33,7 @@ interface NotificationCenterViewProps {
   onNavigate?: (path: string) => void;
 }
 
-type FilterCategory = 'ALL' | 'UNREAD' | 'ACHIEVEMENTS' | 'SOCIAL' | 'RELEASES' | 'SYSTEM';
+type FilterCategory = 'ALL' | 'UNREAD' | 'ACHIEVEMENTS' | 'SOCIAL' | 'CONTENT' | 'SYSTEM';
 
 function formatRelativeTime(dateInput: string | Date): string {
   if (!dateInput) return '';
@@ -100,7 +100,9 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
     const list = notifications.filter((notif) => {
       if (!notif) return false;
       if (activeFilter === 'UNREAD') return !notif.isRead;
-      if (activeFilter === 'ACHIEVEMENTS') return notif.type === 'ACHIEVEMENT_UNLOCKED';
+      if (activeFilter === 'ACHIEVEMENTS') {
+        return notif.type === 'ACHIEVEMENT_UNLOCKED' || notif.type === 'ACHIEVEMENT';
+      }
       if (activeFilter === 'SOCIAL') {
         return [
           'FRIEND_REQUEST',
@@ -108,16 +110,29 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
           'LIST_INVITE',
           'LIST_INVITE_ACCEPTED',
           'LIST_INVITE_DECLINED',
+          'LIST_FOLLOW',
+          'TIER_LIST_INVITE',
           'NEW_MESSAGE',
           'FRIEND_REVIEW',
           'FRIEND_ACTIVITY',
           'MENTION',
           'LIKE',
+          'REVIEW_LIKED',
           'COMMENT',
+          'REVIEW_COMMENTED',
         ].includes(notif.type);
       }
-      if (activeFilter === 'RELEASES') return notif.type === 'NEW_RELEASE';
-      if (activeFilter === 'SYSTEM') return notif.type === 'SYSTEM' || notif.type === 'ADMIN_ALERT';
+      if (activeFilter === 'CONTENT') {
+        return ['NEW_RELEASE', 'CONTENT_COMPLETED', 'CONTENT_SHARED'].includes(notif.type);
+      }
+      if (activeFilter === 'SYSTEM') {
+        return [
+          'SYSTEM',
+          'ADMIN_ALERT',
+          'ADMIN_ANNOUNCEMENT',
+          'FEEDBACK_REPLIED',
+        ].includes(notif.type);
+      }
       return true;
     });
 
@@ -135,15 +150,24 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
       await markAsRead(notif.id);
     }
 
+    const entType = (notif.entityType || notif.relatedEntity || '').toUpperCase();
+    const entId = notif.entityId || notif.relatedEntityId;
+
     if (notif.link && onNavigate) {
       onNavigate(notif.link);
-    } else if (notif.relatedEntity === 'USER' && notif.relatedEntityId && onNavigate) {
-      onNavigate(`/u/${notif.relatedEntityId}`);
-    } else if (notif.relatedEntity === 'MEDIA' && notif.relatedEntityId && onNavigate) {
-      onNavigate(`/media/${notif.relatedEntityId}`);
-    } else if (notif.relatedEntity === 'LIST' && notif.relatedEntityId && onNavigate) {
-      onNavigate(`/lists/${notif.relatedEntityId}`);
-    } else if (notif.relatedEntity === 'ACHIEVEMENT' && onNavigate) {
+    } else if (entType === 'REPORT' || entType === 'FEEDBACK') {
+      if (onNavigate) onNavigate('/feedback');
+    } else if (entType === 'TIER_LIST' && entId && onNavigate) {
+      onNavigate(`/tier-lists/${entId}`);
+    } else if (entType === 'REVIEW' && entId && onNavigate) {
+      onNavigate(`/review/${entId}`);
+    } else if (entType === 'MEDIA' && entId && onNavigate) {
+      onNavigate(`/media/${entId}`);
+    } else if (entType === 'USER' && entId && onNavigate) {
+      onNavigate(`/u/${entId}`);
+    } else if (entType === 'LIST' && entId && onNavigate) {
+      onNavigate(`/lists/${entId}`);
+    } else if (entType === 'ACHIEVEMENT' && onNavigate) {
       onNavigate('/achievements');
     }
   };
@@ -244,7 +268,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
     {
       id: 'ACHIEVEMENTS',
       label: 'Достижения',
-      count: notifications.filter((n) => n.type === 'ACHIEVEMENT_UNLOCKED').length,
+      count: notifications.filter((n) => n.type === 'ACHIEVEMENT_UNLOCKED' || n.type === 'ACHIEVEMENT').length,
     },
     {
       id: 'SOCIAL',
@@ -256,22 +280,32 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
           'LIST_INVITE',
           'LIST_INVITE_ACCEPTED',
           'LIST_INVITE_DECLINED',
+          'LIST_FOLLOW',
+          'TIER_LIST_INVITE',
           'NEW_MESSAGE',
           'FRIEND_REVIEW',
           'FRIEND_ACTIVITY',
           'MENTION',
+          'LIKE',
+          'REVIEW_LIKED',
+          'COMMENT',
+          'REVIEW_COMMENTED',
         ].includes(n.type)
       ).length,
     },
     {
-      id: 'RELEASES',
-      label: 'Релизы',
-      count: notifications.filter((n) => n.type === 'NEW_RELEASE').length,
+      id: 'CONTENT',
+      label: 'Контент',
+      count: notifications.filter((n) =>
+        ['NEW_RELEASE', 'CONTENT_COMPLETED', 'CONTENT_SHARED'].includes(n.type)
+      ).length,
     },
     {
       id: 'SYSTEM',
       label: 'Системные',
-      count: notifications.filter((n) => n.type === 'SYSTEM' || n.type === 'ADMIN_ALERT').length,
+      count: notifications.filter((n) =>
+        ['SYSTEM', 'ADMIN_ALERT', 'ADMIN_ANNOUNCEMENT', 'FEEDBACK_REPLIED'].includes(n.type)
+      ).length,
     },
   ];
 
@@ -477,7 +511,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                     </h4>
 
                     <p className={`text-xs leading-relaxed ${notif.isRead ? 'text-[#9A94AA]' : 'text-[#C5C0D6]'}`}>
-                      {notif.body || notif.content}
+                      {notif.message || notif.body || notif.content}
                     </p>
 
                     {/* Inline Quick Action Buttons */}
@@ -532,6 +566,36 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             Отклонить
                           </button>
                         </div>
+                      )}
+
+                      {/* Tier List Invite Action */}
+                      {notif.type === 'TIER_LIST_INVITE' && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleNotificationClick(notif);
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold transition-colors"
+                        >
+                          <span>Открыть тир-лист</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      )}
+
+                      {/* Support Feedback Reply Action */}
+                      {notif.type === 'FEEDBACK_REPLIED' && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleNotificationClick(notif);
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-xs font-semibold transition-colors"
+                        >
+                          <span>Посмотреть ответ поддержки</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
                       )}
 
                       {/* Direct Message Quick Reply button */}

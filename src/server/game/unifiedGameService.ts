@@ -233,6 +233,30 @@ export class UnifiedGameService {
     };
   }
 
+  public async invalidateGameCache(idOrSlug?: string | number, externalIds?: string[]) {
+    if (idOrSlug !== undefined && idOrSlug !== null) {
+      const slugStr = String(idOrSlug);
+      this.memoryCache.delete(`game:details:${slugStr}`);
+      try {
+        await db.delete(gameEntityCache).where(eq(gameEntityCache.cacheKey, `game:details:${slugStr}`));
+      } catch {}
+    }
+    if (externalIds && externalIds.length > 0) {
+      for (const ext of externalIds) {
+        this.memoryCache.delete(`game:details:${ext}`);
+        try {
+          await db.delete(gameEntityCache).where(eq(gameEntityCache.cacheKey, `game:details:${ext}`));
+        } catch {}
+      }
+    }
+    // Clear search and catalog memory caches to reflect visibility changes
+    for (const key of Array.from(this.memoryCache.keys())) {
+      if (key.startsWith('game:search:') || key.startsWith('game:catalog:')) {
+        this.memoryCache.delete(key);
+      }
+    }
+  }
+
   /**
    * Convert IGDB MediaDetailExtended object to RawGameData for merging
    */
@@ -556,6 +580,7 @@ export class UnifiedGameService {
         .where(
           and(
             eq(media.type, 'GAME'),
+            eq(media.isHidden, false),
             query.trim()
               ? or(
                   ilike(media.title, `%${query.trim()}%`),
@@ -736,7 +761,7 @@ export class UnifiedGameService {
     const localGames = await db
       .select()
       .from(media)
-      .where(eq(media.type, 'GAME'))
+      .where(and(eq(media.type, 'GAME'), eq(media.isHidden, false)))
       .orderBy(desc(media.rating), desc(media.id))
       .limit(limit)
       .offset(offset)

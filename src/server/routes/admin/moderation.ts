@@ -1,8 +1,9 @@
 import { Router, Response } from 'express';
-import { requireAuth, requireStaff, optionalAuth, AuthRequest } from '../../../middleware/auth.ts';
+import { requireAuth, requireStaff, optionalAuth, AuthRequest, hasStaffPermission } from '../../../middleware/auth.ts';
 import { db } from '../../../db/index.ts';
 import {
   reports,
+  reportReplies,
   users,
   reviews,
   comments,
@@ -11,13 +12,13 @@ import {
   media,
   directMessages,
 } from '../../../db/schema.ts';
-import { eq, and, sql, desc, count } from 'drizzle-orm';
+import { eq, and, sql, desc, asc, count } from 'drizzle-orm';
 import { logAdminAction } from './auditHelper.ts';
 import { notificationService } from '../../services/notificationService.ts';
 
 export const moderationRouter = Router();
 
-// Public / User-facing Reports Router
+// Public / User-facing Reports & Feedback Router
 export const publicReportsRouter = Router();
 
 const handleReportCreation = async (req: AuthRequest, res: Response) => {
@@ -111,6 +112,7 @@ publicReportsRouter.post('/feedback', optionalAuth, async (req: AuthRequest, res
     res.json({
       success: true,
       reportId: newReport.id,
+      report: newReport,
       message: 'Спасибо за ваше обращение! Оно успешно сохранено и передано администрации.',
     });
   } catch (err: any) {
@@ -118,6 +120,201 @@ publicReportsRouter.post('/feedback', optionalAuth, async (req: AuthRequest, res
     res.status(500).json({ error: err.message });
   }
 });
+
+// User: List my feedback submissions
+publicReportsRouter.get(['/feedback/my', '/feedback'], requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const myReports = await db
+      .select({
+        id: reports.id,
+        targetType: reports.targetType,
+        targetId: reports.targetId,
+        reason: reports.reason,
+        description: reports.description,
+        status: reports.status,
+        moderatorComment: reports.moderatorComment,
+        actionTaken: reports.actionTaken,
+        resolvedAt: reports.resolvedAt,
+        createdAt: reports.createdAt,
+        updatedAt: reports.updatedAt,
+        replyCount: sql<number>`CAST(COUNT(DISTINCT ${reportReplies.id}) AS integer)`,
+        lastReplyAt: sql<string>`MAX(${reportReplies.createdAt})`,
+      })
+      .from(reports)
+      .leftJoin(reportReplies, eq(reports.id, reportReplies.reportId))
+      .where(and(eq(reports.reporterId, user.id), eq(reports.targetType, 'SYSTEM')))
+      .groupBy(reports.id)
+      .orderBy(desc(reports.createdAt));
+
+    res.json({ items: myReports });
+  } catch (err: any) {
+    console.error('[Feedback] Get my feedback error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// User / Staff: Get single feedback/report detail with full reply thread
+publicReportsRouter.get(['/feedback/:id', '/reports/:id/thread'], requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Неверный идентификатор обращения' });
+    }
+
+    const [report] = await db.select().from(reports).where(eq(reports.id, id)).limit(1);
+    if (!report) {
+      return res.status(404).json({ error: 'Обращение не найдено' });
+    }
+
+    const user = req.dbUser!;
+    const isStaff = hasStaffPermission(user.role, 'MANAGE_MODERATION');
+
+    // Security: Regular users can ONLY access their own feedback/reports
+    if (!isStaff && report.reporterId !== user.id) {
+      return res.status(403).json({ error: 'У вас нет доступа к этому обращению' });
+    }
+
+    // Reporter Info
+    let reporter = null;
+    if (report.reporterId) {
+      const [r] = await db
+        .select({ id: users.id, username: users.username, avatar: users.avatar, role: users.role })
+        .from(users)
+        .where(eq(users.id, report.reporterId))
+        .limit(1);
+      reporter = r;
+    }
+
+    // Thread Replies
+    const repliesList = await db
+      .select({
+        id: reportReplies.id,
+        reportId: reportReplies.reportId,
+        authorUserId: reportReplies.authorUserId,
+        message: reportReplies.message,
+        isAdminResponse: reportReplies.isAdminResponse,
+        createdAt: reportReplies.createdAt,
+        authorUsername: users.username,
+        authorAvatar: users.avatar,
+        authorRole: users.role,
+      })
+      .from(reportReplies)
+      .leftJoin(users, eq(reportReplies.authorUserId, users.id))
+      .where(eq(reportReplies.reportId, id))
+      .orderBy(asc(reportReplies.createdAt));
+
+    res.json({
+      report,
+      reporter,
+      replies: repliesList,
+    });
+  } catch (err: any) {
+    console.error('[Feedback] Thread detail error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// User / Admin: Post a reply to feedback / report
+const handlePostReply = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Неверный идентификатор' });
+    }
+
+    const message = (req.body.message || '').trim();
+    if (!message) {
+      return res.status(400).json({ error: 'Сообщение не может быть пустым' });
+    }
+
+    const [report] = await db.select().from(reports).where(eq(reports.id, id)).limit(1);
+    if (!report) {
+      return res.status(404).json({ error: 'Обращение не найдено' });
+    }
+
+    const actor = req.dbUser!;
+    const isStaff = hasStaffPermission(actor.role, 'MANAGE_MODERATION');
+    const isReporter = report.reporterId === actor.id;
+
+    if (!isStaff && !isReporter) {
+      return res.status(403).json({ error: 'У вас нет доступа к этому обращению' });
+    }
+
+    // Security: Only verified staff can post with isAdminResponse = true
+    const isAdminResponse = isStaff;
+
+    const [newReply] = await db
+      .insert(reportReplies)
+      .values({
+        reportId: id,
+        authorUserId: actor.id,
+        message,
+        isAdminResponse,
+      })
+      .returning();
+
+    // If Admin replied:
+    if (isAdminResponse) {
+      const nextStatus = req.body.status || (report.status === 'PENDING' ? 'IN_REVIEW' : report.status);
+      await db
+        .update(reports)
+        .set({
+          moderatorId: actor.id,
+          moderatorComment: message,
+          status: nextStatus,
+          resolvedAt: nextStatus === 'RESOLVED' || nextStatus === 'DISMISSED' ? new Date() : report.resolvedAt,
+          updatedAt: new Date(),
+        })
+        .where(eq(reports.id, id));
+
+      await logAdminAction({
+        userId: actor.id,
+        action: 'REPLY_FEEDBACK',
+        details: `Администратор ответил на обращение/жалобу #${id}: «${message.slice(0, 80)}»`,
+        ip: req.ip,
+      });
+
+      // Send notification to the feedback author
+      if (report.reporterId) {
+        notificationService
+          .notifyFeedbackReplied(
+            { id: actor.id, username: actor.username, avatar: actor.avatar },
+            report.reporterId,
+            id,
+            message
+          )
+          .catch((err) => console.error('[Notification] Feedback reply notify error:', err));
+      }
+    } else {
+      // User replied to their own ticket: reopen/update status to IN_REVIEW if it was previously closed
+      const nextStatus = report.status === 'RESOLVED' || report.status === 'DISMISSED' ? 'IN_REVIEW' : report.status;
+      await db
+        .update(reports)
+        .set({
+          status: nextStatus,
+          updatedAt: new Date(),
+        })
+        .where(eq(reports.id, id));
+    }
+
+    res.json({
+      success: true,
+      reply: {
+        ...newReply,
+        authorUsername: actor.username,
+        authorAvatar: actor.avatar,
+        authorRole: actor.role,
+      },
+    });
+  } catch (err: any) {
+    console.error('[Feedback] Reply error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+publicReportsRouter.post(['/feedback/:id/reply', '/reports/:id/reply'], requireAuth, handlePostReply);
+moderationRouter.post(['/reports/:id/reply', '/feedback/:id/reply'], requireAuth, requireStaff('MANAGE_MODERATION'), handlePostReply);
 moderationRouter.post('/reports/create', optionalAuth, handleReportCreation);
 
 
@@ -241,11 +438,30 @@ moderationRouter.get('/reports/:id', requireAuth, requireStaff('MANAGE_MODERATIO
       targetEntity = targetUser;
     }
 
+    // Hydrate replies
+    const repliesList = await db
+      .select({
+        id: reportReplies.id,
+        reportId: reportReplies.reportId,
+        authorUserId: reportReplies.authorUserId,
+        message: reportReplies.message,
+        isAdminResponse: reportReplies.isAdminResponse,
+        createdAt: reportReplies.createdAt,
+        authorUsername: users.username,
+        authorAvatar: users.avatar,
+        authorRole: users.role,
+      })
+      .from(reportReplies)
+      .leftJoin(users, eq(reportReplies.authorUserId, users.id))
+      .where(eq(reportReplies.reportId, id))
+      .orderBy(asc(reportReplies.createdAt));
+
     res.json({
       report,
       reporter,
       targetUser,
       targetEntity,
+      replies: repliesList,
     });
   } catch (err: any) {
     console.error('[Moderation] Detail error:', err);
@@ -279,6 +495,15 @@ const handleReportStatusUpdate = async (req: AuthRequest, res: Response) => {
       details: `Жалоба/обращение #${id} переведено в статус ${status}`,
       ip: req.ip,
     });
+
+    if (updated?.reporterId && moderatorComment) {
+      notificationService.notifyFeedbackReplied(
+        { id: actor.id, username: actor.username, avatar: actor.avatar },
+        updated.reporterId,
+        id,
+        moderatorComment
+      ).catch(() => {});
+    }
 
     res.json(updated);
   } catch (err: any) {
@@ -406,6 +631,15 @@ const handleReportActionExecution = async (req: AuthRequest, res: Response) => {
       details: `Жалоба #${id} (${report.targetType} #${report.targetId}) закрыта действием: ${action}. Комментарий: ${moderatorComment || 'нет'}`,
       ip: req.ip,
     });
+
+    if (report?.reporterId && moderatorComment) {
+      notificationService.notifyFeedbackReplied(
+        { id: actor.id, username: actor.username, avatar: actor.avatar },
+        report.reporterId,
+        id,
+        moderatorComment
+      ).catch(() => {});
+    }
 
     res.json({
       success: true,

@@ -16,11 +16,13 @@ import {
   LayoutDashboard,
   Sparkles,
   Ticket,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { AdminDashboardTab } from '../admin/AdminDashboardTab.tsx';
 import { AdminUsersTab } from '../admin/AdminUsersTab.tsx';
 import { AdminModerationTab } from '../admin/AdminModerationTab.tsx';
+import { AdminFeedbackTab } from '../admin/AdminFeedbackTab.tsx';
 import { AdminNewsTab } from '../admin/AdminNewsTab.tsx';
 import { AdminAnnouncementsTab } from '../admin/AdminAnnouncementsTab.tsx';
 import { AdminContentTab } from '../admin/AdminContentTab.tsx';
@@ -35,6 +37,7 @@ import { AdminUpdatesTab } from '../admin/AdminUpdatesTab.tsx';
 
 export type AdminTabType =
   | 'dashboard'
+  | 'feedback'
   | 'moderation'
   | 'users'
   | 'content'
@@ -77,6 +80,12 @@ export const AdminView: React.FC = () => {
         label: 'Обзор',
         icon: LayoutDashboard,
         canAccess: isStaff,
+      },
+      {
+        id: 'feedback',
+        label: 'Обратная связь',
+        icon: MessageSquare,
+        canAccess: isModerator,
       },
       {
         id: 'moderation',
@@ -259,6 +268,7 @@ export const AdminView: React.FC = () => {
         {currentTab === 'dashboard' && (
           <AdminDashboardTab onNavigateTab={(tab) => setActiveTab(tab as AdminTabType)} />
         )}
+        {currentTab === 'feedback' && <AdminFeedbackTab />}
         {currentTab === 'moderation' && <AdminModerationTab />}
         {currentTab === 'users' && <AdminUsersTab />}
         {currentTab === 'content' && <AdminContentTab />}

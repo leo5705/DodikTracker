@@ -23,6 +23,7 @@ export interface DbUser {
   statisticsVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   telegramUsername?: string | null;
   telegramChatId?: string | null;
+  telegramId?: string | null;
   notificationSettings?: Record<string, boolean>;
   invitesLeft: number;
   createdAt: string;
