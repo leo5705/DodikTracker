@@ -15,6 +15,8 @@ export interface MediaSearchResult {
   totalSeasons?: number;
   totalEpisodes?: number;
   platforms?: string[];
+  isAdult?: boolean;
+  ageRating?: string;
 }
 
 export interface MediaCastMember {
@@ -97,6 +99,7 @@ export interface MediaDetailExtended {
   seasons?: MediaSeasonInfo[];
   criticScore?: CriticScoreInfo | null;
   ageRating?: string;
+  isAdult?: boolean;
   statusText?: string;
   countries?: string[];
   runtimeMinutes?: number;

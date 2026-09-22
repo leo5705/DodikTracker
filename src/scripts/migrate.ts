@@ -4,16 +4,36 @@ import path from 'path';
 import { Pool } from 'pg';
 
 async function runMigrations() {
-  console.log('[DB Migrate] Starting database migrations using admin user...');
+  console.log('[DB Migrate] Starting database migrations...');
   
-  const pool = new Pool({
-    host: process.env.SQL_HOST || 'localhost',
-    port: parseInt(process.env.SQL_PORT || '5432', 10),
-    user: process.env.SQL_ADMIN_USER,
-    password: String(process.env.SQL_ADMIN_PASSWORD),
-    database: process.env.SQL_DB_NAME,
-    max: 1,
-  });
+  const connectionString = (process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim();
+
+  let pool: Pool;
+
+  if (connectionString) {
+    pool = new Pool({
+      connectionString,
+      max: 1,
+      connectionTimeoutMillis: 15000,
+    });
+  } else {
+    const host = process.env.SQL_HOST || process.env.PGHOST || 'localhost';
+    const port = parseInt(process.env.SQL_PORT || process.env.PGPORT || '5432', 10);
+    const user = process.env.SQL_ADMIN_USER || process.env.SQL_USER || process.env.PGUSER || 'postgres';
+    const rawPassword = process.env.SQL_ADMIN_PASSWORD ?? process.env.SQL_PASSWORD ?? process.env.PGPASSWORD ?? '';
+    const password = String(rawPassword);
+    const database = process.env.SQL_DB_NAME || process.env.PGDATABASE || 'dodik_tracker';
+
+    pool = new Pool({
+      host,
+      port,
+      user,
+      password,
+      database,
+      max: 1,
+      connectionTimeoutMillis: 15000,
+    });
+  }
 
   const client = await pool.connect();
 

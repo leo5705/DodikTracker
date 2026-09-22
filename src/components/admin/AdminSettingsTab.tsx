@@ -46,7 +46,18 @@ export const AdminSettingsTab: React.FC = () => {
   };
 
   const handleChange = (key: string, val: any) => {
-    setSettings((prev) => ({ ...prev, [key]: val }));
+    setSettings((prev) => {
+      const next = { ...prev, [key]: val };
+      if (key === 'site_access_mode') next.siteAccessMode = val;
+      if (key === 'siteAccessMode') next.site_access_mode = val;
+      if (key === 'site_name') next.siteName = val;
+      if (key === 'siteName') next.site_name = val;
+      if (key === 'site_motto') next.siteMotto = val;
+      if (key === 'siteMotto') next.site_motto = val;
+      if (key === 'allow_guest_reviews') next.allowGuestReviews = val;
+      if (key === 'allowGuestReviews') next.allow_guest_reviews = val;
+      return next;
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -141,7 +152,7 @@ export const AdminSettingsTab: React.FC = () => {
                 type="radio"
                 name="site_access_mode"
                 value="OPEN"
-                checked={settings.site_access_mode === 'OPEN' || !settings.site_access_mode}
+                checked={settings.site_access_mode === 'OPEN'}
                 onChange={(e) => handleChange('site_access_mode', e.target.value)}
                 className="mt-0.5"
               />

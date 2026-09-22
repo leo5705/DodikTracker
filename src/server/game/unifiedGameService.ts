@@ -249,12 +249,21 @@ export class UnifiedGameService {
         } catch {}
       }
     }
-    // Clear search and catalog memory caches to reflect visibility changes
+    // Clear search and catalog memory and DB caches to reflect visibility changes
     for (const key of Array.from(this.memoryCache.keys())) {
-      if (key.startsWith('game:search:') || key.startsWith('game:catalog:')) {
+      if (key.startsWith('game:search:') || key.startsWith('game:catalog:') || key.startsWith('game:details:')) {
         this.memoryCache.delete(key);
       }
     }
+    try {
+      await db.delete(gameEntityCache).where(
+        or(
+          ilike(gameEntityCache.cacheKey, 'game:search:%'),
+          ilike(gameEntityCache.cacheKey, 'game:catalog:%'),
+          ilike(gameEntityCache.cacheKey, 'game:details:%')
+        )
+      );
+    } catch {}
   }
 
   /**

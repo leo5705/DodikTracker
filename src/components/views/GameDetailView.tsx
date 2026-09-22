@@ -16,6 +16,7 @@ import { GameRelatedGames } from '../game/GameRelatedGames.tsx';
 import { GameAdminDiagnosticModal } from '../game/GameAdminDiagnosticModal.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useShare } from '../../context/ShareContext.tsx';
+import { AdultContentWarning } from '../common/AdultContentWarning.tsx';
 
 interface GameDetailViewProps {
   idOrSlug: string;
@@ -38,6 +39,8 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [showScoreModal, setShowScoreModal] = useState(false);
   const [selectedScore, setSelectedScore] = useState<number>(0);
+  const [isAdultRestricted, setIsAdultRestricted] = useState(false);
+  const [adultConfirmed, setAdultConfirmed] = useState(false);
 
   const fetchGameDetails = async () => {
     setLoading(true);
@@ -45,6 +48,16 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
     try {
       const res = await fetch(`/api/games/${encodeURIComponent(idOrSlug)}`);
       if (!res.ok) {
+        if (res.status === 403) {
+          const errBody = await res.json().catch(() => ({}));
+          if (errBody.isAdultRestricted || errBody.code === 'ADULT_RESTRICTED') {
+            setIsAdultRestricted(true);
+            if (errBody.game) {
+              setGame(errBody.game);
+            }
+            return;
+          }
+        }
         throw new Error(`Игра не найдена: HTTP ${res.status}`);
       }
       const data = await res.json();
@@ -170,6 +183,28 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
         <Loader2 className="w-10 h-10 animate-spin text-purple-500" />
         <p className="text-sm font-medium">Загрузка единой информации об игре...</p>
       </div>
+    );
+  }
+
+  // 18+ Adult Restricted Check
+  const isGameAdult = Boolean(game?.isAdult || game?.ageRating === '18+' || game?.ageRating === '18');
+  if (isAdultRestricted || (isGameAdult && !dbUser?.showAdultContent)) {
+    return (
+      <AdultContentWarning
+        mode="restricted"
+        title={game?.title}
+      />
+    );
+  }
+
+  // 18+ Adult Confirmation Check
+  if (isGameAdult && dbUser?.showAdultContent && !adultConfirmed) {
+    return (
+      <AdultContentWarning
+        mode="confirm"
+        title={game?.title}
+        onConfirm={() => setAdultConfirmed(true)}
+      />
     );
   }
 

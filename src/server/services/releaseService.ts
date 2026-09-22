@@ -30,6 +30,7 @@ export interface ReleaseFilterOptions {
   limit?: number;
   userId?: number;
   isSuperAdmin?: boolean;
+  showAdultContent?: boolean;
 }
 
 export interface ReleaseItem {
@@ -437,6 +438,10 @@ export class ReleaseService {
 
     if (!options.isSuperAdmin) {
       conditions.push(eq(media.isHidden, false));
+    }
+
+    if (!options.isSuperAdmin && !options.showAdultContent) {
+      conditions.push(eq(media.isAdult, false));
     }
 
     // Scope filter (Upcoming vs Past vs All)

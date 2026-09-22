@@ -56,19 +56,53 @@ export class ProviderManager {
 
   async getCredentialsForProvider(name: string): Promise<{ enabled: boolean; priority: number; credentials?: Record<string, any> }> {
     try {
+      let upperName = name.toUpperCase();
+      if (upperName === 'GMDB') upperName = 'THEGAMESDB';
+
+      const providerObj = this.getProvider(upperName);
+      const isPublic = providerObj ? !providerObj.requiresKey : false;
+
       const records = await db
         .select()
         .from(systemIntegrations)
-        .where(eq(systemIntegrations.provider, name.toUpperCase()))
+        .where(eq(systemIntegrations.provider, upperName))
         .limit(1);
 
-      if (records.length === 0) {
-        return { enabled: false, priority: 99 };
+      let enabled = isPublic;
+      let priority = 1;
+      let credentials: Record<string, any> | undefined = undefined;
+
+      if (records.length > 0) {
+        const rec = records[0];
+        enabled = rec.enabled;
+        priority = rec.priority || 1;
+        if (rec.encryptedCredentials && rec.encryptedCredentials.trim()) {
+          const decrypted = decryptCredentials(rec.encryptedCredentials);
+          if (decrypted && Object.keys(decrypted).length > 0) {
+            credentials = decrypted;
+          }
+        }
       }
 
-      const rec = records[0];
-      const credentials = rec.encryptedCredentials ? decryptCredentials(rec.encryptedCredentials) : undefined;
-      return { enabled: rec.enabled, priority: rec.priority || 1, credentials };
+      // Fallback to process.env if DB credentials are not present
+      if (!credentials || Object.keys(credentials).length === 0) {
+        if (upperName === 'TMDB' && process.env.TMDB_API_KEY) {
+          credentials = { apiKey: process.env.TMDB_API_KEY };
+        } else if (upperName === 'RAWG' && process.env.RAWG_API_KEY) {
+          credentials = { apiKey: process.env.RAWG_API_KEY };
+        } else if (upperName === 'KINOPOISK' && process.env.KINOPOISK_API_KEY) {
+          credentials = { apiKey: process.env.KINOPOISK_API_KEY };
+        } else if (upperName === 'THEGAMESDB' && process.env.THEGAMESDB_API_KEY) {
+          credentials = { apiKey: process.env.THEGAMESDB_API_KEY };
+        } else if (upperName === 'IGDB' && process.env.IGDB_CLIENT_ID) {
+          credentials = {
+            clientId: process.env.IGDB_CLIENT_ID,
+            clientSecret: process.env.IGDB_CLIENT_SECRET,
+          };
+        }
+      }
+
+      return { enabled, priority, credentials };
     } catch (err) {
       console.error(`Failed to fetch credentials for ${name}:`, err);
       return { enabled: false, priority: 99 };
@@ -433,6 +467,12 @@ export class ProviderManager {
     }
 
     return { results, hasMore: anyHasMore };
+  }
+
+  public clearCache(): void {
+    this.searchCache.clear();
+    this.trendingCache.clear();
+    this.detailsCache.clear();
   }
 
   async healthCheck(providerName: string, customCredentials?: Record<string, any>): Promise<ProviderHealthResult> {

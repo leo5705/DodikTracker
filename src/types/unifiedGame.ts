@@ -117,6 +117,8 @@ export interface UnifiedGameSummary {
   developers?: string[];
   publishers?: string[];
   mediaId?: number;
+  isAdult?: boolean;
+  ageRating?: string | null;
 }
 
 export interface UnifiedGame {
@@ -134,6 +136,7 @@ export interface UnifiedGame {
   metacritic?: number | null;
   metacriticUrl?: string | null;
   ageRating?: string | null;
+  isAdult?: boolean;
   posterUrl?: string;
   backdropUrl?: string;
   coverUrl?: string;

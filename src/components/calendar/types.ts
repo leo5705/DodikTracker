@@ -33,6 +33,8 @@ export interface ReleaseItem {
   userLibraryStatus?: string | null;
   isSoon: boolean;
   isPopular: boolean;
+  isAdult?: boolean;
+  ageRating?: string;
   countdown: string;
   daysUntil: number;
   episodeInfo?: {

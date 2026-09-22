@@ -51,6 +51,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
   const [activityVisibility, setActivityVisibility] = useState('PUBLIC');
   const [listVisibility, setListVisibility] = useState('PUBLIC');
   const [statisticsVisibility, setStatisticsVisibility] = useState('PUBLIC');
+  const [showAdultContent, setShowAdultContent] = useState(false);
 
   // Telegram & Notifications state
   const { soundEnabled, setSoundEnabled, triggerTestToast } = useNotifications();
@@ -89,6 +90,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
       setActivityVisibility(dbUser.activityVisibility || 'PUBLIC');
       setListVisibility(dbUser.listVisibility || 'PUBLIC');
       setStatisticsVisibility(dbUser.statisticsVisibility || 'PUBLIC');
+      setShowAdultContent(Boolean(dbUser.showAdultContent));
       setTelegramChatId(dbUser.telegramChatId || '');
       if (dbUser.notificationSettings) {
         setNotificationSettings(dbUser.notificationSettings);
@@ -176,6 +178,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
           activityVisibility,
           listVisibility,
           statisticsVisibility,
+          showAdultContent,
           telegramChatId: telegramChatId.trim() || null,
           notificationSettings: JSON.stringify(notificationSettings)
         }),
@@ -186,6 +189,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
         throw new Error(errData.error || 'Не удалось сохранить настройки');
       }
 
+      await refreshProfile();
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err: any) {
@@ -479,6 +483,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                   </select>
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-4">
+            <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono pb-2 border-b border-[#252233]">
+              Фильтрация контента
+            </h3>
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">18+</span>
+                  <span className="text-sm font-bold text-[#F3F1F8]">Показывать контент 18+</span>
+                </div>
+                <p className="text-xs text-[#9A94AA]">
+                  Разрешить отображение игр, фильмов, аниме и манги с возрастным рейтингом 18+ в каталогах, поиске и рекомендациях.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                <input
+                  type="checkbox"
+                  checked={showAdultContent}
+                  onChange={(e) => setShowAdultContent(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-[#252233] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#9B6BFF]"></div>
+              </label>
             </div>
           </div>
 

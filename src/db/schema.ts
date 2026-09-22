@@ -29,6 +29,7 @@ export const users = pgTable('users', {
   telegramAuthCode: text('telegram_auth_code'),
   telegramAuthExpires: timestamp('telegram_auth_expires'),
   notificationSettings: text('notification_settings').notNull().default('{"friendRequests":true,"friendReviews":true,"likes":true,"comments":true,"newReleases":true,"lists":true}'),
+  showAdultContent: boolean('show_adult_content').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({
@@ -52,6 +53,8 @@ export const media = pgTable('media', {
   totalEpisodes: integer('total_episodes').default(0),
   totalDurationMinutes: integer('total_duration_minutes'),
   isHidden: boolean('is_hidden').notNull().default(false),
+  isAdult: boolean('is_adult').notNull().default(false),
+  ageRating: text('age_rating'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });

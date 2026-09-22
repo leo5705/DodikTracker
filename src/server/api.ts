@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireAdmin, requireStaff, isStaffRole, optionalAuth, AuthRequest, JWT_SECRET } from '../middleware/auth.ts';
+import { ContentVisibilityService } from './services/contentVisibilityService.ts';
 import { logAdminAction } from './routes/admin/auditHelper.ts';
 import { db } from '../db/index.ts';
 import {
@@ -92,9 +93,13 @@ apiRouter.get('/system/version', async (req, res) => {
     `);
 
     let appliedMigrations = 0;
+    let latestMigration: string | null = null;
     if (tableExists[0]?.exists) {
-      const countRes = await db.execute(sql`SELECT count(*) FROM "__drizzle_migrations"`);
-      appliedMigrations = parseInt(countRes[0]?.count || '0', 10);
+      const countRes: any = await db.execute(sql`SELECT count(*) as count FROM "__drizzle_migrations"`);
+      appliedMigrations = parseInt(countRes[0]?.count || countRes.rows?.[0]?.count || '0', 10);
+      
+      const latestRes: any = await db.execute(sql`SELECT hash FROM "__drizzle_migrations" ORDER BY id DESC LIMIT 1`);
+      latestMigration = latestRes[0]?.hash || latestRes.rows?.[0]?.hash || null;
     }
 
     let pendingMigrations = 0;
@@ -106,10 +111,12 @@ apiRouter.get('/system/version', async (req, res) => {
 
     res.status(200).json({
       appVersion: process.env.APP_VERSION || manifest?.version || '1.0.0',
+      environment: process.env.NODE_ENV || 'development',
       manifest,
       database: {
         appliedMigrations,
         pendingMigrations,
+        latestMigration,
       }
     });
   } catch (error) {
@@ -339,6 +346,9 @@ export async function ensureMediaRecord(mediaId?: number, mediaPayload?: any): P
       }
     }
 
+    const isAdult = ContentVisibilityService.isAdultContent(mediaPayload);
+    const ageRating = mediaPayload.ageRating || mediaPayload.age_rating || mediaPayload.ratingAgeLimits || (isAdult ? '18+' : null);
+
     const [createdMedia] = await db
       .insert(media)
       .values({
@@ -353,6 +363,8 @@ export async function ensureMediaRecord(mediaId?: number, mediaPayload?: any): P
         genres: Array.isArray(mediaPayload.genres) ? JSON.stringify(mediaPayload.genres) : (mediaPayload.genres || null),
         rating: mediaPayload.rating,
         totalEpisodes: mediaPayload.totalEpisodes || 0,
+        isAdult,
+        ageRating,
       })
       .returning();
 
@@ -1593,6 +1605,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
       listVisibility,
       statisticsVisibility,
       notificationSettings,
+      showAdultContent,
       } = req.body;
 
     // Validation
@@ -1624,6 +1637,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
         listVisibility: listVisibility || user.listVisibility,
         statisticsVisibility: statisticsVisibility || user.statisticsVisibility,
         notificationSettings: notificationSettings !== undefined ? notificationSettings : user.notificationSettings,
+        showAdultContent: typeof showAdultContent === 'boolean' ? showAdultContent : user.showAdultContent,
         
         updatedAt: new Date(),
       })
@@ -1894,6 +1908,8 @@ const mediaSearchHandler = async (req: any, res: any) => {
       combined = combined.filter((i) => i.year === undefined || i.year <= filters.yearTo!);
     }
 
+    combined = ContentVisibilityService.filterAccessibleContent(req.dbUser, combined);
+
     res.json({
       results: combined,
       hasMore: hasMore || externalResults.length >= limit,
@@ -1961,6 +1977,8 @@ apiRouter.get('/media/trending', optionalAuth, async (req: AuthRequest, res: Res
       });
     }
 
+    results = ContentVisibilityService.filterAccessibleContent(req.dbUser, results);
+
     res.json({
       results,
       hasMore: Boolean(trendingRes.hasMore),
@@ -1999,6 +2017,9 @@ export async function ensureMediaInDb(mediaPayload: any): Promise<any> {
   }
 
   if (!targetMedia) {
+    const isAdult = ContentVisibilityService.isAdultContent(mediaPayload);
+    const ageRating = mediaPayload.ageRating || mediaPayload.age_rating || mediaPayload.ratingAgeLimits || (isAdult ? '18+' : null);
+
     const [created] = await db
       .insert(media)
       .values({
@@ -2012,6 +2033,8 @@ export async function ensureMediaInDb(mediaPayload: any): Promise<any> {
         year: mediaPayload.year || null,
         rating: mediaPayload.rating || null,
         totalEpisodes: mediaPayload.totalEpisodes || 0,
+        isAdult,
+        ageRating,
       })
       .returning();
 
@@ -2030,13 +2053,13 @@ export async function ensureMediaInDb(mediaPayload: any): Promise<any> {
 }
 
 // Ensure media exists in local DB, creating it from provider payload if necessary
-apiRouter.post('/media/ensure', async (req, res) => {
+apiRouter.post('/media/ensure', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { mediaId, mediaPayload } = req.body;
     if (mediaId) {
       const found = await db.select().from(media).where(eq(media.id, Number(mediaId))).limit(1);
       if (found.length > 0) {
-        return res.json({ media: found[0] });
+        return res.json({ mediaId: found[0].id, media: found[0] });
       }
     }
 
@@ -2045,7 +2068,7 @@ apiRouter.post('/media/ensure', async (req, res) => {
     }
 
     const targetMedia = await ensureMediaInDb(mediaPayload);
-    res.json({ media: targetMedia });
+    res.json({ mediaId: targetMedia.id, media: targetMedia });
   } catch (err: any) {
     console.error('Error ensuring media:', err);
     res.status(500).json({ error: err.message });
@@ -2137,8 +2160,11 @@ apiRouter.get('/media/:id', optionalAuth, async (req: AuthRequest, res: Response
 
     const item = found[0];
 
-    // If media is hidden and requester is not SUPER_ADMIN, return 404
-    if (item.isHidden && current?.role !== 'SUPER_ADMIN') {
+    const vis = ContentVisibilityService.canViewContent(current, item);
+    if (!vis.allowed) {
+      if (vis.reason === 'ADULT_RESTRICTED') {
+        return res.status(403).json({ error: 'Контент 18+', isAdultRestricted: true, code: 'ADULT_RESTRICTED', media: item });
+      }
       return res.status(404).json({ error: 'Медиа не найдено' });
     }
 
@@ -3591,6 +3617,8 @@ apiRouter.get('/feed', optionalAuth, async (req: AuthRequest, res: Response) => 
         mediaType: media.type,
         mediaYear: media.year,
         mediaRating: media.rating,
+        mediaIsAdult: media.isAdult,
+        mediaAgeRating: media.ageRating,
         listId: lists.id,
         listTitle: lists.title,
         listCover: lists.cover,
@@ -3770,6 +3798,8 @@ apiRouter.get('/feed', optionalAuth, async (req: AuthRequest, res: Response) => 
           type: act.mediaType,
           year: act.mediaYear,
           rating: act.mediaRating,
+          isAdult: act.mediaIsAdult,
+          ageRating: act.mediaAgeRating,
         } : null,
         list: act.listId ? {
           id: act.listId,
@@ -3789,9 +3819,11 @@ apiRouter.get('/feed', optionalAuth, async (req: AuthRequest, res: Response) => 
       };
     });
 
+    const accessibleActivities = ContentVisibilityService.filterAccessibleActivities(user, enriched);
+
     res.json({
-      activities: enriched,
-      total: filtered.length,
+      activities: accessibleActivities,
+      total: accessibleActivities.length,
       friendCount: friendIds.length,
     });
   } catch (err: any) {
@@ -4839,21 +4871,6 @@ apiRouter.post('/lists', requireAuth, async (req: AuthRequest, res: Response) =>
   }
 });
 
-// Ensure media in local database
-apiRouter.post('/media/ensure', optionalAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const { mediaId, mediaPayload } = req.body;
-    const resolvedId = await ensureMediaRecord(mediaId ? Number(mediaId) : undefined, mediaPayload);
-    if (!resolvedId) {
-      return res.status(400).json({ error: 'Не удалось определить или сохранить медиа' });
-    }
-    const [found] = await db.select().from(media).where(eq(media.id, resolvedId)).limit(1);
-    res.json({ mediaId: resolvedId, media: found });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Get all custom lists created by or accessible to current user
 apiRouter.get('/lists/my', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -5215,6 +5232,8 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
         year: media.year,
         rating: media.rating,
         description: media.description,
+        isAdult: media.isAdult,
+        ageRating: media.ageRating,
         addedByUsername: users.username,
         addedByAvatar: users.avatar,
       })
@@ -5223,6 +5242,8 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
       .leftJoin(users, eq(listItems.addedById, users.id))
       .where(and(...listConditions))
       .orderBy(listItems.orderIndex, listItems.id);
+
+    const items = ContentVisibilityService.filterAccessibleContent(user, rawItems);
 
     // Determine current user's role
     let userRole: 'OWNER' | 'EDITOR' | 'VIEWER' | null = null;
@@ -7179,6 +7200,24 @@ async function getRouletteCandidateMedia(options: {
   let candidateMedia: any[] = [];
   let listInfo: { id: number; title: string; category: string } | null = null;
 
+  const normalizedSource = source ? String(source).toUpperCase() : 'MY_PLANNED';
+
+  // Explicitly reject deprecated/removed sources
+  if (['ALL', 'ALL_DATABASE', 'DATABASE', 'EVERYTHING'].includes(normalizedSource)) {
+    throw {
+      status: 400,
+      message: 'Источник "Вся база тайтлов" больше не поддерживается. Пожалуйста, выберите пользовательский список или библиотеку.',
+    };
+  }
+
+  const validSources = ['MY_PLANNED', 'MY_LIBRARY', 'MY_FAVORITES', 'USER_LIST'];
+  if (!validSources.includes(normalizedSource)) {
+    throw {
+      status: 400,
+      message: `Недопустимый источник рулетки: ${source}. Допустимые варианты: MY_PLANNED, MY_LIBRARY, MY_FAVORITES, USER_LIST.`,
+    };
+  }
+
   const parsedMinRating = minRating ? parseFloat(String(minRating)) : 0;
 
   const matchesCategory = (mediaType: string, cat?: string) => {
@@ -7187,10 +7226,10 @@ async function getRouletteCandidateMedia(options: {
     return mediaType === cat;
   };
 
-  if (source === 'USER_LIST' || listId) {
+  if (normalizedSource === 'USER_LIST') {
     const numericListId = typeof listId === 'string' ? parseInt(listId, 10) : Number(listId);
     if (!numericListId || isNaN(numericListId)) {
-      throw { status: 400, message: 'Не выбран список' };
+      throw { status: 400, message: 'Не выбран список для рулетки' };
     }
 
     const found = await db
@@ -7279,67 +7318,39 @@ async function getRouletteCandidateMedia(options: {
     if (targetList.category && targetList.category !== 'ALL') {
       candidateMedia = candidateMedia.filter((m) => matchesCategory(m.type, targetList.category));
     }
-  } else if (user && (source === 'MY_LIBRARY' || source === 'MY_PLANNED' || source === 'MY_FAVORITES')) {
-    const rows = await db
-      .select({
-        id: media.id,
-        title: media.title,
-        originalTitle: media.originalTitle,
-        type: media.type,
-        posterUrl: media.posterUrl,
-        rating: media.rating,
-        year: media.year,
-        description: media.description,
-        userStatus: userMedia.status,
-        userRating: userMedia.rating,
-        isFavorite: userMedia.isFavorite,
-      })
-      .from(userMedia)
-      .innerJoin(media, eq(userMedia.mediaId, media.id))
-      .where(eq(userMedia.userId, user.id));
+  } else if (['MY_LIBRARY', 'MY_PLANNED', 'MY_FAVORITES'].includes(normalizedSource)) {
+    if (!user) {
+      candidateMedia = [];
+    } else {
+      const rows = await db
+        .select({
+          id: media.id,
+          title: media.title,
+          originalTitle: media.originalTitle,
+          type: media.type,
+          posterUrl: media.posterUrl,
+          rating: media.rating,
+          year: media.year,
+          description: media.description,
+          userStatus: userMedia.status,
+          userRating: userMedia.rating,
+          isFavorite: userMedia.isFavorite,
+        })
+        .from(userMedia)
+        .innerJoin(media, eq(userMedia.mediaId, media.id))
+        .where(eq(userMedia.userId, user.id));
 
-    candidateMedia = rows;
+      candidateMedia = rows;
 
-    if (source === 'MY_PLANNED') {
-      candidateMedia = candidateMedia.filter((r) => r.userStatus?.includes('PLAN_TO_'));
-    } else if (source === 'MY_FAVORITES') {
-      candidateMedia = candidateMedia.filter((r) => r.isFavorite);
-    }
-  } else {
-    // From entire media catalog
-    const conditions: any[] = [];
-    if (user?.role !== 'SUPER_ADMIN') {
-      conditions.push(eq(media.isHidden, false));
-    }
-    if (category && category !== 'ALL') {
-      if (category === 'MOVIES_TV') {
-        conditions.push(inArray(media.type, ['MOVIE', 'TV']));
-      } else {
-        conditions.push(eq(media.type, String(category)));
+      if (normalizedSource === 'MY_PLANNED') {
+        candidateMedia = candidateMedia.filter((r) => r.userStatus?.includes('PLAN_TO_'));
+      } else if (normalizedSource === 'MY_FAVORITES') {
+        candidateMedia = candidateMedia.filter((r) => r.isFavorite);
       }
     }
-    if (parsedMinRating > 0) {
-      conditions.push(gte(media.rating, parsedMinRating));
-    }
-
-    candidateMedia = await db
-      .select({
-        id: media.id,
-        title: media.title,
-        originalTitle: media.originalTitle,
-        type: media.type,
-        description: media.description,
-        posterUrl: media.posterUrl,
-        year: media.year,
-        rating: media.rating,
-      })
-      .from(media)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(desc(media.rating))
-      .limit(500);
   }
 
-  // Apply category filter if requested
+  // Apply requested category filter
   if (category && category !== 'ALL') {
     candidateMedia = candidateMedia.filter((m) => matchesCategory(m.type, category));
   }
@@ -7348,6 +7359,8 @@ async function getRouletteCandidateMedia(options: {
   if (parsedMinRating > 0) {
     candidateMedia = candidateMedia.filter((m) => (m.rating || 0) >= parsedMinRating);
   }
+
+  candidateMedia = ContentVisibilityService.filterAccessibleContent(user, candidateMedia);
 
   return { candidateMedia, listInfo };
 }
@@ -7629,6 +7642,7 @@ const handleGetReleases = async (req: AuthRequest, res: Response) => {
       limit: limit ? parseInt(limit, 10) : 30,
       userId: user?.id,
       isSuperAdmin: user?.role === 'SUPER_ADMIN',
+      showAdultContent: user?.showAdultContent === true,
     });
 
     res.json(result);

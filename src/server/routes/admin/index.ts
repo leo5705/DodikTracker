@@ -8,6 +8,7 @@ import { contentRouter } from './content.ts';
 import { adminNotificationsRouter } from './notifications.ts';
 import { analyticsRouter } from './analytics.ts';
 import { settingsRouter } from './settings.ts';
+import { integrationsRouter } from './integrations.ts';
 
 export const adminRouter = Router();
 
@@ -20,3 +21,4 @@ adminRouter.use('/', contentRouter);
 adminRouter.use('/', adminNotificationsRouter);
 adminRouter.use('/', analyticsRouter);
 adminRouter.use('/', settingsRouter);
+adminRouter.use('/', integrationsRouter);

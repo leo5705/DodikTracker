@@ -44,6 +44,8 @@ export const AdminContentTab: React.FC = () => {
     releaseDate: '',
     year: '',
     rating: '',
+    isAdult: false,
+    ageRating: '',
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -123,6 +125,8 @@ export const AdminContentTab: React.FC = () => {
       releaseDate: item.releaseDate || '',
       year: item.year ? String(item.year) : '',
       rating: item.rating ? String(item.rating) : '',
+      isAdult: Boolean(item.isAdult),
+      ageRating: item.ageRating || '',
     });
   };
 
@@ -495,6 +499,34 @@ export const AdminContentTab: React.FC = () => {
                   onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
                   className="w-full p-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
                 />
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#0F0E12] border border-[#252233] space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">18+</span>
+                    <span className="text-xs font-bold text-[#F3F1F8]">Маркировка 18+ (Adult Content)</span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editForm.isAdult}
+                      onChange={(e) => setEditForm({ ...editForm, isAdult: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-[#252233] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600"></div>
+                  </label>
+                </div>
+                <div>
+                  <label className="text-[11px] text-[#9A94AA] block mb-1">Возрастной рейтинг (Age Rating)</label>
+                  <input
+                    type="text"
+                    placeholder="Например: 18+, 16+, R18, M"
+                    value={editForm.ageRating}
+                    onChange={(e) => setEditForm({ ...editForm, ageRating: e.target.value })}
+                    className="w-full p-2 bg-[#14131A] border border-[#252233] rounded-lg text-xs text-[#F3F1F8] outline-none"
+                  />
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-[#252233]">

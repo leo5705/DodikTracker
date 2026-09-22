@@ -568,7 +568,10 @@ export async function runAutoMigrations(pool: Pool) {
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ban_reason" text;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "warning_count" integer NOT NULL DEFAULT 0;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_warning_reason" text;
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "show_adult_content" boolean NOT NULL DEFAULT false;
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_adult" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "age_rating" text;
         ALTER TABLE "comments" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "tier_lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;

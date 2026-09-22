@@ -8,6 +8,8 @@ import { createServer as createViteServer } from 'vite';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { apiRouter } from './src/server/api.ts';
+import { db } from './src/db/index.ts';
+import { sql } from 'drizzle-orm';
 import { telegramBot } from './src/server/telegram.ts';
 import { initDbSettings } from './src/server/init.ts';
 import { startMessageCleanupCron } from './src/server/services/messageCleanup.ts';
@@ -49,9 +51,38 @@ async function startServer() {
   app.use(cookieParser());
   app.use(express.json({ limit: '2mb' }));
 
-  // Health check
-  app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'Dodik Tracker API' });
+  // Real Health check (DB ping + uptime + version, no secrets)
+  app.get('/api/health', async (_req, res) => {
+    const startTime = Date.now();
+    try {
+      await db.execute(sql`SELECT 1`);
+      const latencyMs = Date.now() - startTime;
+      res.status(200).json({
+        status: 'UP',
+        service: 'Dodik Tracker',
+        version: process.env.APP_VERSION || '1.0.0',
+        environment: process.env.NODE_ENV || 'development',
+        database: {
+          status: 'connected',
+          latencyMs,
+        },
+        uptime: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      res.status(503).json({
+        status: 'DOWN',
+        service: 'Dodik Tracker',
+        version: process.env.APP_VERSION || '1.0.0',
+        environment: process.env.NODE_ENV || 'development',
+        database: {
+          status: 'disconnected',
+          error: err.message || 'Database unreachable',
+        },
+        uptime: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString(),
+      });
+    }
   });
 
   // Mount API router

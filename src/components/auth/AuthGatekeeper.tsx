@@ -47,7 +47,7 @@ export const AuthGatekeeper: React.FC = () => {
         const res = await fetch('/api/auth/registration-mode');
         if (res.ok) {
           const data = await res.json();
-          setRegMode(data.mode || 'INVITE_ONLY');
+          setRegMode(data.mode || 'OPEN');
         }
       } catch (err) {
         console.error('Failed to load registration mode:', err);

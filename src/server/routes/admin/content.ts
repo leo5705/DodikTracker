@@ -5,6 +5,7 @@ import { media, mediaExternalIds, seasons, episodes, userMedia } from '../../../
 import { eq, and, sql, desc, count, ilike, or } from 'drizzle-orm';
 import { logAdminAction } from './auditHelper.ts';
 import { UnifiedGameService } from '../../game/unifiedGameService.ts';
+import { providerManager } from '../../providers/index.ts';
 
 export const contentRouter = Router();
 
@@ -53,6 +54,8 @@ contentRouter.get('/content', requireAuth, requireStaff('MANAGE_CONTENT'), async
         totalSeasons: media.totalSeasons,
         totalEpisodes: media.totalEpisodes,
         isHidden: media.isHidden,
+        isAdult: media.isAdult,
+        ageRating: media.ageRating,
         createdAt: media.createdAt,
         updatedAt: media.updatedAt,
         trackerCount: sql<number>`COALESCE((SELECT COUNT(*) FROM user_media WHERE user_media.media_id = ${media.id}), 0)::int`,
@@ -125,6 +128,8 @@ contentRouter.put('/content/:id', requireAuth, requireStaff('MANAGE_CONTENT'), a
       totalSeasons,
       totalEpisodes,
       totalDurationMinutes,
+      isAdult,
+      ageRating,
     } = req.body;
     const actor = req.dbUser!;
 
@@ -143,6 +148,8 @@ contentRouter.put('/content/:id', requireAuth, requireStaff('MANAGE_CONTENT'), a
         totalSeasons: totalSeasons !== undefined ? parseInt(totalSeasons, 10) : undefined,
         totalEpisodes: totalEpisodes !== undefined ? parseInt(totalEpisodes, 10) : undefined,
         totalDurationMinutes: totalDurationMinutes !== undefined ? parseInt(totalDurationMinutes, 10) : undefined,
+        isAdult: typeof isAdult === 'boolean' ? isAdult : undefined,
+        ageRating: ageRating !== undefined ? ageRating : undefined,
         updatedAt: new Date(),
       })
       .where(eq(media.id, id))
@@ -180,16 +187,15 @@ contentRouter.post('/content/:id/toggle-hide', requireAuth, requireStaff('MANAGE
       .where(eq(media.id, id))
       .returning();
 
-    // Invalidate game cache if it's a game
-    if (item.type === 'GAME') {
-      const extRows = await db
-        .select({ externalId: mediaExternalIds.externalId })
-        .from(mediaExternalIds)
-        .where(eq(mediaExternalIds.mediaId, id))
-        .catch(() => []);
-      const extIds = extRows.map((r) => r.externalId);
-      await UnifiedGameService.getInstance().invalidateGameCache(id, extIds);
-    }
+    // Invalidate all caches so that search, catalog, trending, and details immediately reflect visibility change
+    providerManager.clearCache();
+    const extRows = await db
+      .select({ externalId: mediaExternalIds.externalId })
+      .from(mediaExternalIds)
+      .where(eq(mediaExternalIds.mediaId, id))
+      .catch(() => []);
+    const extIds = extRows.map((r) => r.externalId);
+    await UnifiedGameService.getInstance().invalidateGameCache(id, extIds);
 
     await logAdminAction({
       userId: actor.id,

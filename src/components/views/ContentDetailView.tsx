@@ -35,6 +35,7 @@ import { ContentRatingModal } from '../content/ContentRatingModal.tsx';
 import { ContentReviewModal } from '../content/ContentReviewModal.tsx';
 import { AddToListModal } from '../modals/AddToListModal.tsx';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
+import { AdultContentWarning } from '../common/AdultContentWarning.tsx';
 
 interface ContentDetailViewProps {
   mediaId: number | string;
@@ -70,6 +71,10 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
   // Watched episodes set
   const [watchedEpisodes, setWatchedEpisodes] = useState<Set<string>>(new Set());
 
+  // 18+ adult content state
+  const [isAdultRestricted, setIsAdultRestricted] = useState(false);
+  const [adultConfirmed, setAdultConfirmed] = useState(false);
+
   const fetchMedia = async () => {
     setLoading(true);
     setError(null);
@@ -81,6 +86,17 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
 
       const res = await authFetch(`/api/media/${mediaId}${queryString}`);
       if (!res.ok) {
+        if (res.status === 403) {
+          const errBody = await res.json().catch(() => ({}));
+          if (errBody.isAdultRestricted || errBody.code === 'ADULT_RESTRICTED') {
+            setIsAdultRestricted(true);
+            if (errBody.media) {
+              setRawMedia(errBody.media);
+              setContentItem(normalizeMediaToUnified(errBody.media, mediaType));
+            }
+            return;
+          }
+        }
         if (res.status === 404) throw new Error('Произведение не найдено в каталоге');
         throw new Error('Не удалось загрузить данные о произведении');
       }
@@ -377,6 +393,28 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
         <div className="h-[460px] bg-zinc-900/90 rounded-3xl border border-zinc-800" />
         <div className="h-64 bg-zinc-900/80 rounded-3xl border border-zinc-800" />
       </div>
+    );
+  }
+
+  // 18+ Adult Restricted Check
+  const isItemAdult = Boolean(rawMedia?.isAdult || rawMedia?.ageRating === '18+' || rawMedia?.ageRating === '18');
+  if (isAdultRestricted || (isItemAdult && !dbUser?.showAdultContent)) {
+    return (
+      <AdultContentWarning
+        mode="restricted"
+        title={contentItem?.title || rawMedia?.title}
+      />
+    );
+  }
+
+  // 18+ Adult Confirmation Check
+  if (isItemAdult && dbUser?.showAdultContent && !adultConfirmed) {
+    return (
+      <AdultContentWarning
+        mode="confirm"
+        title={contentItem?.title || rawMedia?.title}
+        onConfirm={() => setAdultConfirmed(true)}
+      />
     );
   }
 

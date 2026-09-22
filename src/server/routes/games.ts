@@ -1,13 +1,56 @@
 import { Router, Response } from 'express';
 import { optionalAuth, requireAdmin, AuthRequest } from '../../middleware/auth.ts';
 import { UnifiedGameService } from '../game/unifiedGameService.ts';
+import { ContentVisibilityService } from '../services/contentVisibilityService.ts';
 import { db } from '../../db/index.ts';
-import { userMedia, media } from '../../db/schema.ts';
+import { userMedia, media, mediaExternalIds } from '../../db/schema.ts';
 import { eq, and } from 'drizzle-orm';
 import { GameCatalogFilters } from '../../types/unifiedGame.ts';
 import { deduplicateAndNormalizeStores } from '../../utils/storeNormalizer.ts';
 
 export const gamesRouter = Router();
+
+const isStaffOrAdmin = (user?: any) =>
+  Boolean(user && ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER'].includes(user.role));
+
+async function getHiddenGameData() {
+  const hiddenRows = await db
+    .select({ id: media.id, title: media.title, year: media.year })
+    .from(media)
+    .where(and(eq(media.type, 'GAME'), eq(media.isHidden, true)));
+  const hiddenIds = new Set<number>(hiddenRows.map((m) => m.id));
+
+  const extRows = await db
+    .select({ externalId: mediaExternalIds.externalId })
+    .from(mediaExternalIds)
+    .innerJoin(media, eq(mediaExternalIds.mediaId, media.id))
+    .where(and(eq(media.type, 'GAME'), eq(media.isHidden, true)));
+  const hiddenExtIds = new Set<string>(extRows.map((e) => String(e.externalId).trim().toLowerCase()));
+
+  const hiddenTitles = new Set<string>(
+    hiddenRows.map((m) => `${(m.title || '').trim().toLowerCase()}:${m.year || ''}`)
+  );
+
+  return { hiddenIds, hiddenExtIds, hiddenTitles };
+}
+
+function isGameHidden(
+  g: any,
+  hiddenIds: Set<number>,
+  hiddenExtIds: Set<string>,
+  hiddenTitles: Set<string>
+): boolean {
+  if (g.mediaId && hiddenIds.has(Number(g.mediaId))) return true;
+  if (g.id && (hiddenIds.has(Number(g.id)) || hiddenExtIds.has(String(g.id).trim().toLowerCase()))) return true;
+  if (g.rawgId && hiddenExtIds.has(String(g.rawgId).trim().toLowerCase())) return true;
+  if (g.gmdbId && hiddenExtIds.has(String(g.gmdbId).trim().toLowerCase())) return true;
+  if (g.slug && hiddenExtIds.has(String(g.slug).trim().toLowerCase())) return true;
+  if (g.title) {
+    const titleKey = `${(g.title || '').trim().toLowerCase()}:${g.year || ''}`;
+    if (hiddenTitles.has(titleKey)) return true;
+  }
+  return false;
+}
 
 // 1. GET /api/games/catalog - Browse games with filters
 gamesRouter.get('/catalog', optionalAuth, async (req: AuthRequest, res: Response) => {
@@ -32,19 +75,13 @@ gamesRouter.get('/catalog', optionalAuth, async (req: AuthRequest, res: Response
 
     const result = await UnifiedGameService.getInstance().getCatalog(filters);
     const current = req.dbUser;
-    if (current?.role !== 'SUPER_ADMIN' && result.results.length > 0) {
-      const hiddenIds = new Set(
-        (
-          await db
-            .select({ id: media.id })
-            .from(media)
-            .where(and(eq(media.type, 'GAME'), eq(media.isHidden, true)))
-        ).map((m) => m.id)
-      );
+    if (!isStaffOrAdmin(current) && result.results.length > 0) {
+      const { hiddenIds, hiddenExtIds, hiddenTitles } = await getHiddenGameData();
       result.results = result.results.filter(
-        (g) => !g.mediaId || !hiddenIds.has(g.mediaId)
+        (g) => !isGameHidden(g, hiddenIds, hiddenExtIds, hiddenTitles)
       );
     }
+    result.results = ContentVisibilityService.filterAccessibleContent(current, result.results);
     return res.json(result);
   } catch (err: any) {
     console.error('[GamesRouter] /catalog error:', err);
@@ -69,19 +106,13 @@ gamesRouter.get('/search', optionalAuth, async (req: AuthRequest, res: Response)
 
     const result = await UnifiedGameService.getInstance().searchGames(query, filters);
     const current = req.dbUser;
-    if (current?.role !== 'SUPER_ADMIN' && result.results.length > 0) {
-      const hiddenIds = new Set(
-        (
-          await db
-            .select({ id: media.id })
-            .from(media)
-            .where(and(eq(media.type, 'GAME'), eq(media.isHidden, true)))
-        ).map((m) => m.id)
-      );
+    if (!isStaffOrAdmin(current) && result.results.length > 0) {
+      const { hiddenIds, hiddenExtIds, hiddenTitles } = await getHiddenGameData();
       result.results = result.results.filter(
-        (g) => !g.mediaId || !hiddenIds.has(g.mediaId)
+        (g) => !isGameHidden(g, hiddenIds, hiddenExtIds, hiddenTitles)
       );
     }
+    result.results = ContentVisibilityService.filterAccessibleContent(current, result.results);
     return res.json(result);
   } catch (err: any) {
     console.error('[GamesRouter] /search error:', err);
@@ -271,17 +302,11 @@ gamesRouter.get('/:id/similar', optionalAuth, async (req: AuthRequest, res: Resp
     const game = await UnifiedGameService.getInstance().getGameDetails(req.params.id);
     let similar = game?.similar || [];
     const current = req.dbUser;
-    if (current?.role !== 'SUPER_ADMIN' && similar.length > 0) {
-      const hiddenIds = new Set(
-        (
-          await db
-            .select({ id: media.id })
-            .from(media)
-            .where(and(eq(media.type, 'GAME'), eq(media.isHidden, true)))
-        ).map((m) => m.id)
-      );
-      similar = similar.filter((g: any) => !g.mediaId || !hiddenIds.has(g.mediaId));
+    if (!isStaffOrAdmin(current) && similar.length > 0) {
+      const { hiddenIds, hiddenExtIds, hiddenTitles } = await getHiddenGameData();
+      similar = similar.filter((g: any) => !isGameHidden(g, hiddenIds, hiddenExtIds, hiddenTitles));
     }
+    similar = ContentVisibilityService.filterAccessibleContent(current, similar);
     return res.json(similar);
   } catch (err: any) {
     return res.status(500).json({ error: 'Ошибка получения похожих игр' });
@@ -291,33 +316,51 @@ gamesRouter.get('/:id/similar', optionalAuth, async (req: AuthRequest, res: Resp
 // 18. GET /api/games/:id - Complete unified game details
 gamesRouter.get('/:id', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
+    const current = req.dbUser;
+    const isStaff = isStaffOrAdmin(current);
+    const idParam = String(req.params.id || '').trim();
+
+    if (!isStaff) {
+      const { hiddenIds, hiddenExtIds } = await getHiddenGameData();
+      if (!isNaN(Number(idParam)) && hiddenIds.has(Number(idParam))) {
+        return res.status(404).json({ error: 'Игра не найдена' });
+      }
+      if (hiddenExtIds.has(idParam.toLowerCase())) {
+        return res.status(404).json({ error: 'Игра не найдена' });
+      }
+    }
+
     const game = await UnifiedGameService.getInstance().getGameDetails(req.params.id);
     if (!game) {
       return res.status(404).json({ error: 'Игра не найдена в единой базе Dodik Tracker' });
     }
 
-    // Check if game is linked to a hidden media record and caller is not SUPER_ADMIN
-    const current = req.dbUser;
-    if (game.mediaId) {
-      const [mediaRow] = await db
-        .select({ isHidden: media.isHidden })
-        .from(media)
-        .where(eq(media.id, game.mediaId))
-        .limit(1);
-      if (mediaRow && mediaRow.isHidden && current?.role !== 'SUPER_ADMIN') {
+    // Check if game is linked to a hidden media record or matches hidden external IDs
+    if (!isStaff) {
+      const { hiddenIds, hiddenExtIds, hiddenTitles } = await getHiddenGameData();
+      if (isGameHidden(game, hiddenIds, hiddenExtIds, hiddenTitles)) {
         return res.status(404).json({ error: 'Игра не найдена' });
       }
     }
 
+    const vis = ContentVisibilityService.canViewContent(current, game);
+    if (!vis.allowed) {
+      if (vis.reason === 'ADULT_RESTRICTED') {
+        return res.status(403).json({ error: 'Контент 18+', isAdultRestricted: true, code: 'ADULT_RESTRICTED' });
+      }
+      return res.status(404).json({ error: 'Игра не найдена' });
+    }
+
     // If user is authenticated, check for user library status
     let userTracking = null;
-    if (req.user?.id && game.mediaId) {
+    const targetUserId = req.dbUser?.id || req.user?.id;
+    if (targetUserId && game.mediaId) {
       const um = await db
         .select()
         .from(userMedia)
         .where(
           and(
-            eq(userMedia.userId, req.user.id),
+            eq(userMedia.userId, targetUserId),
             eq(userMedia.mediaId, game.mediaId)
           )
         )

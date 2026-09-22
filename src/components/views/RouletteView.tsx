@@ -46,7 +46,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
 
   // Filters
   const [category, setCategory] = useState('ALL');
-  const [source, setSource] = useState<'ALL' | 'MY_PLANNED' | 'MY_LIBRARY' | 'MY_FAVORITES' | 'USER_LIST'>('ALL');
+  const [source, setSource] = useState<'MY_PLANNED' | 'MY_LIBRARY' | 'MY_FAVORITES' | 'USER_LIST'>('MY_PLANNED');
   const [selectedListId, setSelectedListId] = useState<number | null>(null);
   const [minRating, setMinRating] = useState('0');
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -136,7 +136,6 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
   ];
 
   const sources = [
-    { id: 'ALL', label: 'Вся база тайтлов' },
     { id: 'MY_PLANNED', label: '«В планах»' },
     { id: 'MY_LIBRARY', label: 'Моя библиотека' },
     { id: 'MY_FAVORITES', label: 'Избранное' },
@@ -357,7 +356,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
             Рулетка выбора
           </h1>
           <p className="text-xs text-[#9A94AA] mt-0.5">
-            Случайный выбор фильма, сериала, игры, книги или аниме из общей базы или вашего личного списка.
+            Случайный выбор фильма, сериала, игры, книги или аниме из вашей библиотеки или личных списков.
           </p>
         </div>
 
@@ -385,7 +384,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
           <label className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider block mb-2.5 font-mono">
             1. Источник выбора
           </label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {sources.map((s) => (
               <button
                 key={s.id}
@@ -552,8 +551,9 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
         </div>
 
         {poolSize === 0 && !poolLoading && (
-          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
-            По выбранным фильтрам нет подходящих тайтлов. Попробуйте сбросить минимальный рейтинг или выбрать другой источник.
+          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+            <span>В этом источнике пока нет тайтлов.</span>
           </div>
         )}
       </div>
@@ -635,9 +635,9 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
           ) : (
             <div className="h-64 flex flex-col items-center justify-center text-center p-6 space-y-2">
               <Dice5 className="w-10 h-10 text-zinc-600 mb-1" />
-              <p className="text-sm font-semibold text-zinc-300">Нет доступных тайтлов для ленты</p>
+              <p className="text-sm font-semibold text-zinc-300">В этом источнике пока нет тайтлов.</p>
               <p className="text-xs text-[#9A94AA] max-w-sm">
-                Измените фильтры или выберите другой источник, чтобы наполнить рулетку.
+                Добавьте тайтлы в «В планах», библиотеку, избранное или выберите другой список.
               </p>
             </div>
           )}

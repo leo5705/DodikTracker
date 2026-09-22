@@ -29,9 +29,13 @@ async function getSettingsMap() {
 settingsRouter.get('/settings', requireAuth, requireStaff('MANAGE_SETTINGS'), async (_req: AuthRequest, res: Response) => {
   try {
     const map = await getSettingsMap();
+    const mode = (map.site_access_mode || 'OPEN').toUpperCase();
+    const validModes = ['OPEN', 'INVITE_ONLY', 'CLOSED', 'MAINTENANCE'];
+    const safeMode = validModes.includes(mode) ? mode : 'OPEN';
+
     res.json({
-      site_access_mode: map.site_access_mode || 'OPEN',
-      siteAccessMode: map.site_access_mode || 'OPEN',
+      site_access_mode: safeMode,
+      siteAccessMode: safeMode,
       maintenance_message: map.maintenance_message || 'Сервис находится на техническом обслуживании',
       site_name: map.site_name || 'Dodik Tracker',
       siteName: map.site_name || 'Dodik Tracker',
@@ -75,7 +79,9 @@ const handleUpdateSettings = async (req: AuthRequest, res: Response) => {
     };
 
     const validModes = ['OPEN', 'INVITE_ONLY', 'CLOSED', 'MAINTENANCE'];
-    const updatedKeys: string[] = [];
+
+    // 1. Group updates strictly by dbKey to prevent alias overwrites
+    const normalizedUpdates: Record<string, string> = {};
 
     for (const [rawKey, val] of Object.entries(updates)) {
       const dbKey = keyMapping[rawKey];
@@ -88,36 +94,51 @@ const handleUpdateSettings = async (req: AuthRequest, res: Response) => {
         stringVal = String(val);
       }
 
-      // Validate registration mode if applicable
       if (dbKey === 'site_access_mode') {
+        stringVal = stringVal.toUpperCase();
         if (!validModes.includes(stringVal)) {
           continue;
         }
       }
 
+      // If snake_case key is passed, give it precedence over alias camelCase key
+      if (normalizedUpdates[dbKey] === undefined || rawKey === dbKey) {
+        normalizedUpdates[dbKey] = stringVal;
+      }
+    }
+
+    const updatedKeys: string[] = [];
+
+    // 2. Persist normalized settings to system_settings table
+    for (const [dbKey, stringVal] of Object.entries(normalizedUpdates)) {
       const [existing] = await db.select().from(systemSettings).where(eq(systemSettings.key, dbKey)).limit(1);
       if (existing) {
         await db.update(systemSettings).set({ value: stringVal, updatedAt: new Date() }).where(eq(systemSettings.key, dbKey));
       } else {
-        await db.insert(systemSettings).values({ key: dbKey, value: stringVal });
+        await db.insert(systemSettings).values({ key: dbKey, value: stringVal, description: 'Системная настройка' });
       }
       updatedKeys.push(dbKey);
     }
 
-    await logAdminAction({
-      userId: actor.id,
-      action: 'UPDATE_SETTINGS',
-      details: `Обновлены системные настройки: ${Array.from(new Set(updatedKeys)).join(', ')}`,
-      ip: req.ip,
-    });
+    if (updatedKeys.length > 0) {
+      await logAdminAction({
+        userId: actor.id,
+        action: 'UPDATE_SETTINGS',
+        details: `Обновлены системные настройки: ${updatedKeys.join(', ')}`,
+        ip: req.ip,
+      });
+    }
 
     const map = await getSettingsMap();
+    const mode = (map.site_access_mode || 'OPEN').toUpperCase();
+    const safeMode = validModes.includes(mode) ? mode : 'OPEN';
+
     res.json({
       success: true,
       message: 'Настройки успешно сохранены',
       settings: {
-        site_access_mode: map.site_access_mode || 'OPEN',
-        siteAccessMode: map.site_access_mode || 'OPEN',
+        site_access_mode: safeMode,
+        siteAccessMode: safeMode,
         maintenance_message: map.maintenance_message || 'Сервис находится на техническом обслуживании',
         site_name: map.site_name || 'Dodik Tracker',
         siteName: map.site_name || 'Dodik Tracker',

@@ -21,6 +21,7 @@ export interface DbUser {
   activityVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   listVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   statisticsVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
+  showAdultContent?: boolean;
   telegramUsername?: string | null;
   telegramChatId?: string | null;
   telegramId?: string | null;

@@ -18,6 +18,8 @@ export interface MediaCardItem {
   totalEpisodes?: number;
   isFavorite?: boolean;
   userMediaId?: number;
+  isAdult?: boolean;
+  ageRating?: string;
 }
 
 interface MediaCardProps {
@@ -117,6 +119,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({
           <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-[#9A94AA] text-xs">
             <Film className="w-6 h-6 mb-1 text-zinc-600" />
             <span className="line-clamp-2">{media.title}</span>
+          </div>
+        )}
+
+        {/* 18+ Adult Badge */}
+        {(media.isAdult || media.ageRating === '18+' || media.ageRating === '18') && (
+          <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-red-600/90 text-white text-[10px] font-black tracking-wider border border-red-500/50 shadow z-10">
+            18+
           </div>
         )}
 
