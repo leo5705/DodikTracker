@@ -200,24 +200,24 @@ export const AuthGatekeeper: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0A090D] text-[#F3F1F8] flex flex-col justify-center items-center p-4 relative overflow-hidden select-none">
+    <div className="min-h-screen bg-[#080A18] text-[#F8FAFC] flex flex-col justify-center items-center p-4 relative overflow-hidden select-none">
       {/* Ambient background glows */}
-      <div className="absolute top-1/4 -left-20 w-96 h-96 bg-purple-900/20 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-1/4 -right-20 w-96 h-96 bg-indigo-900/20 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-1/4 -left-20 w-96 h-96 bg-purple-900/15 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-1/4 -right-20 w-96 h-96 bg-indigo-900/15 rounded-full blur-3xl pointer-events-none" />
 
       <div className="w-full max-w-md relative z-10 space-y-6">
         {/* Brand header */}
         <div className="text-center space-y-3">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#191724] border border-[#2E2A40] text-xs text-[#AC82FF] font-medium shadow-inner">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#11152A] border border-[#1E2442] text-xs text-[#A78BFA] font-medium shadow-inner">
             <Lock className="w-3.5 h-3.5" />
             <span>Закрытый трекер медиа</span>
           </div>
 
-          <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-[#F3F1F8] font-mono">
+          <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-[#F8FAFC] font-mono">
             DODIK TRACKER
           </h1>
 
-          <p className="text-xs text-[#9A94AA] max-w-xs mx-auto leading-relaxed">
+          <p className="text-xs text-[#94A3B8] max-w-xs mx-auto leading-relaxed">
             Вход доступен только зарегистрированным участникам сообщества.
           </p>
         </div>
@@ -232,7 +232,7 @@ export const AuthGatekeeper: React.FC = () => {
               </span>
             )}
             {regMode === 'INVITE_ONLY' && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-medium bg-purple-500/10 border border-purple-500/30 text-[#AC82FF]">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-medium bg-purple-500/10 border border-purple-500/30 text-[#A78BFA]">
                 <Ticket className="w-3 h-3" />
                 Регистрация только по инвайт-кодам
               </span>
@@ -253,9 +253,9 @@ export const AuthGatekeeper: React.FC = () => {
         )}
 
         {/* Main Auth Card */}
-        <div className="p-6 rounded-3xl bg-[#14131A] border border-[#252233] shadow-2xl space-y-5">
+        <div className="p-6 rounded-3xl bg-[#11152A] border border-[#1E2442] shadow-2xl shadow-black/80 space-y-5">
           {/* Tabs */}
-          <div className="flex rounded-2xl bg-[#0F0E12] p-1 border border-[#252233]">
+          <div className="flex rounded-2xl bg-[#0B0D20] p-1 border border-[#1E2442]">
             <button
               onClick={() => {
                 setTab('LOGIN');
@@ -263,8 +263,8 @@ export const AuthGatekeeper: React.FC = () => {
               }}
               className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all ${
                 tab === 'LOGIN'
-                  ? 'bg-[#9B6BFF] text-white shadow-md'
-                  : 'text-[#9A94AA] hover:text-[#F3F1F8]'
+                  ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md'
+                  : 'text-[#94A3B8] hover:text-[#F8FAFC]'
               }`}
             >
               Вход
@@ -276,8 +276,8 @@ export const AuthGatekeeper: React.FC = () => {
               }}
               className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all ${
                 tab === 'REGISTER'
-                  ? 'bg-[#9B6BFF] text-white shadow-md'
-                  : 'text-[#9A94AA] hover:text-[#F3F1F8]'
+                  ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md'
+                  : 'text-[#94A3B8] hover:text-[#F8FAFC]'
               }`}
             >
               Регистрация
@@ -290,8 +290,8 @@ export const AuthGatekeeper: React.FC = () => {
               }}
               className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all ${
                 tab === 'TELEGRAM'
-                  ? 'bg-[#9B6BFF] text-white shadow-md'
-                  : 'text-[#9A94AA] hover:text-[#F3F1F8]'
+                  ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md'
+                  : 'text-[#94A3B8] hover:text-[#F8FAFC]'
               }`}
             >
               Telegram
@@ -310,31 +310,31 @@ export const AuthGatekeeper: React.FC = () => {
           {tab === 'LOGIN' && (
             <form onSubmit={handleLoginSubmit} className="space-y-4">
               <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#9A94AA]">Email или Username</label>
+                <label className="text-[11px] font-semibold text-[#94A3B8]">Email или Username</label>
                 <div className="relative">
-                  <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#9A94AA]" />
+                  <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#64748B]" />
                   <input
                     type="text"
                     required
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
                     placeholder="vasya или user@example.com"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                   />
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#9A94AA]">Пароль</label>
+                <label className="text-[11px] font-semibold text-[#94A3B8]">Пароль</label>
                 <div className="relative">
-                  <KeyRound className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#9A94AA]" />
+                  <KeyRound className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#64748B]" />
                   <input
                     type="password"
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                   />
                 </div>
               </div>
@@ -342,7 +342,7 @@ export const AuthGatekeeper: React.FC = () => {
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full py-2.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-bold transition-all shadow-lg shadow-purple-950/50 flex items-center justify-center gap-2"
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-bold transition-all shadow-md shadow-[#7C3AED]/25 flex items-center justify-center gap-2 cursor-pointer"
               >
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Войти в аккаунт'}
               </button>
@@ -353,39 +353,39 @@ export const AuthGatekeeper: React.FC = () => {
           {tab === 'REGISTER' && (
             <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
               <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#9A94AA]">Желаемый Username</label>
+                <label className="text-[11px] font-semibold text-[#94A3B8]">Желаемый Username</label>
                 <div className="relative">
-                  <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#9A94AA]" />
+                  <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#64748B]" />
                   <input
                     type="text"
                     required
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="dodik_master"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                   />
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#9A94AA]">Пароль</label>
+                <label className="text-[11px] font-semibold text-[#94A3B8]">Пароль</label>
                 <div className="relative">
-                  <KeyRound className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#9A94AA]" />
+                  <KeyRound className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#64748B]" />
                   <input
                     type="password"
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Минимум 6 символов"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                   />
                 </div>
               </div>
 
               {regMode === 'INVITE_ONLY' ? (
                 <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-[#AC82FF] flex items-center gap-1">
-                    <Ticket className="w-3.5 h-3.5" />
+                  <label className="text-[11px] font-semibold text-[#A78BFA] flex items-center gap-1">
+                    <Ticket className="w-3.5 h-3.5 text-[#8B5CF6]" />
                     Инвайт-код (обязательно)
                   </label>
                   <input
@@ -394,13 +394,13 @@ export const AuthGatekeeper: React.FC = () => {
                     value={inviteCode}
                     onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
                     placeholder="Например: DODIK-X79K2L"
-                    className="w-full px-3 py-2.5 rounded-xl bg-[#191724] border border-[#AC82FF]/40 text-xs font-mono text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+                    className="w-full px-3 py-2.5 rounded-xl bg-[#0B0D20] border border-[#8B5CF6]/40 text-xs font-mono text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6]"
                   />
                 </div>
               ) : regMode === 'OPEN' ? (
                 <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-[#9A94AA] flex items-center gap-1">
-                    <Ticket className="w-3.5 h-3.5" />
+                  <label className="text-[11px] font-semibold text-[#94A3B8] flex items-center gap-1">
+                    <Ticket className="w-3.5 h-3.5 text-[#8B5CF6]" />
                     Инвайт-код (если есть)
                   </label>
                   <input
@@ -408,7 +408,7 @@ export const AuthGatekeeper: React.FC = () => {
                     value={inviteCode}
                     onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
                     placeholder="Необязательно (например: DODIK-X79K2L)"
-                    className="w-full px-3 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs font-mono text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+                    className="w-full px-3 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs font-mono text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6]"
                   />
                 </div>
               ) : null}
@@ -421,7 +421,7 @@ export const AuthGatekeeper: React.FC = () => {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full py-2.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-bold transition-all shadow-lg shadow-purple-950/50 flex items-center justify-center gap-2"
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-bold transition-all shadow-md shadow-[#7C3AED]/25 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Зарегистрироваться'}
                 </button>
@@ -432,7 +432,7 @@ export const AuthGatekeeper: React.FC = () => {
           {/* TAB 3: TELEGRAM */}
           {tab === 'TELEGRAM' && (
             <div className="space-y-4">
-              <p className="text-xs text-[#9A94AA] text-center leading-relaxed">
+              <p className="text-xs text-[#94A3B8] text-center leading-relaxed">
                 Быстрый и защищённый вход через Telegram-бота. Не требует ввода пароля.
               </p>
 
@@ -451,21 +451,21 @@ export const AuthGatekeeper: React.FC = () => {
                       setTab('LOGIN');
                       setError(null);
                     }}
-                    className="w-full py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-semibold border border-amber-500/30 transition-colors"
+                    className="w-full py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-semibold border border-amber-500/30 transition-colors cursor-pointer"
                   >
                     Перейти к обычному входу
                   </button>
                 </div>
               ) : tgLoading && !tgCode ? (
-                <div className="py-8 flex flex-col items-center justify-center gap-2 text-[#9A94AA] text-xs">
-                  <Loader2 className="w-6 h-6 animate-spin text-[#AC82FF]" />
-                  <span>Подключение к Telegram-боту...</span>
+                <div className="py-8 flex flex-col items-center justify-center gap-2 text-[#94A3B8] text-xs">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#8B5CF6]" />
+                  <span className="font-mono">Подключение к Telegram-боту...</span>
                 </div>
               ) : tgCode ? (
                 <div className="space-y-3">
-                  <div className="p-4 rounded-2xl bg-[#191724] border border-[#2E2A40] space-y-3 text-center">
-                    <p className="text-[11px] text-[#9A94AA] uppercase font-semibold">Ваш одноразовый код:</p>
-                    <div className="text-3xl font-mono font-black text-[#AC82FF] tracking-widest">
+                  <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-3 text-center">
+                    <p className="text-[11px] text-[#94A3B8] uppercase font-semibold font-mono">Ваш одноразовый код:</p>
+                    <div className="text-3xl font-mono font-black text-[#A78BFA] tracking-widest">
                       {tgCode}
                     </div>
 
@@ -483,7 +483,7 @@ export const AuthGatekeeper: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => copyToClipboard(`/login ${tgCode}`)}
-                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#252233] hover:bg-[#2E2A40] text-xs font-mono text-[#D5D0E3] transition-colors"
+                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#151932] hover:bg-[#1A1F3E] text-xs font-mono text-[#CBD5E1] border border-[#1E2442] transition-colors cursor-pointer"
                       >
                         {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                         <span>/login {tgCode}</span>
@@ -491,8 +491,8 @@ export const AuthGatekeeper: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="rounded-xl bg-[#14131A] p-3 border border-[#252233] text-[11px] text-[#9A94AA] space-y-1">
-                    <p className="text-[#F3F1F8] font-medium">Инструкция:</p>
+                  <div className="rounded-xl bg-[#0B0D20] p-3 border border-[#1E2442] text-[11px] text-[#94A3B8] space-y-1">
+                    <p className="text-[#F8FAFC] font-medium">Инструкция:</p>
                     <p>1. Нажмите «Открыть @{tgBotUsername}» или отправьте команду <span className="text-white font-mono">/login {tgCode}</span> боту.</p>
                     <p>2. Дождитесь подтверждения от бота в Telegram.</p>
                     <p>3. Нажмите кнопку «Проверить авторизацию» ниже.</p>
@@ -500,8 +500,8 @@ export const AuthGatekeeper: React.FC = () => {
 
                   {regMode === 'INVITE_ONLY' && (
                     <div className="space-y-1 text-left">
-                      <label className="text-[11px] font-medium text-[#9A94AA] flex items-center gap-1">
-                        <Ticket className="w-3 h-3 text-[#AC82FF]" />
+                      <label className="text-[11px] font-medium text-[#94A3B8] flex items-center gap-1">
+                        <Ticket className="w-3 h-3 text-[#8B5CF6]" />
                         <span>Инвайт-код (если регистрируетесь впервые)</span>
                       </label>
                       <input
@@ -509,7 +509,7 @@ export const AuthGatekeeper: React.FC = () => {
                         value={tgInviteCode}
                         onChange={(e) => setTgInviteCode(e.target.value.toUpperCase())}
                         placeholder="Например: DODIK-..."
-                        className="w-full px-3 py-2 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+                        className="w-full px-3 py-2 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6]"
                       />
                     </div>
                   )}
@@ -518,7 +518,7 @@ export const AuthGatekeeper: React.FC = () => {
                     type="button"
                     onClick={handleVerifyTelegram}
                     disabled={tgLoading}
-                    className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-lg shadow-sky-950/40 flex items-center justify-center gap-2"
+                    className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {tgLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                     <span>Проверить авторизацию</span>
@@ -528,7 +528,7 @@ export const AuthGatekeeper: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleRequestTelegramCode}
-                      className="text-[11px] text-[#6B667B] hover:text-[#9A94AA] transition-colors"
+                      className="text-[11px] text-[#64748B] hover:text-[#94A3B8] transition-colors cursor-pointer"
                     >
                       Получить новый код
                     </button>
@@ -538,7 +538,7 @@ export const AuthGatekeeper: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleRequestTelegramCode}
-                  className="w-full py-2.5 rounded-xl bg-[#191724] hover:bg-[#252233] text-xs font-bold text-[#F3F1F8] border border-[#2E2A40] transition-colors flex items-center justify-center gap-2"
+                  className="w-full py-2.5 rounded-xl bg-[#151932] hover:bg-[#1A1F3E] text-xs font-bold text-[#F8FAFC] border border-[#1E2442] transition-colors flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Send className="w-4 h-4 text-sky-400" />
                   <span>Получить код входа</span>
@@ -548,9 +548,9 @@ export const AuthGatekeeper: React.FC = () => {
           )}
 
           {/* Google Divider & Button */}
-          <div className="pt-2 border-t border-[#252233] space-y-3">
+          <div className="pt-2 border-t border-[#1E2442] space-y-3">
             <div className="relative text-center">
-              <span className="bg-[#14131A] px-2 text-[10px] text-[#6B667B] uppercase tracking-wider font-semibold">
+              <span className="bg-[#11152A] px-2 text-[10px] text-[#64748B] uppercase tracking-wider font-semibold">
                 или через Google
               </span>
             </div>
@@ -558,7 +558,7 @@ export const AuthGatekeeper: React.FC = () => {
             <button
               onClick={handleGoogleLogin}
               disabled={authLoading || submitting}
-              className="w-full py-2.5 px-4 rounded-xl bg-[#191724] hover:bg-[#1E1C29] text-xs font-semibold text-[#F3F1F8] border border-[#2E2A40] hover:border-[#3A344E] transition-all flex items-center justify-center gap-2 shadow-sm"
+              className="w-full py-2.5 px-4 rounded-xl bg-[#0B0D20] hover:bg-[#151932] text-xs font-semibold text-[#F8FAFC] border border-[#1E2442] transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path
@@ -586,7 +586,7 @@ export const AuthGatekeeper: React.FC = () => {
                 href={window.location.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full py-2 px-3 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-[#AC82FF] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                className="w-full py-2 px-3 rounded-xl bg-[#8B5CF6]/10 hover:bg-[#8B5CF6]/20 border border-[#8B5CF6]/30 text-[#A78BFA] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
               >
                 <span>Открыть приложение в новой вкладке</span>
                 <ExternalLink className="w-3.5 h-3.5" />
@@ -596,7 +596,7 @@ export const AuthGatekeeper: React.FC = () => {
         </div>
 
         {/* Footer info */}
-        <p className="text-center text-[10px] text-[#6B667B]">
+        <p className="text-center text-[10px] text-[#64748B]">
           Dodik Tracker &bull; Закрытое медиа-сообщество &bull; 2026
         </p>
       </div>

@@ -6,6 +6,7 @@ import {
   MediaCastMember,
   MediaCrewMember,
   MediaSeasonInfo,
+  MediaVideoItem,
   SimilarMediaItem,
   UnifiedSearchFilters,
   PaginatedResult,
@@ -263,12 +264,27 @@ export class TMDBProvider implements MediaProvider {
     try {
       const isMovie = type.toUpperCase() !== 'TV';
       const endpoint = isMovie
-        ? `https://api.themoviedb.org/3/movie/${externalId}?api_key=${apiKey}&language=ru-RU&append_to_response=credits,similar,release_dates`
-        : `https://api.themoviedb.org/3/tv/${externalId}?api_key=${apiKey}&language=ru-RU&append_to_response=credits,similar,content_ratings`;
+        ? `https://api.themoviedb.org/3/movie/${externalId}?api_key=${apiKey}&language=ru-RU&append_to_response=credits,similar,release_dates,videos`
+        : `https://api.themoviedb.org/3/tv/${externalId}?api_key=${apiKey}&language=ru-RU&append_to_response=credits,similar,content_ratings,videos`;
 
       const res = await fetch(endpoint);
       if (!res.ok) return null;
       let data = await res.json();
+
+      // If Russian videos are sparse or empty, fetch all video languages (ru, en, null)
+      let rawVideos = data.videos?.results || [];
+      if (rawVideos.length === 0) {
+        try {
+          const vEndpoint = `https://api.themoviedb.org/3/${isMovie ? 'movie' : 'tv'}/${externalId}/videos?api_key=${apiKey}&include_video_language=ru,en,null`;
+          const vRes = await fetch(vEndpoint);
+          if (vRes.ok) {
+            const vData = await vRes.json();
+            if (Array.isArray(vData.results) && vData.results.length > 0) {
+              rawVideos = vData.results;
+            }
+          }
+        } catch (_e) {}
+      }
 
       // If Russian overview is missing, try fetching English description
       let description = data.overview;
@@ -282,6 +298,9 @@ export class TMDBProvider implements MediaProvider {
           if (enRes.ok) {
             const enData = await enRes.json();
             description = enData.overview || undefined;
+            if (rawVideos.length === 0 && Array.isArray(enData.videos?.results)) {
+              rawVideos = enData.videos.results;
+            }
           }
         } catch (_e) {}
       }
@@ -368,18 +387,43 @@ export class TMDBProvider implements MediaProvider {
       // Age Rating
       let ageRating: string | undefined;
       if (isMovie && data.release_dates?.results) {
-        const ruRelease = data.release_dates.results.find((r: any) => r.iso_3166_1 === 'RU');
-        const usRelease = data.release_dates.results.find((r: any) => r.iso_3166_1 === 'US');
-        const rel = ruRelease || usRelease;
-        if (rel?.release_dates?.[0]?.certification) {
-          ageRating = rel.release_dates[0].certification;
+        const priorityCountries = ['RU', 'US', 'GB', 'DE', 'FR', 'KR', 'JP'];
+        for (const countryCode of priorityCountries) {
+          const rel = data.release_dates.results.find((r: any) => r.iso_3166_1 === countryCode);
+          if (rel?.release_dates && Array.isArray(rel.release_dates)) {
+            const certObj = rel.release_dates.find((rd: any) => rd.certification && String(rd.certification).trim() !== '');
+            if (certObj) {
+              ageRating = String(certObj.certification).trim();
+              break;
+            }
+          }
+        }
+        if (!ageRating) {
+          // Fallback search across any country's release dates
+          for (const rel of data.release_dates.results) {
+            if (rel?.release_dates && Array.isArray(rel.release_dates)) {
+              const certObj = rel.release_dates.find((rd: any) => rd.certification && String(rd.certification).trim() !== '');
+              if (certObj) {
+                ageRating = String(certObj.certification).trim();
+                break;
+              }
+            }
+          }
         }
       } else if (!isMovie && data.content_ratings?.results) {
-        const ruRating = data.content_ratings.results.find((r: any) => r.iso_3166_1 === 'RU');
-        const usRating = data.content_ratings.results.find((r: any) => r.iso_3166_1 === 'US');
-        const r = ruRating || usRating;
-        if (r?.rating) {
-          ageRating = r.rating;
+        const priorityCountries = ['RU', 'US', 'GB', 'DE', 'KR', 'JP'];
+        for (const countryCode of priorityCountries) {
+          const r = data.content_ratings.results.find((cr: any) => cr.iso_3166_1 === countryCode);
+          if (r?.rating && String(r.rating).trim() !== '') {
+            ageRating = String(r.rating).trim();
+            break;
+          }
+        }
+        if (!ageRating && data.content_ratings.results.length > 0) {
+          const fallback = data.content_ratings.results.find((cr: any) => cr.rating && String(cr.rating).trim() !== '');
+          if (fallback?.rating) {
+            ageRating = String(fallback.rating).trim();
+          }
         }
       }
 
@@ -427,6 +471,50 @@ export class TMDBProvider implements MediaProvider {
         };
       });
 
+      // Parse and prioritize videos & trailers
+      const parsedVideos: MediaVideoItem[] = [];
+      const priorityOrder = (v: any) => {
+        const isRu = (v.iso_639_1 || '').toLowerCase() === 'ru';
+        const isOfficial = Boolean(v.official);
+        const type = (v.type || '').toLowerCase();
+
+        if (type === 'trailer' && isOfficial && isRu) return 1;
+        if (type === 'teaser' && isOfficial && isRu) return 2;
+        if (type === 'trailer' && isOfficial) return 3;
+        if (type === 'teaser' && isOfficial) return 4;
+        if (type === 'trailer') return 5;
+        if (type === 'teaser') return 6;
+        if (type === 'clip' || type === 'featurette') return 7;
+        return 8;
+      };
+
+      const sortedRaw = [...rawVideos].sort((a, b) => priorityOrder(a) - priorityOrder(b));
+
+      for (const v of sortedRaw) {
+        if (!v.key) continue;
+        const site = v.site === 'Vimeo' ? 'Vimeo' : 'YouTube';
+        const url = site === 'YouTube' ? `https://www.youtube.com/watch?v=${v.key}` : `https://vimeo.com/${v.key}`;
+        const embedUrl = site === 'YouTube' ? `https://www.youtube-nocookie.com/embed/${v.key}?autoplay=1&rel=0` : `https://player.vimeo.com/video/${v.key}?autoplay=1`;
+        const thumbnail = site === 'YouTube' ? `https://img.youtube.com/vi/${v.key}/hqdefault.jpg` : undefined;
+
+        parsedVideos.push({
+          id: v.id || v.key,
+          title: v.name || (v.type === 'Trailer' ? 'Официальный трейлер' : v.type || 'Видео'),
+          url,
+          embedUrl,
+          site,
+          key: v.key,
+          type: v.type || 'Trailer',
+          thumbnailUrl: thumbnail,
+          language: v.iso_639_1,
+          official: Boolean(v.official),
+          publishedAt: v.published_at,
+        });
+      }
+
+      const mainTrailer = parsedVideos.find((v) => (v.type || '').toLowerCase() === 'trailer') || parsedVideos[0];
+      const trailerUrl = mainTrailer?.url;
+
       return {
         provider: 'TMDB',
         externalId: String(data.id),
@@ -453,6 +541,8 @@ export class TMDBProvider implements MediaProvider {
         creators: creators && creators.length > 0 ? creators : undefined,
         networks: networks && networks.length > 0 ? networks : undefined,
         seasons,
+        videos: parsedVideos.length > 0 ? parsedVideos : undefined,
+        trailerUrl,
         ageRating,
         statusText,
         countries,

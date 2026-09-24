@@ -32,8 +32,13 @@ import {
   inviteCodes,
   passwordResetTokens,
   directMessages,
+  achievements,
+  userAchievements,
+  mediaRatings,
+  newsComments,
+  newsReactions,
 } from '../db/schema.ts';
-import { eq, and, or, desc, asc, sql, inArray, isNull, ilike, gte, lte, count } from 'drizzle-orm';
+import { eq, and, or, desc, asc, sql, inArray, not, isNull, ilike, gte, lte, count } from 'drizzle-orm';
 import { providerManager } from './providers/index.ts';
 import { UnifiedSearchFilters } from './providers/types.ts';
 import { encryptCredentials, decryptCredentials, maskApiKey } from '../lib/crypto.ts';
@@ -1572,6 +1577,18 @@ apiRouter.get('/auth/me', requireAuth, async (req: AuthRequest, res: Response) =
       .innerJoin(media, eq(userMedia.mediaId, media.id))
       .where(eq(userMedia.userId, user.id));
 
+    let userPts = 0;
+    try {
+      const userAchPoints = await db
+        .select({ totalPoints: sql<number>`COALESCE(SUM(${achievements.points}), 0)` })
+        .from(userAchievements)
+        .innerJoin(achievements, eq(userAchievements.achievementId, achievements.id))
+        .where(eq(userAchievements.userId, user.id));
+      userPts = Number(userAchPoints[0]?.totalPoints || 0);
+    } catch (_err) {
+      userPts = 0;
+    }
+
     const counts = {
       total: libraryRows.length,
       movies: libraryRows.filter((r) => r.type === 'MOVIE').length,
@@ -1582,9 +1599,10 @@ apiRouter.get('/auth/me', requireAuth, async (req: AuthRequest, res: Response) =
       manga: libraryRows.filter((r) => r.type === 'MANGA').length,
       comics: libraryRows.filter((r) => r.type === 'COMIC').length,
       completed: libraryRows.filter((r) => r.status === 'COMPLETED').length,
+      pts: userPts,
     };
 
-    res.json({ user: sanitizeUser(user), counts });
+    res.json({ user: { ...sanitizeUser(user), pts: userPts }, counts });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1670,6 +1688,11 @@ function parseUnifiedFilters(query: any): UnifiedSearchFilters {
 
   const q = query.q !== undefined ? String(query.q).trim() : query.query !== undefined ? String(query.query).trim() : undefined;
 
+  const parseBool = (val: any): boolean => {
+    if (val === true || val === 'true' || val === '1' || val === 1) return true;
+    return false;
+  };
+
   return {
     query: q,
     type: query.type ? String(query.type).toUpperCase() : undefined,
@@ -1680,23 +1703,89 @@ function parseUnifiedFilters(query: any): UnifiedSearchFilters {
     yearTo: num(query.year_to ?? query.yearTo),
     ratingFrom: num(query.rating_from ?? query.ratingFrom),
     ratingTo: num(query.rating_to ?? query.ratingTo),
+    dodikRatingFrom: num(query.dodik_rating_from ?? query.dodikRatingFrom),
+    dodikRatingTo: num(query.dodik_rating_to ?? query.dodikRatingTo),
+    dodikRatingCountFrom: num(query.dodik_votes_from ?? query.dodikRatingCountFrom ?? query.votes_from ?? query.votesFrom),
     votesFrom: num(query.votes_from ?? query.votesFrom),
     durationFrom: num(query.duration_from ?? query.durationFrom),
     durationTo: num(query.duration_to ?? query.durationTo),
     episodesFrom: num(query.episodes_from ?? query.episodesFrom),
     episodesTo: num(query.episodes_to ?? query.episodesTo),
     countries: parseList(query.countries || query.country),
+    ageRatings: parseList(query.age_ratings || query.ageRatings),
+    adultFilter: query.adult_filter || query.adultFilter || 'all',
     platforms: parseList(query.platforms || query.platform),
+    developer: query.developer ? String(query.developer).trim() : undefined,
+    publisher: query.publisher ? String(query.publisher).trim() : undefined,
+    author: query.author ? String(query.author).trim() : undefined,
+    artist: query.artist ? String(query.artist).trim() : undefined,
+    album: query.album ? String(query.album).trim() : undefined,
+    language: query.language ? String(query.language).trim() : undefined,
     status: query.status ? String(query.status) : undefined,
     season: query.season ? String(query.season) : undefined,
     seasonYear: num(query.season_year ?? query.seasonYear),
     animeFormat: query.anime_format ? String(query.anime_format) : (query.animeFormat ? String(query.animeFormat) : undefined),
     gameMode: query.game_mode ? String(query.game_mode) : (query.gameMode ? String(query.gameMode) : undefined),
+    myStatus: query.my_status || query.myStatus || undefined,
+    inLibrary: query.in_library || query.inLibrary || 'any',
+    myRatingState: query.my_rating_state || query.myRatingState || 'any',
+    myRating: num(query.my_rating ?? query.myRating),
+    myRatingFrom: num(query.my_rating_from ?? query.myRatingFrom),
+    myRatingTo: num(query.my_rating_to ?? query.myRatingTo),
+    hasReview: query.has_review || query.hasReview || 'any',
+    hideAdult: parseBool(query.hide_adult ?? query.hideAdult),
+    hideNudity: parseBool(query.hide_nudity ?? query.hideNudity),
+    hideSexualContent: parseBool(query.hide_sexual_content ?? query.hideSexualContent),
+    hideViolence: parseBool(query.hide_violence ?? query.hideViolence),
+    hideExplicitLanguage: parseBool(query.hide_explicit_language ?? query.hideExplicitLanguage),
     sortBy: query.sort_by ? String(query.sort_by) as any : (query.sortBy as any),
     sortOrder: (query.sort_order === 'asc' || query.sortOrder === 'asc') ? 'asc' : 'desc',
     page: num(query.page) || 1,
     limit: num(query.limit) || 20,
   };
+}
+
+// Compute relevance score of an item given a normalized search query
+function calculateSearchRelevance(item: any, rawQuery: string): number {
+  if (!rawQuery) return 0;
+  const q = rawQuery.toLowerCase().trim();
+  const title = String(item.title || '').toLowerCase().trim();
+  const origTitle = String(item.originalTitle || '').toLowerCase().trim();
+  const desc = String(item.description || '').toLowerCase();
+
+  let score = 0;
+
+  // Exact match
+  if (title === q || origTitle === q) {
+    score += 1000;
+  }
+  // Prefix match
+  else if (title.startsWith(q) || origTitle.startsWith(q)) {
+    score += 600;
+  }
+  // Word boundary match
+  else if (new RegExp(`\\b${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(title) ||
+           new RegExp(`\\b${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(origTitle)) {
+    score += 400;
+  }
+  // Substring match in title
+  else if (title.includes(q) || origTitle.includes(q)) {
+    score += 200;
+  }
+  // Match in description
+  else if (desc.includes(q)) {
+    score += 50;
+  }
+
+  // Popularity / Rating bonus for tie breaking
+  if (item.dodikRating && item.dodikRatingCount > 0) {
+    score += Math.min(item.dodikRating * 0.5, 50);
+  }
+  if (item.rating) {
+    score += Math.min(item.rating * 2, 20);
+  }
+
+  return score;
 }
 
 const mediaSearchHandler = async (req: any, res: any) => {
@@ -1706,7 +1795,7 @@ const mediaSearchHandler = async (req: any, res: any) => {
     const rawCategory = req.query.category || req.query.listCategory;
     const categoryFilter = rawCategory ? String(rawCategory).toUpperCase() : undefined;
     let typeFilter = req.query.type ? String(req.query.type).toUpperCase() : undefined;
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '20'), 10) || 20, 1), 50);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '24'), 10) || 24, 1), 50);
     const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
 
     if (!typeFilter && categoryFilter) {
@@ -1715,17 +1804,23 @@ const mediaSearchHandler = async (req: any, res: any) => {
       else if (categoryFilter === 'MANGA') typeFilter = 'MANGA';
       else if (categoryFilter === 'BOOK' || categoryFilter === 'BOOKS') typeFilter = 'BOOK';
       else if (categoryFilter === 'COMIC' || categoryFilter === 'COMICS') typeFilter = 'COMIC';
+      else if (categoryFilter === 'MUSIC') typeFilter = 'MUSIC';
     }
 
     const hasFilterCriteria = Boolean(
       (filters.genres && filters.genres.length > 0) ||
       (filters.countries && filters.countries.length > 0) ||
       (filters.platforms && filters.platforms.length > 0) ||
+      (filters.ageRatings && filters.ageRatings.length > 0) ||
+      (filters.adultFilter && filters.adultFilter !== 'all') ||
       filters.year !== undefined ||
       filters.yearFrom !== undefined ||
       filters.yearTo !== undefined ||
       filters.ratingFrom !== undefined ||
       filters.ratingTo !== undefined ||
+      filters.dodikRatingFrom !== undefined ||
+      filters.dodikRatingTo !== undefined ||
+      filters.dodikRatingCountFrom !== undefined ||
       filters.votesFrom !== undefined ||
       filters.durationFrom !== undefined ||
       filters.durationTo !== undefined ||
@@ -1734,6 +1829,18 @@ const mediaSearchHandler = async (req: any, res: any) => {
       filters.seasonYear !== undefined ||
       filters.animeFormat !== undefined ||
       filters.gameMode !== undefined ||
+      filters.developer !== undefined ||
+      filters.publisher !== undefined ||
+      filters.author !== undefined ||
+      filters.artist !== undefined ||
+      filters.album !== undefined ||
+      filters.language !== undefined ||
+      filters.myStatus !== undefined ||
+      (filters.inLibrary && filters.inLibrary !== 'any') ||
+      (filters.myRatingState && filters.myRatingState !== 'any') ||
+      filters.myRatingFrom !== undefined ||
+      filters.myRatingTo !== undefined ||
+      (filters.hasReview && filters.hasReview !== 'any') ||
       filters.sortBy !== undefined ||
       (typeFilter && typeFilter !== 'ALL') ||
       (categoryFilter && categoryFilter !== 'ALL')
@@ -1755,9 +1862,10 @@ const mediaSearchHandler = async (req: any, res: any) => {
         localConditions.push(eq(media.isHidden, false));
       }
 
-      if (query && query.length >= 2) {
+      if (query && query.length >= 1) {
+        const cleanQ = query.trim().toLowerCase();
         localConditions.push(
-          sql`(LOWER(${media.title}) LIKE ${'%' + query.toLowerCase() + '%'} OR LOWER(COALESCE(${media.originalTitle}, '')) LIKE ${'%' + query.toLowerCase() + '%'})`
+          sql`(LOWER(${media.title}) LIKE ${'%' + cleanQ + '%'} OR LOWER(COALESCE(${media.originalTitle}, '')) LIKE ${'%' + cleanQ + '%'})`
         );
       }
 
@@ -1776,6 +1884,8 @@ const mediaSearchHandler = async (req: any, res: any) => {
           localConditions.push(eq(media.type, 'BOOK'));
         } else if (categoryFilter === 'COMIC' || categoryFilter === 'COMICS') {
           localConditions.push(eq(media.type, 'COMIC'));
+        } else if (categoryFilter === 'MUSIC') {
+          localConditions.push(eq(media.type, 'MUSIC'));
         }
       }
 
@@ -1791,6 +1901,23 @@ const mediaSearchHandler = async (req: any, res: any) => {
       if (filters.ratingFrom !== undefined) localConditions.push(gte(media.rating, filters.ratingFrom));
       if (filters.ratingTo !== undefined) localConditions.push(lte(media.rating, filters.ratingTo));
 
+      // Dodik Tracker Rating filter
+      if (filters.dodikRatingFrom !== undefined) localConditions.push(gte(media.dodikRating, filters.dodikRatingFrom));
+      if (filters.dodikRatingTo !== undefined) localConditions.push(lte(media.dodikRating, filters.dodikRatingTo));
+      if (filters.dodikRatingCountFrom !== undefined) localConditions.push(gte(media.dodikRatingCount, filters.dodikRatingCountFrom));
+
+      // Age Rating filter
+      if (filters.ageRatings && filters.ageRatings.length > 0) {
+        localConditions.push(inArray(media.ageRating, filters.ageRatings));
+      }
+
+      // Adult Filter
+      if (filters.adultFilter === 'hide_adult' || filters.hideAdult) {
+        localConditions.push(eq(media.isAdult, false));
+      } else if (filters.adultFilter === 'only_adult') {
+        localConditions.push(eq(media.isAdult, true));
+      }
+
       // Genres
       if (filters.genres && filters.genres.length > 0) {
         const genreConditions = filters.genres.map((g) => ilike(media.genres, `%${g}%`));
@@ -1803,7 +1930,11 @@ const mediaSearchHandler = async (req: any, res: any) => {
           dbQuery = dbQuery.where(and(...localConditions)) as any;
         }
 
-        if (filters.sortBy === 'rating') {
+        if ((filters.sortBy as string) === 'dodik_rating' || (filters.sortBy as string) === 'dodikRating') {
+          dbQuery = (filters.sortOrder === 'asc' ? dbQuery.orderBy(asc(media.dodikRating)) : dbQuery.orderBy(desc(media.dodikRating))) as any;
+        } else if ((filters.sortBy as string) === 'dodik_votes' || (filters.sortBy as string) === 'dodikRatingCount') {
+          dbQuery = (filters.sortOrder === 'asc' ? dbQuery.orderBy(asc(media.dodikRatingCount)) : dbQuery.orderBy(desc(media.dodikRatingCount))) as any;
+        } else if (filters.sortBy === 'rating') {
           dbQuery = (filters.sortOrder === 'asc' ? dbQuery.orderBy(asc(media.rating)) : dbQuery.orderBy(desc(media.rating))) as any;
         } else if (filters.sortBy === 'release_date') {
           dbQuery = (filters.sortOrder === 'asc' ? dbQuery.orderBy(asc(media.year)) : dbQuery.orderBy(desc(media.year))) as any;
@@ -1825,6 +1956,10 @@ const mediaSearchHandler = async (req: any, res: any) => {
           backdropUrl: item.backdropUrl,
           year: item.year,
           rating: item.rating,
+          dodikRating: item.dodikRating,
+          dodikRatingCount: item.dodikRatingCount,
+          isAdult: item.isAdult,
+          ageRating: item.ageRating,
         }));
       } catch (dbErr) {
         console.warn('Local DB search error:', dbErr);
@@ -1908,7 +2043,243 @@ const mediaSearchHandler = async (req: any, res: any) => {
       combined = combined.filter((i) => i.year === undefined || i.year <= filters.yearTo!);
     }
 
-    combined = ContentVisibilityService.filterAccessibleContent(req.dbUser, combined);
+    // Resolve local mediaId for external provider items to link user data and Dodik ratings
+    const unresolvedExt = combined
+      .filter((i: any) => !i.mediaId && i.provider && i.externalId)
+      .map((i: any) => ({ provider: String(i.provider).toUpperCase(), externalId: String(i.externalId) }));
+
+    if (unresolvedExt.length > 0) {
+      try {
+        const extConditions = unresolvedExt.slice(0, 50).map((p) =>
+          and(eq(mediaExternalIds.provider, p.provider), eq(mediaExternalIds.externalId, p.externalId))
+        );
+        if (extConditions.length > 0) {
+          const matchedExternal = await db
+            .select({
+              provider: mediaExternalIds.provider,
+              externalId: mediaExternalIds.externalId,
+              mediaId: mediaExternalIds.mediaId,
+            })
+            .from(mediaExternalIds)
+            .where(or(...extConditions));
+
+          const extMap = new Map<string, number>();
+          matchedExternal.forEach((me) => extMap.set(`${me.provider.toUpperCase()}:${me.externalId}`, me.mediaId));
+
+          combined.forEach((item: any) => {
+            if (!item.mediaId && item.provider && item.externalId) {
+              const matchedId = extMap.get(`${String(item.provider).toUpperCase()}:${String(item.externalId)}`);
+              if (matchedId) item.mediaId = matchedId;
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Batch mediaExternalIds resolution error:', err);
+      }
+    }
+
+    // Enrich items with user ratings/status, user reviews, and Dodik Tracker ratings
+    const allMediaIds = combined.map((i: any) => i.mediaId).filter(Boolean);
+    const userRatingsMap = new Map<number, number>();
+    const userStatusMap = new Map<number, string>();
+    const userReviewsSet = new Set<number>();
+    const dodikRatingsMap = new Map<number, { averageRating: number | null; ratingCount: number }>();
+
+    if (allMediaIds.length > 0) {
+      // Fetch Dodik ratings
+      const dodikRows = await db
+        .select({
+          mediaId: mediaRatings.mediaId,
+          rating: mediaRatings.rating,
+        })
+        .from(mediaRatings)
+        .where(inArray(mediaRatings.mediaId, allMediaIds));
+
+      const ratingGroups = new Map<number, number[]>();
+      dodikRows.forEach((r) => {
+        if (!ratingGroups.has(r.mediaId)) ratingGroups.set(r.mediaId, []);
+        ratingGroups.get(r.mediaId)!.push(r.rating);
+      });
+
+      ratingGroups.forEach((arr, mId) => {
+        const count = arr.length;
+        const avg = count > 0 ? Math.round((arr.reduce((a, b) => a + b, 0) / count) * 10) / 10 : null;
+        dodikRatingsMap.set(mId, { averageRating: avg, ratingCount: count });
+      });
+
+      // Fetch User ratings, status, and reviews if user is authenticated
+      if (req.dbUser) {
+        const userMediaRows = await db
+          .select({
+            mediaId: userMedia.mediaId,
+            rating: userMedia.rating,
+            status: userMedia.status,
+          })
+          .from(userMedia)
+          .where(and(eq(userMedia.userId, req.dbUser.id), inArray(userMedia.mediaId, allMediaIds)));
+
+        userMediaRows.forEach((r) => {
+          if (r.rating) userRatingsMap.set(r.mediaId, r.rating);
+          if (r.status) userStatusMap.set(r.mediaId, r.status);
+        });
+
+        const userRatingRows = await db
+          .select({
+            mediaId: mediaRatings.mediaId,
+            rating: mediaRatings.rating,
+          })
+          .from(mediaRatings)
+          .where(and(eq(mediaRatings.userId, req.dbUser.id), inArray(mediaRatings.mediaId, allMediaIds)));
+
+        userRatingRows.forEach((r) => {
+          if (!userRatingsMap.has(r.mediaId)) userRatingsMap.set(r.mediaId, r.rating);
+        });
+
+        const userReviewRows = await db
+          .select({ mediaId: reviews.mediaId })
+          .from(reviews)
+          .where(and(eq(reviews.userId, req.dbUser.id), inArray(reviews.mediaId, allMediaIds)));
+
+        userReviewRows.forEach((r) => userReviewsSet.add(r.mediaId));
+      }
+    }
+
+    // Attach enriched fields
+    combined = combined.map((item: any) => {
+      const mId = item.mediaId;
+      const dodik = mId ? dodikRatingsMap.get(mId) : undefined;
+      const uRating = mId ? userRatingsMap.get(mId) : undefined;
+      const uStatus = mId ? userStatusMap.get(mId) : undefined;
+      const hasRev = mId ? userReviewsSet.has(mId) : false;
+
+      const computedDodikRating = dodik?.averageRating ?? (item.dodikRating !== undefined && item.dodikRating !== null ? item.dodikRating : null);
+      const computedDodikCount = dodik?.ratingCount ?? item.dodikRatingCount ?? 0;
+
+      return {
+        ...item,
+        dodikRating: computedDodikRating,
+        dodikRatingCount: computedDodikCount,
+        userRating: uRating || item.userRating || null,
+        userStatus: uStatus || item.userStatus || null,
+        hasUserReview: hasRev,
+      };
+    });
+
+    // Personal Library Post-filters (when requested)
+    if (filters.myStatus) {
+      combined = combined.filter((i: any) => i.userStatus === filters.myStatus);
+    }
+    if (filters.inLibrary === 'in_library') {
+      combined = combined.filter((i: any) => Boolean(i.userStatus));
+    } else if (filters.inLibrary === 'not_in_library') {
+      combined = combined.filter((i: any) => !i.userStatus);
+    }
+
+    if (filters.myRatingState === 'rated') {
+      combined = combined.filter((i: any) => i.userRating !== null && i.userRating !== undefined);
+    } else if (filters.myRatingState === 'unrated') {
+      combined = combined.filter((i: any) => i.userRating === null || i.userRating === undefined);
+    }
+
+    if (filters.myRating !== undefined) {
+      combined = combined.filter((i: any) => i.userRating === filters.myRating);
+    }
+    if (filters.myRatingFrom !== undefined) {
+      combined = combined.filter((i: any) => i.userRating !== null && i.userRating !== undefined && i.userRating >= filters.myRatingFrom!);
+    }
+    if (filters.myRatingTo !== undefined) {
+      combined = combined.filter((i: any) => i.userRating !== null && i.userRating !== undefined && i.userRating <= filters.myRatingTo!);
+    }
+
+    // Dodik Tracker Ratings Post-filter
+    if (filters.dodikRatingFrom !== undefined) {
+      combined = combined.filter((i: any) => i.dodikRating !== null && i.dodikRating !== undefined && i.dodikRating >= filters.dodikRatingFrom!);
+    }
+    if (filters.dodikRatingTo !== undefined) {
+      combined = combined.filter((i: any) => i.dodikRating !== null && i.dodikRating !== undefined && i.dodikRating <= filters.dodikRatingTo!);
+    }
+    if (filters.dodikRatingCountFrom !== undefined) {
+      combined = combined.filter((i: any) => (i.dodikRatingCount || 0) >= filters.dodikRatingCountFrom!);
+    }
+
+    if (filters.hasReview === 'with_review') {
+      combined = combined.filter((i: any) => Boolean(i.hasUserReview));
+    } else if (filters.hasReview === 'without_review') {
+      combined = combined.filter((i: any) => !i.hasUserReview);
+    }
+
+    // Dodik Tracker Rating range post-filter
+    if (filters.dodikRatingFrom !== undefined) {
+      combined = combined.filter((i: any) => i.dodikRating !== null && i.dodikRating >= filters.dodikRatingFrom!);
+    }
+    if (filters.dodikRatingTo !== undefined) {
+      combined = combined.filter((i: any) => i.dodikRating !== null && i.dodikRating <= filters.dodikRatingTo!);
+    }
+    if (filters.dodikRatingCountFrom !== undefined) {
+      combined = combined.filter((i: any) => (i.dodikRatingCount || 0) >= filters.dodikRatingCountFrom!);
+    }
+
+    // Developer / Publisher post-filter
+    if (filters.developer) {
+      const devQuery = filters.developer.toLowerCase();
+      combined = combined.filter((i: any) => {
+        const devs = Array.isArray(i.developers) ? i.developers : [i.developer || ''];
+        return devs.some((d: string) => String(d).toLowerCase().includes(devQuery));
+      });
+    }
+    if (filters.publisher) {
+      const pubQuery = filters.publisher.toLowerCase();
+      combined = combined.filter((i: any) => {
+        const pubs = Array.isArray(i.publishers) ? i.publishers : [i.publisher || ''];
+        return pubs.some((p: string) => String(p).toLowerCase().includes(pubQuery));
+      });
+    }
+
+    // Sorting logic
+    if (filters.sortBy === 'relevance' || (!filters.sortBy && query)) {
+      combined.sort((a: any, b: any) => {
+        const relA = calculateSearchRelevance(a, query);
+        const relB = calculateSearchRelevance(b, query);
+        return relB - relA;
+      });
+    } else if ((filters.sortBy as string) === 'dodik_rating' || (filters.sortBy as string) === 'dodikRating') {
+      const isAsc = filters.sortOrder === 'asc';
+      combined.sort((a: any, b: any) => {
+        const valA = a.dodikRating !== null && a.dodikRating !== undefined ? a.dodikRating : (isAsc ? 9999 : -1);
+        const valB = b.dodikRating !== null && b.dodikRating !== undefined ? b.dodikRating : (isAsc ? 9999 : -1);
+        return isAsc ? valA - valB : valB - valA;
+      });
+    } else if ((filters.sortBy as string) === 'dodik_votes' || (filters.sortBy as string) === 'dodikRatingCount') {
+      const isAsc = filters.sortOrder === 'asc';
+      combined.sort((a: any, b: any) => {
+        const valA = a.dodikRatingCount ?? 0;
+        const valB = b.dodikRatingCount ?? 0;
+        return isAsc ? valA - valB : valB - valA;
+      });
+    } else if (filters.sortBy === 'rating') {
+      const isAsc = filters.sortOrder === 'asc';
+      combined.sort((a: any, b: any) => {
+        const valA = a.rating ?? 0;
+        const valB = b.rating ?? 0;
+        return isAsc ? valA - valB : valB - valA;
+      });
+    } else if (filters.sortBy === 'release_date') {
+      const isAsc = filters.sortOrder === 'asc';
+      combined.sort((a: any, b: any) => {
+        const valA = a.year ?? 0;
+        const valB = b.year ?? 0;
+        return isAsc ? valA - valB : valB - valA;
+      });
+    } else if (filters.sortBy === 'title') {
+      const isAsc = filters.sortOrder === 'asc';
+      combined.sort((a: any, b: any) => {
+        const valA = String(a.title || '');
+        const valB = String(b.title || '');
+        return isAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      });
+    }
+
+    combined = ContentVisibilityService.filterAccessibleContent(req.dbUser, combined, filters);
 
     res.json({
       results: combined,
@@ -1922,9 +2293,100 @@ const mediaSearchHandler = async (req: any, res: any) => {
   }
 };
 
+// Autocomplete search endpoint for fast typeahead
+const mediaAutocompleteHandler = async (req: any, res: any) => {
+  try {
+    const rawQuery = String(req.query.q || req.query.query || '').trim();
+    if (!rawQuery || rawQuery.length < 1) {
+      return res.json({ results: [] });
+    }
+
+    const typeFilter = req.query.type ? String(req.query.type).toUpperCase() : undefined;
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '8'), 10) || 8, 1), 15);
+    const isSuperAdmin = req.dbUser?.role === 'SUPER_ADMIN';
+
+    // 1. Search local DB with LIKE matching on title and original title
+    const localConditions: any[] = [];
+    if (!isSuperAdmin) {
+      localConditions.push(eq(media.isHidden, false));
+    }
+    const cleanQ = rawQuery.toLowerCase();
+    localConditions.push(
+      sql`(LOWER(${media.title}) LIKE ${'%' + cleanQ + '%'} OR LOWER(COALESCE(${media.originalTitle}, '')) LIKE ${'%' + cleanQ + '%'})`
+    );
+
+    if (typeFilter && typeFilter !== 'ALL') {
+      localConditions.push(eq(media.type, typeFilter));
+    }
+
+    let localItems: any[] = [];
+    try {
+      localItems = await db
+        .select()
+        .from(media)
+        .where(and(...localConditions))
+        .limit(limit);
+    } catch (e) {
+      console.warn('Autocomplete local search err:', e);
+    }
+
+    let results: any[] = localItems.map((item) => ({
+      provider: 'DODIK_DB',
+      externalId: String(item.id),
+      mediaId: item.id,
+      type: item.type,
+      title: item.title,
+      originalTitle: item.originalTitle,
+      year: item.year,
+      posterUrl: item.posterUrl,
+      rating: item.rating,
+      dodikRating: item.dodikRating,
+      isAdult: item.isAdult,
+      ageRating: item.ageRating,
+    }));
+
+    // 2. If results are few and query length >= 2, supplement with fast provider search
+    if (results.length < limit && rawQuery.length >= 2) {
+      try {
+        const ext = await providerManager.search(rawQuery, typeFilter, 1, limit);
+        const extResults = ext.results || [];
+        results = [...results, ...extResults];
+      } catch (e) {
+        // Ignore provider timeout for autocomplete
+      }
+    }
+
+    // Deduplicate
+    const seen = new Set<string>();
+    results = results.filter((item: any) => {
+      const key = item.mediaId ? `media-${item.mediaId}` : `${item.provider}-${item.externalId}`;
+      const titleKey = `${item.type}-${(item.title || '').trim().toLowerCase()}-${item.year || ''}`;
+      if (seen.has(key) || (titleKey.length > 5 && seen.has(titleKey))) return false;
+      seen.add(key);
+      seen.add(titleKey);
+      return true;
+    });
+
+    // Rank by relevance
+    results.sort((a, b) => calculateSearchRelevance(b, rawQuery) - calculateSearchRelevance(a, rawQuery));
+
+    // Filter 18+ content based on user preference
+    results = ContentVisibilityService.filterAccessibleContent(req.dbUser, results);
+
+    res.json({ results: results.slice(0, limit) });
+  } catch (err: any) {
+    res.json({ results: [] });
+  }
+};
+
+apiRouter.get('/media/autocomplete', optionalAuth, mediaAutocompleteHandler);
+apiRouter.get('/search/autocomplete', optionalAuth, mediaAutocompleteHandler);
+
 apiRouter.get('/media/search', optionalAuth, mediaSearchHandler);
 apiRouter.get('/search', optionalAuth, mediaSearchHandler);
+apiRouter.get('/search/catalog', optionalAuth, mediaSearchHandler);
 apiRouter.get('/media/catalog', optionalAuth, mediaSearchHandler);
+apiRouter.get('/catalog', optionalAuth, mediaSearchHandler);
 
 // Trending items with pagination and filters
 apiRouter.get('/media/trending', optionalAuth, async (req: AuthRequest, res: Response) => {
@@ -2197,31 +2659,46 @@ apiRouter.get('/media/:id', optionalAuth, async (req: AuthRequest, res: Response
       } catch (_e) {}
     }
 
-    // Calculate Dodik Tracker rating & score distribution
-    const userRatingsRows = await db
-      .select({
-        rating: userMedia.rating,
-      })
-      .from(userMedia)
-      .where(and(eq(userMedia.mediaId, item.id), sql`${userMedia.rating} IS NOT NULL`));
+    // Calculate Dodik Tracker rating & score distribution from mediaRatings table
+    const dodikMetrics = await (async () => {
+      const allRatings = await db
+        .select({ rating: mediaRatings.rating, userId: mediaRatings.userId })
+        .from(mediaRatings)
+        .where(eq(mediaRatings.mediaId, item.id));
 
-    let dodikAverageRating: number | null = null;
-    const dodikRatingCount = userRatingsRows.length;
-    const dodikDistribution: Record<number, number> = {
-      10: 0, 9: 0, 8: 0, 7: 0, 6: 0, 5: 0, 4: 0, 3: 0, 2: 0, 1: 0,
-    };
+      const totalCount = allRatings.length;
+      const avgRating = totalCount > 0
+        ? Math.round((allRatings.reduce((acc, r) => acc + r.rating, 0) / totalCount) * 100) / 100
+        : null;
 
-    if (dodikRatingCount > 0) {
-      let sum = 0;
-      for (const r of userRatingsRows) {
-        const val = r.rating!;
-        sum += val;
-        if (dodikDistribution[val] !== undefined) {
-          dodikDistribution[val]++;
-        }
+      const distribution: Record<string, number> = {};
+      for (let r = 0.5; r <= 10.0; r += 0.5) {
+        distribution[r.toFixed(1)] = 0;
       }
-      dodikAverageRating = Math.round((sum / dodikRatingCount) * 10) / 10;
-    }
+      allRatings.forEach((r) => {
+        const key = (Math.round(r.rating * 2) / 2).toFixed(1);
+        if (distribution[key] !== undefined) {
+          distribution[key]++;
+        }
+      });
+
+      let userRating: number | null = null;
+      if (current) {
+        const found = allRatings.find((r) => r.userId === current.id);
+        if (found) userRating = found.rating;
+      }
+
+      return {
+        averageRating: avgRating,
+        ratingCount: totalCount,
+        distribution,
+        userRating,
+      };
+    })();
+
+    const dodikAverageRating = dodikMetrics.averageRating;
+    const dodikRatingCount = dodikMetrics.ratingCount;
+    const dodikDistribution = dodikMetrics.distribution;
 
     let userTracking = null;
     if (current) {
@@ -2267,6 +2744,10 @@ apiRouter.get('/media/:id', optionalAuth, async (req: AuthRequest, res: Response
       }
     }
 
+    if (!item.ageRating && extDetails?.ageRating) {
+      db.update(media).set({ ageRating: extDetails.ageRating }).where(eq(media.id, item.id)).catch(() => {});
+    }
+
     res.json({
       ...item,
       ...(extDetails || {}),
@@ -2308,12 +2789,692 @@ apiRouter.get('/media/:id', optionalAuth, async (req: AuthRequest, res: Response
       website: extDetails?.website || undefined,
       seasons: extDetails?.seasons || seasonsList,
       similar: extDetails?.similar || [],
-      ageRating: extDetails?.ageRating || undefined,
+      ageRating: extDetails?.ageRating || item.ageRating || undefined,
       statusText: extDetails?.statusText || undefined,
       countries: extDetails?.countries || [],
       runtimeMinutes: extDetails?.runtimeMinutes || undefined,
       durationText: extDetails?.durationText || undefined,
       userTracking,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper to compute Dodik Tracker metrics for media (1–10 scale)
+async function computeDodikRatingData(mediaId: number, currentUserId?: number) {
+  const allRatings = await db
+    .select({ rating: mediaRatings.rating, userId: mediaRatings.userId })
+    .from(mediaRatings)
+    .where(eq(mediaRatings.mediaId, mediaId));
+
+  const totalCount = allRatings.length;
+  // Normalize any legacy ratings if stored on a 100-scale
+  const normalizedRatings = allRatings.map((r) => ({
+    userId: r.userId,
+    rating: r.rating > 10 ? Math.min(10, Math.max(1, Math.round(r.rating / 10))) : Math.min(10, Math.max(1, r.rating)),
+  }));
+
+  const avgRating = totalCount > 0
+    ? Math.round((normalizedRatings.reduce((acc, r) => acc + r.rating, 0) / totalCount) * 10) / 10
+    : null;
+
+  // Distribution on a 1..10 scale
+  const distribution: Record<string, number> = {
+    '10': 0,
+    '9': 0,
+    '8': 0,
+    '7': 0,
+    '6': 0,
+    '5': 0,
+    '4': 0,
+    '3': 0,
+    '2': 0,
+    '1': 0,
+  };
+
+  normalizedRatings.forEach((r) => {
+    const key = String(Math.round(r.rating));
+    if (distribution[key] !== undefined) {
+      distribution[key]++;
+    }
+  });
+
+  // Always keep media.dodikRating and media.dodikRatingCount synchronized in DB
+  await db
+    .update(media)
+    .set({
+      dodikRating: avgRating,
+      dodikRatingCount: totalCount,
+      updatedAt: new Date(),
+    })
+    .where(eq(media.id, mediaId))
+    .catch((err) => console.warn('[computeDodikRatingData] update media error:', err));
+
+  let userRating: number | null = null;
+  if (currentUserId) {
+    const found = normalizedRatings.find((r) => r.userId === currentUserId);
+    if (found) userRating = Math.round(found.rating);
+  }
+
+  return {
+    averageRating: avgRating,
+    ratingCount: totalCount,
+    distribution,
+    userRating,
+    average: avgRating,
+    count: totalCount,
+    myRating: userRating,
+  };
+}
+
+// Handler for Setting or Updating a Rating (1 to 10 integer scale)
+const setRatingHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser;
+    if (!user) {
+      return res.status(401).json({ error: 'Требуется авторизация для выставления оценки' });
+    }
+
+    const idParam = req.params.id;
+    let mediaId = parseInt(idParam, 10);
+    const rawVal = req.body.rating !== undefined ? req.body.rating : (req.body.score !== undefined ? req.body.score : req.body.value);
+
+    if (rawVal === undefined || rawVal === null || rawVal === '') {
+      return res.status(400).json({ error: 'Параметр rating обязателен' });
+    }
+
+    let numRating = Number(rawVal);
+    if (isNaN(numRating) || !Number.isFinite(numRating) || numRating <= 0) {
+      return res.status(400).json({ error: 'Оценка должна быть числом от 1 до 10' });
+    }
+
+    // If passed on legacy 100-scale, normalize to 1..10
+    if (numRating > 10) {
+      numRating = Math.min(10, Math.max(1, Math.round(numRating / 10)));
+    } else {
+      numRating = Math.min(10, Math.max(1, Math.round(numRating)));
+    }
+
+    const rating = numRating;
+
+    let targetMedia: any = null;
+    if (!isNaN(mediaId)) {
+      const [found] = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
+      if (found) targetMedia = found;
+    }
+
+    // Auto-resolve by external ID if not found directly
+    if (!targetMedia) {
+      const byExt = await db
+        .select()
+        .from(mediaExternalIds)
+        .where(eq(mediaExternalIds.externalId, String(idParam)))
+        .limit(1);
+      if (byExt.length > 0) {
+        const [found] = await db.select().from(media).where(eq(media.id, byExt[0].mediaId)).limit(1);
+        if (found) targetMedia = found;
+      }
+    }
+
+    // If mediaPayload provided in request body, ensure media exists
+    if (!targetMedia && req.body.mediaPayload) {
+      targetMedia = await ensureMediaInDb(req.body.mediaPayload);
+    }
+
+    if (!targetMedia) {
+      return res.status(404).json({ error: 'Медиа не найдено' });
+    }
+
+    mediaId = targetMedia.id;
+
+    // Upsert into mediaRatings (Guaranteed uniqueness via uniqueIndex user_media_unq)
+    const [existingRating] = await db
+      .select()
+      .from(mediaRatings)
+      .where(and(eq(mediaRatings.userId, user.id), eq(mediaRatings.mediaId, mediaId)))
+      .limit(1);
+
+    if (existingRating) {
+      await db
+        .update(mediaRatings)
+        .set({ rating, updatedAt: new Date() })
+        .where(eq(mediaRatings.id, existingRating.id));
+    } else {
+      await db.insert(mediaRatings).values({
+        userId: user.id,
+        mediaId,
+        rating,
+      });
+
+      await db.insert(activities).values({
+        userId: user.id,
+        type: 'MEDIA_RATED',
+        mediaId,
+        details: JSON.stringify({ rating }),
+      }).catch((e) => console.warn('[Activity insert] error:', e));
+    }
+
+    // Sync rating to userMedia table if user has this in their library
+    const [userMediaEntry] = await db
+      .select()
+      .from(userMedia)
+      .where(and(eq(userMedia.userId, user.id), eq(userMedia.mediaId, mediaId)))
+      .limit(1);
+
+    if (userMediaEntry) {
+      await db
+        .update(userMedia)
+        .set({ rating, updatedAt: new Date() })
+        .where(eq(userMedia.id, userMediaEntry.id));
+    }
+
+    // Recalculate Dodik Tracker stats
+    const dodikRating = await computeDodikRatingData(mediaId, user.id);
+
+    await achievementService.checkAndUnlock(user.id, 'MEDIA_ADDED', { ratingCount: dodikRating.ratingCount }).catch(() => {});
+
+    res.json({
+      success: true,
+      mediaId,
+      average: dodikRating.averageRating,
+      count: dodikRating.ratingCount,
+      myRating: rating,
+      userRating: rating,
+      dodikRating,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Handler for Deleting a Rating
+const deleteRatingHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser;
+    if (!user) {
+      return res.status(401).json({ error: 'Требуется авторизация для удаления оценки' });
+    }
+
+    const idParam = req.params.id;
+    let mediaId = parseInt(idParam, 10);
+
+    if (isNaN(mediaId)) {
+      const byExt = await db
+        .select()
+        .from(mediaExternalIds)
+        .where(eq(mediaExternalIds.externalId, String(idParam)))
+        .limit(1);
+      if (byExt.length > 0) {
+        mediaId = byExt[0].mediaId;
+      } else {
+        return res.status(400).json({ error: 'Некорректный ID медиа' });
+      }
+    }
+
+    await db
+      .delete(mediaRatings)
+      .where(and(eq(mediaRatings.userId, user.id), eq(mediaRatings.mediaId, mediaId)));
+
+    await db
+      .update(userMedia)
+      .set({ rating: null, updatedAt: new Date() })
+      .where(and(eq(userMedia.userId, user.id), eq(userMedia.mediaId, mediaId)));
+
+    const dodikRating = await computeDodikRatingData(mediaId, user.id);
+
+    res.json({
+      success: true,
+      mediaId,
+      average: dodikRating.averageRating,
+      count: dodikRating.ratingCount,
+      myRating: null,
+      userRating: null,
+      dodikRating,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Handler for Getting Dodik & External Ratings for media
+const getRatingsHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser;
+    const idParam = req.params.id;
+    let mediaId = parseInt(idParam, 10);
+
+    let mediaItem: any = null;
+    if (!isNaN(mediaId)) {
+      const [found] = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
+      if (found) mediaItem = found;
+    }
+
+    if (!mediaItem) {
+      const byExt = await db
+        .select()
+        .from(mediaExternalIds)
+        .where(eq(mediaExternalIds.externalId, String(idParam)))
+        .limit(1);
+      if (byExt.length > 0) {
+        mediaId = byExt[0].mediaId;
+        const [found] = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
+        if (found) mediaItem = found;
+      }
+    }
+
+    if (!mediaItem) {
+      // Return empty stats gracefully if not in DB yet
+      return res.json({
+        mediaId: isNaN(mediaId) ? idParam : mediaId,
+        average: null,
+        count: 0,
+        myRating: null,
+        userRating: null,
+        externalRatings: [],
+        dodikRating: {
+          averageRating: null,
+          ratingCount: 0,
+          distribution: {},
+          userRating: null,
+        },
+      });
+    }
+
+    const dodikRating = await computeDodikRatingData(mediaItem.id, user?.id);
+
+    const extIds = await db
+      .select()
+      .from(mediaExternalIds)
+      .where(eq(mediaExternalIds.mediaId, mediaItem.id));
+
+    const externalRatings: { source: string; score: number; max: number }[] = [];
+
+    // Distinct external rating (from TMDB, RAWG, Kinopoisk, etc.)
+    if (mediaItem.rating && mediaItem.rating > 0) {
+      const sourceName = mediaItem.type === 'GAME' ? 'RAWG / IGDB' : mediaItem.type === 'ANIME' ? 'AniList' : 'TMDB / Кинопоиск';
+      externalRatings.push({
+        source: sourceName,
+        score: Math.round(mediaItem.rating * 10) / 10,
+        max: 10,
+      });
+    }
+
+    extIds.forEach((ext) => {
+      if (!externalRatings.some((r) => r.source === ext.provider)) {
+        externalRatings.push({
+          source: ext.provider,
+          score: mediaItem.rating ? Math.round(mediaItem.rating * 10) / 10 : 8.0,
+          max: 10,
+        });
+      }
+    });
+
+    res.json({
+      mediaId: mediaItem.id,
+      average: dodikRating.averageRating,
+      count: dodikRating.ratingCount,
+      myRating: dodikRating.userRating,
+      userRating: dodikRating.userRating,
+      dodikRating,
+      externalRatings,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Ratings API Routes (both /media/:id and /content/:id conventions)
+apiRouter.post('/media/:id/rating', requireAuth, setRatingHandler);
+apiRouter.put('/media/:id/rating', requireAuth, setRatingHandler);
+apiRouter.post('/media/:id/dodik-rating', requireAuth, setRatingHandler);
+apiRouter.post('/media/:id/rate', requireAuth, setRatingHandler);
+apiRouter.post('/content/:id/rating', requireAuth, setRatingHandler);
+apiRouter.put('/content/:id/rating', requireAuth, setRatingHandler);
+
+apiRouter.delete('/media/:id/rating', requireAuth, deleteRatingHandler);
+apiRouter.delete('/media/:id/dodik-rating', requireAuth, deleteRatingHandler);
+apiRouter.delete('/media/:id/rate', requireAuth, deleteRatingHandler);
+apiRouter.delete('/content/:id/rating', requireAuth, deleteRatingHandler);
+
+apiRouter.get('/media/:id/ratings', optionalAuth, getRatingsHandler);
+apiRouter.get('/media/:id/rating', optionalAuth, getRatingsHandler);
+apiRouter.get('/media/:id/dodik-rating', optionalAuth, getRatingsHandler);
+apiRouter.get('/content/:id/rating', optionalAuth, getRatingsHandler);
+
+// Get current user's rating for specific media or all ratings
+apiRouter.get('/ratings/me', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const mediaIdParam = req.query.mediaId ? parseInt(String(req.query.mediaId), 10) : undefined;
+
+    if (mediaIdParam && !isNaN(mediaIdParam)) {
+      const [ratingRow] = await db
+        .select()
+        .from(mediaRatings)
+        .where(and(eq(mediaRatings.userId, user.id), eq(mediaRatings.mediaId, mediaIdParam)))
+        .limit(1);
+
+      return res.json({
+        mediaId: mediaIdParam,
+        rating: ratingRow?.rating ?? null,
+        createdAt: ratingRow?.createdAt ?? null,
+        updatedAt: ratingRow?.updatedAt ?? null,
+      });
+    }
+
+    const userRatingsList = await db
+      .select({
+        id: mediaRatings.id,
+        mediaId: mediaRatings.mediaId,
+        rating: mediaRatings.rating,
+        createdAt: mediaRatings.createdAt,
+        updatedAt: mediaRatings.updatedAt,
+        mediaTitle: media.title,
+        mediaType: media.type,
+        mediaPoster: media.posterUrl,
+        mediaYear: media.year,
+      })
+      .from(mediaRatings)
+      .innerJoin(media, eq(mediaRatings.mediaId, media.id))
+      .where(eq(mediaRatings.userId, user.id))
+      .orderBy(desc(mediaRatings.updatedAt));
+
+    res.json(userRatingsList);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update user adult content setting directly
+apiRouter.post('/users/me/adult-content', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const enabled = Boolean(req.body.enabled);
+
+    await db.update(users).set({ showAdultContent: enabled }).where(eq(users.id, user.id));
+
+    res.json({ success: true, showAdultContent: enabled });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// News comments & reactions
+apiRouter.get('/news/:id/comments', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const newsId = parseInt(req.params.id, 10);
+    if (isNaN(newsId)) return res.status(400).json({ error: 'Некорректный ID новости' });
+
+    const commentsList = await db
+      .select({
+        id: newsComments.id,
+        newsId: newsComments.newsId,
+        userId: newsComments.userId,
+        parentId: newsComments.parentId,
+        content: newsComments.content,
+        createdAt: newsComments.createdAt,
+        updatedAt: newsComments.updatedAt,
+        authorUsername: users.username,
+        authorAvatar: users.avatar,
+        authorRole: users.role,
+      })
+      .from(newsComments)
+      .innerJoin(users, eq(newsComments.userId, users.id))
+      .where(and(eq(newsComments.newsId, newsId), eq(newsComments.isHidden, false)))
+      .orderBy(asc(newsComments.createdAt));
+
+    res.json({ comments: commentsList });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/news/:id/comments', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const newsId = parseInt(req.params.id, 10);
+    const { content, parentId } = req.body;
+
+    if (isNaN(newsId)) return res.status(400).json({ error: 'Некорректный ID новости' });
+    if (!content || !String(content).trim()) {
+      return res.status(400).json({ error: 'Текст комментария не может быть пустым' });
+    }
+
+    const [comment] = await db
+      .insert(newsComments)
+      .values({
+        newsId,
+        userId: user.id,
+        parentId: parentId ? parseInt(String(parentId), 10) : null,
+        content: String(content).trim(),
+      })
+      .returning();
+
+    res.json({
+      comment: {
+        ...comment,
+        authorUsername: user.username,
+        authorAvatar: user.avatar,
+        authorRole: user.role,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.delete('/news/comments/:commentId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const commentId = parseInt(req.params.commentId, 10);
+    if (isNaN(commentId)) return res.status(400).json({ error: 'Некорректный ID комментария' });
+
+    const [existing] = await db.select().from(newsComments).where(eq(newsComments.id, commentId)).limit(1);
+    if (!existing) return res.status(404).json({ error: 'Комментарий не найден' });
+
+    const isOwner = existing.userId === user.id;
+    const isAdmin = user.role === 'ADMIN' || user.role === 'SUPER_ADMIN' || user.role === 'MODERATOR';
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Нет прав для удаления комментария' });
+    }
+
+    await db.delete(newsComments).where(eq(newsComments.id, commentId));
+    res.json({ success: true, commentId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/news/:id/reactions', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const newsId = parseInt(req.params.id, 10);
+    if (isNaN(newsId)) return res.status(400).json({ error: 'Некорректный ID новости' });
+
+    const reactionsList = await db
+      .select({
+        emoji: newsReactions.emoji,
+        userId: newsReactions.userId,
+      })
+      .from(newsReactions)
+      .where(eq(newsReactions.newsId, newsId));
+
+    const counts: Record<string, number> = {};
+    const userEmojis: string[] = [];
+
+    reactionsList.forEach((r) => {
+      counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+      if (req.dbUser && r.userId === req.dbUser.id) {
+        userEmojis.push(r.emoji);
+      }
+    });
+
+    res.json({ counts, userEmojis });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/news/:id/reactions', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const newsId = parseInt(req.params.id, 10);
+    const { emoji } = req.body;
+
+    if (isNaN(newsId)) return res.status(400).json({ error: 'Некорректный ID новости' });
+    if (!emoji || !String(emoji).trim()) {
+      return res.status(400).json({ error: 'Не указан эмодзи' });
+    }
+
+    const cleanEmoji = String(emoji).trim();
+
+    const [existing] = await db
+      .select()
+      .from(newsReactions)
+      .where(
+        and(
+          eq(newsReactions.newsId, newsId),
+          eq(newsReactions.userId, user.id),
+          eq(newsReactions.emoji, cleanEmoji)
+        )
+      )
+      .limit(1);
+
+    if (existing) {
+      await db.delete(newsReactions).where(eq(newsReactions.id, existing.id));
+    } else {
+      await db.insert(newsReactions).values({
+        newsId,
+        userId: user.id,
+        emoji: cleanEmoji,
+      });
+    }
+
+    const reactionsList = await db
+      .select({ emoji: newsReactions.emoji, userId: newsReactions.userId })
+      .from(newsReactions)
+      .where(eq(newsReactions.newsId, newsId));
+
+    const counts: Record<string, number> = {};
+    const userEmojis: string[] = [];
+
+    reactionsList.forEach((r) => {
+      counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+      if (r.userId === user.id) {
+        userEmojis.push(r.emoji);
+      }
+    });
+
+    res.json({ success: true, counts, userEmojis });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Taste comparison endpoint
+apiRouter.get('/users/:username/taste-comparison', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const currentUser = req.dbUser!;
+    const targetUsername = req.params.username.trim();
+
+    const [targetUser] = await db
+      .select()
+      .from(users)
+      .where(ilike(users.username, targetUsername))
+      .limit(1);
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    if (targetUser.id === currentUser.id) {
+      return res.status(400).json({ error: 'Нельзя сравнивать вкусы с самим собой' });
+    }
+
+    const myItems = await db
+      .select({
+        mediaId: userMedia.mediaId,
+        rating: userMedia.rating,
+        status: userMedia.status,
+        type: media.type,
+        title: media.title,
+        posterUrl: media.posterUrl,
+        genres: media.genres,
+      })
+      .from(userMedia)
+      .innerJoin(media, eq(userMedia.mediaId, media.id))
+      .where(eq(userMedia.userId, currentUser.id));
+
+    const targetItems = await db
+      .select({
+        mediaId: userMedia.mediaId,
+        rating: userMedia.rating,
+        status: userMedia.status,
+        type: media.type,
+        title: media.title,
+        posterUrl: media.posterUrl,
+        genres: media.genres,
+      })
+      .from(userMedia)
+      .innerJoin(media, eq(userMedia.mediaId, media.id))
+      .where(eq(userMedia.userId, targetUser.id));
+
+    const targetMap = new Map(targetItems.map((item) => [item.mediaId, item]));
+    const sharedMedia: any[] = [];
+    let scoreDiffSum = 0;
+    let scoreComparisonCount = 0;
+
+    myItems.forEach((myItem) => {
+      const targetItem = targetMap.get(myItem.mediaId);
+      if (targetItem) {
+        sharedMedia.push({
+          mediaId: myItem.mediaId,
+          title: myItem.title,
+          type: myItem.type,
+          posterUrl: myItem.posterUrl,
+          myRating: myItem.rating,
+          targetRating: targetItem.rating,
+        });
+
+        if (myItem.rating && targetItem.rating) {
+          scoreDiffSum += Math.abs(myItem.rating - targetItem.rating);
+          scoreComparisonCount++;
+        }
+      }
+    });
+
+    let compatibilityScore = 75;
+    if (scoreComparisonCount > 0) {
+      const avgDiff = scoreDiffSum / scoreComparisonCount;
+      compatibilityScore = Math.max(10, Math.min(100, Math.round(100 - (avgDiff / 10) * 100)));
+    } else if (sharedMedia.length > 0) {
+      compatibilityScore = 70 + Math.min(25, sharedMedia.length * 5);
+    }
+
+    const genreCounts: Record<string, number> = {};
+    sharedMedia.forEach((item) => {
+      let gList: string[] = [];
+      try {
+        if (typeof item.genres === 'string') gList = JSON.parse(item.genres);
+        else if (Array.isArray(item.genres)) gList = item.genres;
+      } catch (_e) {}
+      gList.forEach((g) => {
+        genreCounts[g] = (genreCounts[g] || 0) + 1;
+      });
+    });
+
+    const topSharedGenres = Object.entries(genreCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([genre]) => genre);
+
+    res.json({
+      targetUser: sanitizeUser(targetUser),
+      compatibilityScore,
+      sharedCount: sharedMedia.length,
+      topSharedGenres,
+      sharedMedia: sharedMedia.slice(0, 20),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -2402,9 +3563,7 @@ apiRouter.post('/media/:id/share', requireAuth, async (req: AuthRequest, res: Re
         userId: user.id,
         type: 'CONTENT_SHARED',
         mediaId: mediaItem.id,
-        details: isCompletion
-          ? `Поделился завершением «${mediaTitle}» с друзьями`
-          : `Поделился «${mediaTitle}» с друзьями`,
+        details: JSON.stringify({ isCompletion: Boolean(isCompletion), mediaTitle }),
       }).catch((e) => console.warn('[Activity insert] error:', e));
     }
 
@@ -2445,101 +3604,6 @@ apiRouter.get('/media/:id/share-status', requireAuth, async (req: AuthRequest, r
 
     const sharedUserIds = Array.from(new Set(recentNotifs.map((n) => n.recipientUserId)));
     res.json({ sharedUserIds });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Rate a media item directly (sets userMedia rating and updates Dodik aggregate)
-apiRouter.post('/media/:id/rate', requireAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const user = req.dbUser!;
-    const mediaId = parseInt(req.params.id, 10);
-    const { rating } = req.body;
-
-    const cleanRating = (rating !== null && rating !== undefined)
-      ? Math.min(10, Math.max(1, Math.round(Number(rating))))
-      : null;
-
-    const existing = await db
-      .select()
-      .from(userMedia)
-      .where(and(eq(userMedia.userId, user.id), eq(userMedia.mediaId, mediaId)))
-      .limit(1);
-
-    if (existing.length > 0) {
-      await db
-        .update(userMedia)
-        .set({ rating: cleanRating, updatedAt: new Date() })
-        .where(eq(userMedia.id, existing[0].id));
-    } else {
-      // Find media type to assign sensible default status (PLANNING / PLAN_TO_WATCH)
-      const [mediaRecord] = await db
-        .select({ type: media.type, title: media.title, originalTitle: media.originalTitle })
-        .from(media)
-        .where(eq(media.id, mediaId))
-        .limit(1);
-
-      const defaultStatus = (mediaRecord?.type === 'GAME') ? 'PLANNING' : 'PLAN_TO_WATCH';
-
-      await db.insert(userMedia).values({
-        userId: user.id,
-        mediaId,
-        rating: cleanRating,
-        status: defaultStatus,
-      });
-
-      // Log History for adding via rating
-      await db.insert(mediaHistory).values({
-        userId: user.id,
-        mediaId,
-        action: 'ADDED',
-        details: `Добавлено через оценку: ${cleanRating}/10`,
-      }).catch(() => {});
-    }
-
-    if (cleanRating !== null) {
-      // Log rating action
-      await db.insert(mediaHistory).values({
-        userId: user.id,
-        mediaId,
-        action: 'RATED',
-        details: `Оценка: ${cleanRating}/10`,
-      }).catch(() => {});
-
-      await db.insert(activities).values({
-        userId: user.id,
-        type: 'MEDIA_RATED',
-        mediaId,
-        details: `${cleanRating}/10`,
-      }).catch(() => {});
-    }
-
-    // Recalculate dodikRating
-    const allRatings = await db
-      .select({ rating: userMedia.rating })
-      .from(userMedia)
-      .where(and(eq(userMedia.mediaId, mediaId), sql`${userMedia.rating} IS NOT NULL`));
-
-    let averageRating: number | null = null;
-    const ratingCount = allRatings.length;
-    const distribution: Record<number, number> = {
-      10: 0, 9: 0, 8: 0, 7: 0, 6: 0, 5: 0, 4: 0, 3: 0, 2: 0, 1: 0,
-    };
-    if (ratingCount > 0) {
-      let sum = 0;
-      for (const r of allRatings) {
-        sum += r.rating!;
-        if (distribution[r.rating!] !== undefined) distribution[r.rating!]++;
-      }
-      averageRating = Math.round((sum / ratingCount) * 10) / 10;
-    }
-
-    res.json({
-      success: true,
-      userRating: cleanRating,
-      dodikRating: { averageRating, ratingCount, distribution },
-    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -2679,12 +3743,20 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
       .where(and(eq(reviews.userId, user.id), eq(reviews.mediaId, mediaId)))
       .limit(1);
 
+    let cleanReviewRating: number | null = null;
+    if (effectiveRating !== undefined && effectiveRating !== null && effectiveRating !== '') {
+      const num = Number(effectiveRating);
+      if (!isNaN(num) && Number.isFinite(num)) {
+        cleanReviewRating = Math.max(0, Math.min(100, Math.round(num)));
+      }
+    }
+
     let savedReview;
     if (existing.length > 0) {
       [savedReview] = await db
         .update(reviews)
         .set({
-          rating: effectiveRating !== undefined ? effectiveRating : existing[0].rating,
+          rating: cleanReviewRating !== null ? cleanReviewRating : existing[0].rating,
           title: title !== undefined ? title : existing[0].title,
           content: content.trim(),
           containsSpoilers: !!containsSpoilers,
@@ -2698,7 +3770,7 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
         .values({
           userId: user.id,
           mediaId,
-          rating: effectiveRating || null,
+          rating: cleanReviewRating,
           title: title?.trim() || null,
           content: content.trim(),
           containsSpoilers: !!containsSpoilers,
@@ -2774,8 +3846,8 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
       })();
     }
 
-    // Sync rating to userMedia
-    if (effectiveRating) {
+    // Sync rating to userMedia and mediaRatings
+    if (cleanReviewRating !== null) {
       const um = await db
         .select()
         .from(userMedia)
@@ -2784,7 +3856,7 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
       if (um.length > 0) {
         await db
           .update(userMedia)
-          .set({ rating: effectiveRating, updatedAt: new Date() })
+          .set({ rating: cleanReviewRating, updatedAt: new Date() })
           .where(eq(userMedia.id, um[0].id));
       } else {
         const [targetMedia] = await db
@@ -2798,10 +3870,32 @@ apiRouter.post('/media/:id/reviews', requireAuth, async (req: AuthRequest, res: 
         await db.insert(userMedia).values({
           userId: user.id,
           mediaId,
-          rating: effectiveRating,
+          rating: cleanReviewRating,
           status: defaultStatus,
         });
       }
+
+      // Upsert into mediaRatings
+      const [existingRating] = await db
+        .select()
+        .from(mediaRatings)
+        .where(and(eq(mediaRatings.userId, user.id), eq(mediaRatings.mediaId, mediaId)))
+        .limit(1);
+
+      if (existingRating) {
+        await db
+          .update(mediaRatings)
+          .set({ rating: cleanReviewRating, updatedAt: new Date() })
+          .where(eq(mediaRatings.id, existingRating.id));
+      } else {
+        await db.insert(mediaRatings).values({
+          userId: user.id,
+          mediaId,
+          rating: cleanReviewRating,
+        });
+      }
+
+      await computeDodikRatingData(mediaId, user.id).catch(() => {});
     }
 
     // Return complete review with author metadata
@@ -3440,7 +4534,7 @@ apiRouter.post('/library', requireAuth, async (req: AuthRequest, res: Response) 
         userId: user.id,
         type: 'MEDIA_ADDED',
         mediaId: targetMediaId,
-        details: defaultStatus,
+        details: JSON.stringify({ status: defaultStatus }),
       });
     }
 
@@ -3518,7 +4612,7 @@ apiRouter.put('/library/:id', requireAuth, async (req: AuthRequest, res: Respons
         userId: user.id,
         type: status === 'COMPLETED' ? 'MEDIA_COMPLETED' : 'MEDIA_STATUS_CHANGED',
         mediaId: prev.mediaId,
-        details: status,
+        details: JSON.stringify({ status }),
       }).catch((e) => console.warn('[Activity insert] error:', e));
     }
 
@@ -3534,7 +4628,7 @@ apiRouter.put('/library/:id', requireAuth, async (req: AuthRequest, res: Respons
         userId: user.id,
         type: 'MEDIA_RATED',
         mediaId: prev.mediaId,
-        details: `${rating}/10`,
+        details: JSON.stringify({ rating: Number(rating) }),
       });
     }
 
@@ -3769,26 +4863,208 @@ apiRouter.get('/feed', optionalAuth, async (req: AuthRequest, res: Response) => 
     const enriched = paginated.map((act) => {
       let parsedDetails: any = null;
       if (act.details) {
-        try {
-          parsedDetails = JSON.parse(act.details);
-        } catch (_e) {
-          parsedDetails = act.details;
+        let str = String(act.details).trim();
+        // Strip markdown asterisks or backticks
+        str = str.replace(/\*\*/g, '').replace(/__/g, '').replace(/`/g, '').trim();
+
+        // Strip technical svg prefixes
+        if (str.startsWith('svg{') || str.startsWith('svg {"') || str.startsWith('svg:')) {
+          const idx = str.indexOf('{');
+          if (idx !== -1) str = str.substring(idx);
         }
+
+        // Try standard JSON.parse between first { and last }
+        const firstBrace = str.indexOf('{');
+        const lastBrace = str.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace > firstBrace) {
+          try {
+            parsedDetails = JSON.parse(str.substring(firstBrace, lastBrace + 1));
+          } catch (_e) {
+            parsedDetails = null;
+          }
+        }
+
+        // Resilient regex recovery if JSON is corrupted or truncated
+        if (!parsedDetails || typeof parsedDetails !== 'object') {
+          const titleMatch = str.match(/"title"\s*:\s*"([^"]+)"/);
+          const descMatch = str.match(/"description"\s*:\s*"([^"]+)"/);
+          const iconMatch = str.match(/"icon"\s*:\s*"([^"]+)"/);
+          const achIdMatch = str.match(/"(?:achievementId|id)"\s*:\s*(\d+)/);
+          const rarityMatch = str.match(/"rarity"\s*:\s*"([^"]+)"/);
+          const pointsMatch = str.match(/"points"\s*:\s*(\d+)/);
+
+          const friendIdMatch = str.match(/"(?:friendId)"\s*:\s*(\d+)/);
+          const friendUserMatch = str.match(/"(?:friendUsername|username)"\s*:\s*"([^"]+)"/);
+          const friendAvatarMatch = str.match(/"(?:friendAvatar|avatar)"\s*:\s*"([^"]+)"/);
+
+          const ratingMatch = str.match(/"rating"\s*:\s*(\d+(?:\.\d+)?)/);
+          const statusMatch = str.match(/"status"\s*:\s*"([^"]+)"/);
+          const snippetMatch = str.match(/"(?:snippet|content|text|review)"\s*:\s*"([^"]+)"/);
+
+          const recovered: any = {};
+          let found = false;
+          if (achIdMatch || titleMatch) {
+            if (achIdMatch) recovered.achievementId = parseInt(achIdMatch[1], 10);
+            if (titleMatch) recovered.title = titleMatch[1];
+            if (descMatch) recovered.description = descMatch[1];
+            if (iconMatch) recovered.icon = iconMatch[1];
+            if (rarityMatch) recovered.rarity = rarityMatch[1];
+            if (pointsMatch) recovered.points = parseInt(pointsMatch[1], 10);
+            found = true;
+          }
+          if (friendUserMatch || friendIdMatch) {
+            if (friendIdMatch) recovered.friendId = parseInt(friendIdMatch[1], 10);
+            if (friendUserMatch) recovered.friendUsername = friendUserMatch[1];
+            if (friendAvatarMatch) recovered.friendAvatar = friendAvatarMatch[1];
+            found = true;
+          }
+          if (ratingMatch) {
+            recovered.rating = parseFloat(ratingMatch[1]);
+            found = true;
+          }
+          if (statusMatch) {
+            recovered.status = statusMatch[1];
+            found = true;
+          }
+          if (snippetMatch) {
+            recovered.snippet = snippetMatch[1];
+            found = true;
+          }
+          if (found) {
+            parsedDetails = recovered;
+          }
+        }
+      }
+
+      // 1. Structured Actor (clean username, no @ or markdown)
+      const cleanUsername = String(act.username || 'Пользователь')
+        .replace(/\*\*/g, '')
+        .replace(/^@+/, '')
+        .trim();
+
+      const actor = {
+        id: act.userId,
+        username: cleanUsername || 'Пользователь',
+        displayName: cleanUsername || 'Пользователь',
+        avatar: act.avatar || null,
+        role: act.role,
+        bio: act.bio || null,
+      };
+
+      // 2. Structured Achievement
+      let achievement: any = null;
+      if (act.type === 'ACHIEVEMENT_UNLOCKED' && parsedDetails && typeof parsedDetails === 'object') {
+        const achIcon = (typeof parsedDetails.icon === 'string' && !parsedDetails.icon.startsWith('{') && !parsedDetails.icon.startsWith('<'))
+          ? parsedDetails.icon
+          : 'Trophy';
+
+        achievement = {
+          id: parsedDetails.achievementId || parsedDetails.id || 0,
+          title: String(parsedDetails.title || 'Достижение').replace(/\*\*/g, '').trim(),
+          description: String(parsedDetails.description || '').replace(/\*\*/g, '').trim(),
+          icon: achIcon,
+          rarity: parsedDetails.rarity || 'COMMON',
+          points: parsedDetails.points || 10,
+        };
+      }
+
+      // 3. Structured Friend
+      let friend: any = null;
+      if (act.type === 'FRIEND_ADDED' && parsedDetails && typeof parsedDetails === 'object') {
+        const rawFriendUser = parsedDetails.friendUsername || parsedDetails.username || 'друг';
+        const cleanFriendUser = String(rawFriendUser).replace(/\*\*/g, '').replace(/^@+/, '').trim();
+        friend = {
+          id: parsedDetails.friendId || parsedDetails.id || 0,
+          username: cleanFriendUser || 'друг',
+          avatar: parsedDetails.friendAvatar !== undefined ? parsedDetails.friendAvatar : parsedDetails.avatar || null,
+        };
+      }
+
+      // 4. Structured Review
+      let review: any = null;
+      if (act.type === 'REVIEW_ADDED' || act.type === 'REVIEW_CREATED' || act.type === 'MEDIA_REVIEWED') {
+        let snippet = '';
+        if (parsedDetails && typeof parsedDetails === 'object') {
+          snippet = parsedDetails.snippet || parsedDetails.content || parsedDetails.review || parsedDetails.text || '';
+        } else if (typeof act.details === 'string') {
+          const match = act.details.match(/["«]([^"»]+)["»]/);
+          if (match) snippet = match[1];
+        }
+        snippet = String(snippet).replace(/\*\*/g, '').replace(/<[^>]*>/g, '').trim();
+
+        let reviewRating = parsedDetails?.rating !== undefined ? Number(parsedDetails.rating) : null;
+        if (reviewRating !== null && reviewRating <= 10 && reviewRating > 0) {
+          reviewRating = reviewRating * 10;
+        }
+
+        review = {
+          id: parsedDetails?.reviewId || parsedDetails?.id,
+          rating: reviewRating,
+          title: parsedDetails?.title ? String(parsedDetails.title).replace(/\*\*/g, '').trim() : null,
+          snippet,
+          containsSpoilers: !!parsedDetails?.containsSpoilers,
+        };
+      }
+
+      // 5. Structured Rating (normalized to 0-100 scale)
+      let rating: number | null = null;
+      if (act.type === 'MEDIA_RATED' || act.type === 'RATING_ADDED') {
+        if (parsedDetails && typeof parsedDetails === 'object' && parsedDetails.rating !== undefined) {
+          rating = Number(parsedDetails.rating);
+        } else if (typeof act.details === 'string') {
+          const match = act.details.match(/(\d+)(?:\s*★|\/100|\/10)/);
+          if (match) rating = parseInt(match[1], 10);
+        }
+        if (rating === null && act.mediaRating) {
+          rating = act.mediaRating;
+        }
+        // Normalize 1-10 to 0-100 scale
+        if (rating !== null && rating <= 10 && rating > 0) {
+          rating = rating * 10;
+        }
+      }
+
+      // 6. Structured Status
+      let status: string | null = null;
+      if (['MEDIA_ADDED', 'MEDIA_COMPLETED', 'MEDIA_STATUS_CHANGED', 'STATUS_CHANGED', 'MEDIA_WATCHING', 'MEDIA_PLAYING', 'MEDIA_READING', 'MEDIA_DROPPED'].includes(act.type)) {
+        if (act.type === 'MEDIA_COMPLETED') {
+          status = 'COMPLETED';
+        } else if (parsedDetails && typeof parsedDetails === 'object' && parsedDetails.status) {
+          status = parsedDetails.status;
+        } else if (typeof act.details === 'string' && !act.details.startsWith('{') && !act.details.includes('{"')) {
+          status = act.details.replace(/\*\*/g, '').trim();
+        }
+      }
+
+      // Safe details string (never raw json or raw svg)
+      let safeDetails: string | null = null;
+      if (achievement) {
+        safeDetails = `${achievement.title}${achievement.description ? ` — ${achievement.description}` : ''}`;
+      } else if (friend) {
+        safeDetails = `Подружились с @${friend.username}`;
+      } else if (review?.snippet) {
+        safeDetails = review.snippet;
+      } else if (rating !== null) {
+        safeDetails = `Оценка: ${rating} / 100`;
+      } else if (status) {
+        safeDetails = status;
+      } else if (typeof act.details === 'string' && !act.details.includes('{') && !act.details.includes('svg')) {
+        safeDetails = act.details.replace(/\*\*/g, '').trim();
       }
 
       return {
         id: act.id,
         type: act.type,
-        details: act.details,
+        details: safeDetails,
         parsedDetails,
         createdAt: act.createdAt,
-        user: {
-          id: act.userId,
-          username: act.username,
-          avatar: act.avatar,
-          role: act.role,
-          bio: act.bio,
-        },
+        actor,
+        user: actor, // Backward-compat for legacy consumers
+        achievement,
+        friend,
+        review,
+        rating,
+        status,
         media: act.mediaId ? {
           id: act.mediaId,
           title: act.mediaTitle,
@@ -4064,6 +5340,48 @@ apiRouter.get('/friends/requests', requireAuth, async (req: AuthRequest, res: Re
   }
 });
 
+// Community recommendations for friends
+apiRouter.get('/friends/recommendations', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser;
+    let excludeUserIds: number[] = [];
+    if (user) {
+      excludeUserIds.push(user.id);
+      const reqs = await db
+        .select()
+        .from(friendRequests)
+        .where(or(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, user.id)));
+      reqs.forEach((r) => {
+        excludeUserIds.push(r.senderId);
+        excludeUserIds.push(r.receiverId);
+      });
+    }
+
+    const uniqueExclude = Array.from(new Set(excludeUserIds));
+    const query = db
+      .select({
+        id: users.id,
+        username: users.username,
+        avatar: users.avatar,
+        bio: users.bio,
+        role: users.role,
+        createdAt: users.createdAt,
+      })
+      .from(users)
+      .where(
+        uniqueExclude.length > 0
+          ? and(not(inArray(users.id, uniqueExclude)), eq(users.isBlocked, false))
+          : eq(users.isBlocked, false)
+      )
+      .limit(15);
+
+    const recommended = await query;
+    res.json(recommended);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Send friend request
 apiRouter.post('/friends/request', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -4237,6 +5555,30 @@ async function handleFriendRequestAction(req: AuthRequest, res: Response) {
 // Respond to friend request (ACCEPTED, DECLINED)
 apiRouter.put('/friends/request/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   return handleFriendRequestAction(req, res);
+});
+
+// Remove a friend
+apiRouter.delete('/friends/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const targetId = Number(req.params.id);
+    if (!targetId || isNaN(targetId)) {
+      return res.status(400).json({ error: 'Неверный ID пользователя' });
+    }
+
+    await db
+      .delete(friendRequests)
+      .where(
+        or(
+          and(eq(friendRequests.senderId, user.id), eq(friendRequests.receiverId, targetId)),
+          and(eq(friendRequests.senderId, targetId), eq(friendRequests.receiverId, user.id))
+        )
+      );
+
+    res.json({ success: true, message: 'Друг удален' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ==========================================
@@ -4858,7 +6200,7 @@ apiRouter.post('/lists', requireAuth, async (req: AuthRequest, res: Response) =>
         userId: user.id,
         type: 'LIST_CREATED',
         listId: newList.id,
-        details: newList.title,
+        details: JSON.stringify({ listId: newList.id, title: newList.title }),
       }).catch(() => {});
     }
 
@@ -5312,7 +6654,7 @@ apiRouter.get('/lists/:id', optionalAuth, async (req: AuthRequest, res: Response
 
     res.json({
       ...list,
-      items: rawItems,
+      items,
       members,
       userRole,
       isOwner: user?.id === list.ownerId,
@@ -6858,7 +8200,7 @@ apiRouter.post('/tier-lists', requireAuth, async (req: AuthRequest, res: Respons
         userId: user.id,
         type: 'TIERLIST_CREATED',
         tierListId: newTierList.id,
-        details: newTierList.title,
+        details: JSON.stringify({ tierListId: newTierList.id, title: newTierList.title }),
       }).catch(() => {});
     }
 
@@ -8485,11 +9827,15 @@ import { adminRouter } from './routes/admin/index.ts';
 import { publicNewsRouter } from './routes/admin/news.ts';
 import { publicAnnouncementsRouter } from './routes/admin/announcements.ts';
 import { publicReportsRouter } from './routes/admin/moderation.ts';
+import { musicRouter } from './routes/music.ts';
+import { uploadRouter } from './routes/upload.ts';
 
 apiRouter.use('/library-sync', importExportRouter);
 apiRouter.use('/achievements', achievementsRouter);
 apiRouter.use('/games', gamesRouter);
 apiRouter.use('/admin', adminRouter);
+apiRouter.use('/music', musicRouter);
+apiRouter.use('/upload', uploadRouter);
 apiRouter.use('/', publicNewsRouter);
 apiRouter.use('/', publicAnnouncementsRouter);
 apiRouter.use('/', publicReportsRouter);

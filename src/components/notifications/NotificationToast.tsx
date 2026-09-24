@@ -44,7 +44,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: Trophy,
         badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
         borderColor: 'border-amber-500/40',
-        gradient: 'from-amber-950/40 to-[#14131A]',
+        gradient: 'from-amber-950/40 to-[#0B0D20]',
         categoryName: 'Достижение',
       };
     case 'FRIEND_REQUEST':
@@ -52,7 +52,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: UserPlus,
         badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
         borderColor: 'border-emerald-500/40',
-        gradient: 'from-emerald-950/40 to-[#14131A]',
+        gradient: 'from-emerald-950/40 to-[#0B0D20]',
         categoryName: 'Заявка в друзья',
       };
     case 'FRIEND_ACCEPTED':
@@ -60,7 +60,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: UserCheck,
         badgeColor: 'bg-teal-500/20 text-teal-300 border-teal-500/30',
         borderColor: 'border-teal-500/40',
-        gradient: 'from-teal-950/40 to-[#14131A]',
+        gradient: 'from-teal-950/40 to-[#0B0D20]',
         categoryName: 'Дружба принята',
       };
     case 'NEW_MESSAGE':
@@ -68,7 +68,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: MessageSquare,
         badgeColor: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
         borderColor: 'border-sky-500/40',
-        gradient: 'from-sky-950/40 to-[#14131A]',
+        gradient: 'from-sky-950/40 to-[#0B0D20]',
         categoryName: 'Сообщение',
       };
     case 'FRIEND_REVIEW':
@@ -76,7 +76,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: Star,
         badgeColor: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
         borderColor: 'border-yellow-500/40',
-        gradient: 'from-yellow-950/40 to-[#14131A]',
+        gradient: 'from-yellow-950/40 to-[#0B0D20]',
         categoryName: 'Отзыв друга',
       };
     case 'FRIEND_ACTIVITY':
@@ -84,7 +84,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: Zap,
         badgeColor: 'bg-violet-500/20 text-violet-300 border-violet-500/30',
         borderColor: 'border-violet-500/40',
-        gradient: 'from-violet-950/40 to-[#14131A]',
+        gradient: 'from-violet-950/40 to-[#0B0D20]',
         categoryName: 'Активность друга',
       };
     case 'NEW_RELEASE':
@@ -92,7 +92,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: Film,
         badgeColor: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
         borderColor: 'border-indigo-500/40',
-        gradient: 'from-indigo-950/40 to-[#14131A]',
+        gradient: 'from-indigo-950/40 to-[#0B0D20]',
         categoryName: 'Новый релиз',
       };
     case 'CONTENT_COMPLETED':
@@ -100,15 +100,15 @@ export const getNotificationVisuals = (type: string) => {
         icon: CheckCircle2,
         badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
         borderColor: 'border-emerald-500/40',
-        gradient: 'from-emerald-950/40 to-[#14131A]',
+        gradient: 'from-emerald-950/40 to-[#0B0D20]',
         categoryName: 'Прогресс',
       };
     case 'CONTENT_SHARED':
       return {
         icon: Share2,
-        badgeColor: 'bg-violet-500/20 text-violet-300 border-violet-500/30',
-        borderColor: 'border-violet-500/40',
-        gradient: 'from-violet-950/40 to-[#14131A]',
+        badgeColor: 'bg-[#8B5CF6]/20 text-[#A78BFA] border border-[#8B5CF6]/30',
+        borderColor: 'border-[#8B5CF6]/40',
+        gradient: 'from-violet-950/40 to-[#0B0D20]',
         categoryName: 'Поделились',
       };
     case 'TIER_LIST_INVITE':
@@ -116,7 +116,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: Layers,
         badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
         borderColor: 'border-amber-500/40',
-        gradient: 'from-amber-950/40 to-[#14131A]',
+        gradient: 'from-amber-950/40 to-[#0B0D20]',
         categoryName: 'Тир-лист',
       };
     case 'FEEDBACK_REPLIED':
@@ -124,7 +124,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: LifeBuoy,
         badgeColor: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
         borderColor: 'border-cyan-500/40',
-        gradient: 'from-cyan-950/40 to-[#14131A]',
+        gradient: 'from-cyan-950/40 to-[#0B0D20]',
         categoryName: 'Поддержка',
       };
     case 'ADMIN_ANNOUNCEMENT':
@@ -132,7 +132,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: Megaphone,
         badgeColor: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/30',
         borderColor: 'border-fuchsia-500/40',
-        gradient: 'from-fuchsia-950/40 to-[#14131A]',
+        gradient: 'from-fuchsia-950/40 to-[#0B0D20]',
         categoryName: 'Объявление',
       };
     case 'MENTION':
@@ -140,7 +140,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: AtSign,
         badgeColor: 'bg-pink-500/20 text-pink-300 border-pink-500/30',
         borderColor: 'border-pink-500/40',
-        gradient: 'from-pink-950/40 to-[#14131A]',
+        gradient: 'from-pink-950/40 to-[#0B0D20]',
         categoryName: 'Упоминание',
       };
     case 'ADMIN_ALERT':
@@ -148,7 +148,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: ShieldAlert,
         badgeColor: 'bg-rose-500/20 text-rose-300 border-rose-500/30',
         borderColor: 'border-rose-500/40',
-        gradient: 'from-rose-950/40 to-[#14131A]',
+        gradient: 'from-rose-950/40 to-[#0B0D20]',
         categoryName: 'Оповещение администрации',
       };
     case 'LIKE':
@@ -157,7 +157,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: Heart,
         badgeColor: 'bg-red-500/20 text-red-300 border-red-500/30',
         borderColor: 'border-red-500/40',
-        gradient: 'from-red-950/40 to-[#14131A]',
+        gradient: 'from-red-950/40 to-[#0B0D20]',
         categoryName: 'Оценка',
       };
     case 'COMMENT':
@@ -166,15 +166,15 @@ export const getNotificationVisuals = (type: string) => {
         icon: MessageCircle,
         badgeColor: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
         borderColor: 'border-cyan-500/40',
-        gradient: 'from-cyan-950/40 to-[#14131A]',
+        gradient: 'from-cyan-950/40 to-[#0B0D20]',
         categoryName: 'Комментарий',
       };
     case 'LIST_INVITE':
       return {
         icon: ListOrdered,
-        badgeColor: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
-        borderColor: 'border-purple-500/40',
-        gradient: 'from-purple-950/40 to-[#14131A]',
+        badgeColor: 'bg-[#8B5CF6]/20 text-[#A78BFA] border border-[#8B5CF6]/30',
+        borderColor: 'border-[#8B5CF6]/40',
+        gradient: 'from-purple-950/40 to-[#0B0D20]',
         categoryName: 'Приглашение в список',
       };
     case 'LIST_INVITE_ACCEPTED':
@@ -182,7 +182,7 @@ export const getNotificationVisuals = (type: string) => {
         icon: UserCheck,
         badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
         borderColor: 'border-emerald-500/40',
-        gradient: 'from-emerald-950/40 to-[#14131A]',
+        gradient: 'from-emerald-950/40 to-[#0B0D20]',
         categoryName: 'Приглашение принято',
       };
     case 'LIST_INVITE_DECLINED':
@@ -190,15 +190,15 @@ export const getNotificationVisuals = (type: string) => {
         icon: X,
         badgeColor: 'bg-rose-500/20 text-rose-300 border-rose-500/30',
         borderColor: 'border-rose-500/40',
-        gradient: 'from-rose-950/40 to-[#14131A]',
+        gradient: 'from-rose-950/40 to-[#0B0D20]',
         categoryName: 'Приглашение отклонено',
       };
     default:
       return {
         icon: Info,
         badgeColor: 'bg-zinc-500/20 text-zinc-300 border-zinc-500/30',
-        borderColor: 'border-[#3A344E]',
-        gradient: 'from-zinc-900/40 to-[#14131A]',
+        borderColor: 'border-[#1E2442]',
+        gradient: 'from-zinc-900/40 to-[#0B0D20]',
         categoryName: 'Уведомление',
       };
   }
@@ -236,10 +236,10 @@ export const NotificationToastItem: React.FC<NotificationToastProps> = ({
       exit={{ opacity: 0, y: -15, scale: 0.95 }}
       transition={{ duration: 0.22, ease: 'easeOut' }}
       onClick={handleClick}
-      className={`relative group w-80 sm:w-96 rounded-2xl bg-gradient-to-b ${visuals.gradient} bg-[#14131A] border ${visuals.borderColor} p-4 shadow-xl shadow-black/50 cursor-pointer overflow-hidden backdrop-blur-md hover:border-opacity-100 transition-all`}
+      className={`relative group w-80 sm:w-96 rounded-2xl bg-gradient-to-b ${visuals.gradient} bg-[#0B0D20] border ${visuals.borderColor} p-4 shadow-xl shadow-black/60 cursor-pointer overflow-hidden backdrop-blur-md hover:border-opacity-100 transition-all`}
     >
       {/* Top decorative glow */}
-      <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+      <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-white/15 to-transparent" />
 
       <div className="flex items-start gap-3">
         {/* Avatar or Icon */}
@@ -248,7 +248,7 @@ export const NotificationToastItem: React.FC<NotificationToastProps> = ({
             <img
               src={notif.senderAvatar}
               alt=""
-              className="w-10 h-10 rounded-xl object-cover border border-[#2E2A40]"
+              className="w-10 h-10 rounded-xl object-cover border border-[#1E2442]"
             />
           ) : (
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${visuals.badgeColor}`}>
@@ -268,16 +268,16 @@ export const NotificationToastItem: React.FC<NotificationToastProps> = ({
             <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded-md border ${visuals.badgeColor}`}>
               {visuals.categoryName}
             </span>
-            <span className="text-[10px] text-[#7A748E]">
+            <span className="text-[10px] text-[#64748B] font-mono">
               только что
             </span>
           </div>
 
-          <h4 className="text-xs font-bold text-white tracking-tight truncate">
+          <h4 className="text-xs font-bold text-[#F8FAFC] tracking-tight truncate">
             {notif.title}
           </h4>
 
-          <p className="text-xs text-[#C5C0D6] leading-relaxed line-clamp-2">
+          <p className="text-xs text-[#94A3B8] leading-relaxed line-clamp-2">
             {notif.message || notif.body || notif.content}
           </p>
         </div>
@@ -289,7 +289,7 @@ export const NotificationToastItem: React.FC<NotificationToastProps> = ({
             e.stopPropagation();
             onClose(toast.id);
           }}
-          className="p-1 rounded-lg text-[#7A748E] hover:text-white hover:bg-white/10 transition-colors shrink-0"
+          className="p-1 rounded-lg text-[#64748B] hover:text-[#F8FAFC] hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
         >
           <X className="w-3.5 h-3.5" />
         </button>
@@ -297,7 +297,7 @@ export const NotificationToastItem: React.FC<NotificationToastProps> = ({
 
       {/* Action cue */}
       {notif.link && (
-        <div className="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[11px] text-[#A69FB8] group-hover:text-white transition-colors">
+        <div className="mt-2.5 pt-2 border-t border-[#1E2442] flex items-center justify-between text-[11px] text-[#A78BFA] group-hover:text-white transition-colors">
           <span>Нажмите, чтобы открыть</span>
           <ExternalLink className="w-3 h-3 opacity-60 group-hover:opacity-100 transition-opacity" />
         </div>

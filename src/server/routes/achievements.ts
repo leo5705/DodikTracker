@@ -1,12 +1,76 @@
 import { Router, Response } from 'express';
-import { requireAuth, requireAdmin, optionalAuth, AuthRequest } from '../../middleware/auth.ts';
+import { requireAuth, requireAdmin, optionalAuth, AuthRequest, requireStaff } from '../../middleware/auth.ts';
 import { achievementService } from '../achievements/service.ts';
 import { db } from '../../db/index.ts';
 import { achievements, userAchievements, users } from '../../db/schema.ts';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, ilike, or, and } from 'drizzle-orm';
 import { AchievementRarity, AchievementStatus } from '../achievements/types.ts';
 
 export const achievementsRouter = Router();
+
+/**
+ * Helper to resolve user by flexible parameters (ID, username, email)
+ */
+async function resolveUser(userIdInput?: any, usernameInput?: any, emailInput?: any) {
+  // 1. Try numeric userId
+  if (userIdInput !== undefined && userIdInput !== null && userIdInput !== '') {
+    const num = Number(userIdInput);
+    if (!isNaN(num) && num > 0) {
+      const [u] = await db.select({ id: users.id, username: users.username, avatar: users.avatar, role: users.role }).from(users).where(eq(users.id, num)).limit(1);
+      if (u) return u;
+    }
+  }
+
+  // 2. Try string query (username, email, or string with @)
+  const candidateStr = usernameInput || emailInput || (typeof userIdInput === 'string' && isNaN(Number(userIdInput)) ? userIdInput : undefined);
+  if (candidateStr) {
+    const clean = String(candidateStr).trim().replace(/^@/, '');
+    const numId = !isNaN(Number(clean)) ? Number(clean) : null;
+    const [u] = await db
+      .select({ id: users.id, username: users.username, avatar: users.avatar, role: users.role })
+      .from(users)
+      .where(
+        or(
+          ilike(users.username, clean),
+          ilike(users.email, clean),
+          eq(sql`LOWER(${users.username})`, clean.toLowerCase()),
+          numId ? eq(users.id, numId) : undefined
+        )
+      )
+      .limit(1);
+    if (u) return u;
+  }
+
+  return null;
+}
+
+/**
+ * Helper to resolve achievement by flexible parameters (ID or Slug)
+ */
+async function resolveAchievement(achIdInput?: any, slugInput?: any) {
+  // 1. Try numeric ID
+  if (achIdInput !== undefined && achIdInput !== null && achIdInput !== '') {
+    const num = Number(achIdInput);
+    if (!isNaN(num) && num > 0) {
+      const [a] = await db.select({ id: achievements.id, slug: achievements.slug, title: achievements.title }).from(achievements).where(eq(achievements.id, num)).limit(1);
+      if (a) return a;
+    }
+  }
+
+  // 2. Try slug string
+  const candidateSlug = slugInput || (typeof achIdInput === 'string' && isNaN(Number(achIdInput)) ? achIdInput : undefined);
+  if (candidateSlug) {
+    const clean = String(candidateSlug).trim().toLowerCase();
+    const [a] = await db
+      .select({ id: achievements.id, slug: achievements.slug, title: achievements.title })
+      .from(achievements)
+      .where(or(eq(achievements.slug, clean), ilike(achievements.slug, clean)))
+      .limit(1);
+    if (a) return a;
+  }
+
+  return null;
+}
 
 /**
  * 1. GET /api/achievements
@@ -109,19 +173,23 @@ achievementsRouter.post('/check', requireAuth, async (req: AuthRequest, res: Res
  */
 achievementsRouter.get('/user/:username', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { username } = req.params;
-    const [targetUser] = await db
-      .select({ id: users.id, username: users.username })
-      .from(users)
-      .where(eq(users.username, username.toLowerCase()))
-      .limit(1);
+    const rawUsername = req.params.username || '';
+    const targetUser = await resolveUser(undefined, rawUsername);
 
     if (!targetUser) {
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
 
     const data = await achievementService.getUserAchievements(targetUser.id, req.dbUser?.id);
-    res.json(data);
+    res.json({
+      user: {
+        id: targetUser.id,
+        username: targetUser.username,
+        avatar: targetUser.avatar,
+        role: targetUser.role,
+      },
+      ...data,
+    });
   } catch (err: any) {
     console.error('[Achievements API] GET /user/:username error:', err);
     res.status(500).json({ error: err.message });
@@ -136,7 +204,7 @@ achievementsRouter.get('/user/:username', optionalAuth, async (req: AuthRequest,
  * 4. GET /api/achievements/admin/all
  * Admin list with all achievements and grant statistics
  */
-achievementsRouter.get('/admin/all', requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
+achievementsRouter.get('/admin/all', requireAuth, requireStaff('MANAGE_ACHIEVEMENTS'), async (_req: AuthRequest, res: Response) => {
   try {
     const all = await db
       .select({
@@ -185,7 +253,7 @@ achievementsRouter.get('/admin/all', requireAuth, requireAdmin, async (_req: Aut
  * 5. POST /api/achievements/admin
  * Create new achievement
  */
-achievementsRouter.post('/admin', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+achievementsRouter.post('/admin', requireAuth, requireStaff('MANAGE_ACHIEVEMENTS'), async (req: AuthRequest, res: Response) => {
   try {
     const admin = req.dbUser!;
     const {
@@ -234,7 +302,7 @@ achievementsRouter.post('/admin', requireAuth, requireAdmin, async (req: AuthReq
  * 6. PUT /api/achievements/admin/:id
  * Update existing achievement
  */
-achievementsRouter.put('/admin/:id', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+achievementsRouter.put('/admin/:id', requireAuth, requireStaff('MANAGE_ACHIEVEMENTS'), async (req: AuthRequest, res: Response) => {
   try {
     const admin = req.dbUser!;
     const id = parseInt(req.params.id, 10);
@@ -279,18 +347,21 @@ achievementsRouter.put('/admin/:id', requireAuth, requireAdmin, async (req: Auth
  * 7. POST /api/achievements/admin/grant
  * Manually grant achievement to user
  */
-achievementsRouter.post('/admin/grant', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+achievementsRouter.post('/admin/grant', requireAuth, requireStaff('MANAGE_ACHIEVEMENTS'), async (req: AuthRequest, res: Response) => {
   try {
     const admin = req.dbUser!;
-    const { userId, achievementId, reason } = req.body;
+    const { userId, user_id, targetUserId, username, targetUsername, email, achievementId, achievement_id, targetAchId, achId, slug, achievementSlug, reason } = req.body;
 
-    if (!userId || !achievementId) {
-      return res.status(400).json({ error: 'Не указан пользователь или достижение' });
+    const targetUser = await resolveUser(userId ?? user_id ?? targetUserId, username ?? targetUsername, email);
+    const targetAch = await resolveAchievement(achievementId ?? achievement_id ?? targetAchId ?? achId, slug ?? achievementSlug);
+
+    if (!targetUser || !targetAch) {
+      return res.status(400).json({ error: 'Пользователь или достижение не указаны' });
     }
 
     const result = await achievementService.grantToUser(
-      Number(userId),
-      Number(achievementId),
+      targetUser.id,
+      targetAch.id,
       admin.id,
       reason ? String(reason).trim() : undefined
     );
@@ -306,13 +377,16 @@ achievementsRouter.post('/admin/grant', requireAuth, requireAdmin, async (req: A
  * 8. POST /api/achievements/admin/revoke
  * Revoke achievement from user
  */
-achievementsRouter.post('/admin/revoke', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+achievementsRouter.post('/admin/revoke', requireAuth, requireStaff('MANAGE_ACHIEVEMENTS'), async (req: AuthRequest, res: Response) => {
   try {
     const admin = req.dbUser!;
-    const { userId, achievementId, reason } = req.body;
+    const { userId, user_id, targetUserId, username, targetUsername, email, achievementId, achievement_id, targetAchId, achId, slug, achievementSlug, reason } = req.body;
 
-    if (!userId || !achievementId) {
-      return res.status(400).json({ error: 'Не указан пользователь или достижение' });
+    const targetUser = await resolveUser(userId ?? user_id ?? targetUserId, username ?? targetUsername, email);
+    const targetAch = await resolveAchievement(achievementId ?? achievement_id ?? targetAchId ?? achId, slug ?? achievementSlug);
+
+    if (!targetUser || !targetAch) {
+      return res.status(400).json({ error: 'Пользователь или достижение не указаны' });
     }
 
     if (!reason || !String(reason).trim()) {
@@ -320,8 +394,8 @@ achievementsRouter.post('/admin/revoke', requireAuth, requireAdmin, async (req: 
     }
 
     const result = await achievementService.revokeFromUser(
-      Number(userId),
-      Number(achievementId),
+      targetUser.id,
+      targetAch.id,
       admin.id,
       String(reason).trim()
     );
@@ -337,18 +411,21 @@ achievementsRouter.post('/admin/revoke', requireAuth, requireAdmin, async (req: 
  * 9. POST /api/achievements/admin/regrant
  * Re-grant achievement to user
  */
-achievementsRouter.post('/admin/regrant', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+achievementsRouter.post('/admin/regrant', requireAuth, requireStaff('MANAGE_ACHIEVEMENTS'), async (req: AuthRequest, res: Response) => {
   try {
     const admin = req.dbUser!;
-    const { userId, achievementId, reason } = req.body;
+    const { userId, user_id, targetUserId, username, targetUsername, email, achievementId, achievement_id, targetAchId, achId, slug, achievementSlug, reason } = req.body;
 
-    if (!userId || !achievementId) {
-      return res.status(400).json({ error: 'Не указан пользователь или достижение' });
+    const targetUser = await resolveUser(userId ?? user_id ?? targetUserId, username ?? targetUsername, email);
+    const targetAch = await resolveAchievement(achievementId ?? achievement_id ?? targetAchId ?? achId, slug ?? achievementSlug);
+
+    if (!targetUser || !targetAch) {
+      return res.status(400).json({ error: 'Пользователь или достижение не указаны' });
     }
 
     const result = await achievementService.regrantToUser(
-      Number(userId),
-      Number(achievementId),
+      targetUser.id,
+      targetAch.id,
       admin.id,
       reason ? String(reason).trim() : undefined
     );
@@ -364,7 +441,7 @@ achievementsRouter.post('/admin/regrant', requireAuth, requireAdmin, async (req:
  * 10. GET /api/achievements/admin/history
  * View issuance & revocation audit history
  */
-achievementsRouter.get('/admin/history', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+achievementsRouter.get('/admin/history', requireAuth, requireStaff('MANAGE_ACHIEVEMENTS'), async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.query.userId ? Number(req.query.userId) : undefined;
     const achievementId = req.query.achievementId ? Number(req.query.achievementId) : undefined;

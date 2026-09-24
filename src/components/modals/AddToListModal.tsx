@@ -153,12 +153,12 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full max-w-md rounded-2xl bg-[#14131A] border border-[#252233] p-5 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#080A18]/80 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="w-full max-w-md rounded-2xl bg-[#11152A] border border-[#1E2442] p-5 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 pb-3 border-b border-[#252233]">
+        <div className="flex items-start justify-between gap-3 pb-3 border-b border-[#1E2442]">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-14 rounded-lg bg-[#191724] border border-[#2E2A40] overflow-hidden shrink-0">
+            <div className="w-10 h-14 rounded-lg bg-[#0B0D20] border border-[#1E2442] overflow-hidden shrink-0">
               {media.posterUrl ? (
                 <img
                   src={media.posterUrl}
@@ -167,29 +167,29 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-[#9A94AA]">
+                <div className="w-full h-full flex items-center justify-center text-[#64748B]">
                   <Film className="w-4 h-4" />
                 </div>
               )}
             </div>
             <div>
-              <h2 className="text-sm font-bold text-[#F3F1F8] line-clamp-1">{media.title}</h2>
-              <p className="text-[11px] text-[#9A94AA] flex items-center gap-1.5 mt-0.5">
-                <Bookmark className="w-3 h-3 text-[#AC82FF]" />
+              <h2 className="text-sm font-bold text-[#F8FAFC] line-clamp-1">{media.title}</h2>
+              <p className="text-[11px] text-[#94A3B8] flex items-center gap-1.5 mt-0.5">
+                <Bookmark className="w-3 h-3 text-[#A78BFA]" />
                 Добавить в пользовательский список
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#1E1C29] transition-colors"
+            className="p-1.5 rounded-lg text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {error && (
-          <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs">
             {error}
           </div>
         )}
@@ -197,24 +197,24 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
         {/* Content list */}
         <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
           {loading ? (
-            <div className="py-12 flex flex-col items-center justify-center gap-2 text-[#9A94AA] text-xs">
-              <Loader2 className="w-5 h-5 animate-spin text-[#AC82FF]" />
+            <div className="py-12 flex flex-col items-center justify-center gap-2 text-[#94A3B8] text-xs">
+              <Loader2 className="w-5 h-5 animate-spin text-[#A78BFA]" />
               <span>Загрузка ваших списков...</span>
             </div>
           ) : lists.length === 0 && !showCreateForm ? (
-            <div className="py-8 text-center space-y-3 p-4 rounded-xl bg-[#191724]/60 border border-[#252233]">
-              <div className="w-10 h-10 rounded-full bg-[#201D2C] flex items-center justify-center mx-auto text-[#AC82FF]">
+            <div className="py-8 text-center space-y-3 p-4 rounded-xl bg-[#0B0D20] border border-[#1E2442]">
+              <div className="w-10 h-10 rounded-full bg-[#151932] border border-[#8B5CF6]/30 flex items-center justify-center mx-auto text-[#A78BFA]">
                 <ListPlus className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-xs font-semibold text-[#F3F1F8]">У вас ещё нет списков</p>
-                <p className="text-[11px] text-[#9A94AA] mt-0.5">
+                <p className="text-xs font-semibold text-[#F8FAFC]">У вас ещё нет списков</p>
+                <p className="text-[11px] text-[#94A3B8] mt-0.5">
                   Создайте свою первую коллекцию (например: «Любимое кино», «На выходные»)
                 </p>
               </div>
               <button
                 onClick={() => setShowCreateForm(true)}
-                className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-lg shadow-purple-950/40"
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-all shadow-lg shadow-[#7C3AED]/25 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Создать список
@@ -233,26 +233,26 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
                     className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all cursor-pointer ${
                       isAdded
                         ? 'bg-emerald-500/10 border-emerald-500/40'
-                        : 'bg-[#191724] border-[#252233] hover:border-[#3A344E] hover:bg-[#1E1C29]'
+                        : 'bg-[#0B0D20] border-[#1E2442] hover:border-[#8B5CF6]/50 hover:bg-[#151932]'
                     }`}
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-bold text-[#F3F1F8] truncate">{lst.title}</span>
+                        <span className="text-xs font-bold text-[#F8FAFC] truncate">{lst.title}</span>
                         {lst.visibility === 'PRIVATE' ? (
-                          <Lock className="w-3 h-3 text-[#9A94AA]" />
+                          <Lock className="w-3 h-3 text-[#64748B]" />
                         ) : (
-                          <Globe className="w-3 h-3 text-[#9A94AA]" />
+                          <Globe className="w-3 h-3 text-[#64748B]" />
                         )}
                       </div>
-                      <p className="text-[10px] text-[#9A94AA] mt-0.5">
+                      <p className="text-[10px] text-[#94A3B8] mt-0.5 font-mono">
                         {lst.itemCount} {lst.itemCount === 1 ? 'элемент' : 'элементов'}
                       </p>
                     </div>
 
                     <div className="shrink-0">
                       {isCurrentAdding ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-[#AC82FF]" />
+                        <Loader2 className="w-4 h-4 animate-spin text-[#A78BFA]" />
                       ) : isAdded ? (
                         <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-lg">
                           <Check className="w-3.5 h-3.5" />
@@ -261,7 +261,7 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
                       ) : (
                         <button
                           type="button"
-                          className="px-2.5 py-1 rounded-lg bg-[#252233] hover:bg-[#9B6BFF] text-[#D5D0E3] hover:text-white text-xs font-medium transition-colors"
+                          className="px-2.5 py-1 rounded-lg bg-[#151932] hover:bg-[#7C3AED] text-[#CBD5E1] hover:text-white text-xs font-medium transition-colors cursor-pointer border border-[#1E2442]"
                         >
                           Добавить
                         </button>
@@ -277,17 +277,17 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
           {showCreateForm && (
             <form
               onSubmit={handleCreateList}
-              className="p-3.5 rounded-xl bg-[#191724] border border-[#3A344E] space-y-3 mt-2 animate-in fade-in"
+              className="p-3.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] space-y-3 mt-2 animate-in fade-in"
             >
               <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-[#F3F1F8] flex items-center gap-1.5">
-                  <FolderPlus className="w-3.5 h-3.5 text-[#AC82FF]" />
+                <h4 className="text-xs font-bold text-[#F8FAFC] flex items-center gap-1.5">
+                  <FolderPlus className="w-3.5 h-3.5 text-[#A78BFA]" />
                   Новый список
                 </h4>
                 <button
                   type="button"
                   onClick={() => setShowCreateForm(false)}
-                  className="text-[11px] text-[#9A94AA] hover:text-[#F3F1F8]"
+                  className="text-[11px] text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
                 >
                   Отмена
                 </button>
@@ -299,7 +299,7 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
                 required
-                className="w-full px-3 py-2 rounded-lg bg-[#14131A] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#9A94AA] focus:outline-none focus:border-[#AC82FF]"
+                className="w-full px-3 py-2 rounded-lg bg-[#080A18] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6]"
               />
 
               <textarea
@@ -307,14 +307,14 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
                 value={newDescription}
                 onChange={(e) => setNewDescription(e.target.value)}
                 rows={2}
-                className="w-full px-3 py-2 rounded-lg bg-[#14131A] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-[#9A94AA] focus:outline-none focus:border-[#AC82FF]"
+                className="w-full px-3 py-2 rounded-lg bg-[#080A18] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6]"
               />
 
               <div className="flex items-center justify-between gap-2">
                 <select
                   value={newVisibility}
                   onChange={(e) => setNewVisibility(e.target.value)}
-                  className="px-2.5 py-1.5 rounded-lg bg-[#14131A] border border-[#2E2A40] text-[11px] text-[#D5D0E3] focus:outline-none"
+                  className="px-2.5 py-1.5 rounded-lg bg-[#080A18] border border-[#1E2442] text-[11px] text-[#CBD5E1] focus:outline-none"
                 >
                   <option value="PUBLIC">Публичный</option>
                   <option value="FRIENDS">Только для друзей</option>
@@ -324,7 +324,7 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
                 <button
                   type="submit"
                   disabled={creating || !newTitle.trim()}
-                  className="px-3.5 py-1.5 rounded-lg bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   {creating && <Loader2 className="w-3 h-3 animate-spin" />}
                   Создать и добавить
@@ -335,11 +335,11 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
         </div>
 
         {/* Footer */}
-        <div className="pt-3 border-t border-[#252233] flex items-center justify-between">
+        <div className="pt-3 border-t border-[#1E2442] flex items-center justify-between">
           {!showCreateForm ? (
             <button
               onClick={() => setShowCreateForm(true)}
-              className="text-xs text-[#AC82FF] hover:text-[#C5A3FF] font-semibold inline-flex items-center gap-1"
+              className="text-xs text-[#A78BFA] hover:text-white font-semibold inline-flex items-center gap-1 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               Создать новый список
@@ -350,7 +350,7 @@ export const AddToListModal: React.FC<AddToListModalProps> = ({ media, onClose, 
 
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-xl bg-[#191724] hover:bg-[#252233] text-xs font-medium text-[#F3F1F8] transition-colors"
+            className="px-4 py-1.5 rounded-xl bg-[#0B0D20] hover:bg-[#151932] border border-[#1E2442] text-xs font-medium text-[#F8FAFC] transition-colors cursor-pointer"
           >
             Готово
           </button>

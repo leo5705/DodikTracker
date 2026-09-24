@@ -312,21 +312,21 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6 pb-20 md:pb-8">
       {/* Header section */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[#252233]">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[#1E2442]">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#9B6BFF] to-[#6366F1] flex items-center justify-center shadow-lg shadow-purple-950/40">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#7C3AED] to-[#6366F1] flex items-center justify-center shadow-lg shadow-[#7C3AED]/25">
             <Bell className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-2xl font-black text-[#F3F1F8] tracking-tight flex items-center gap-2">
+            <h1 className="text-2xl font-black text-[#F8FAFC] tracking-tight flex items-center gap-2">
               Центр уведомлений
               {unreadCount > 0 && (
-                <span className="text-xs px-2.5 py-0.5 rounded-full bg-red-500/20 border border-red-500/30 text-red-300 font-mono">
+                <span className="text-xs px-2.5 py-0.5 rounded-md bg-red-500/15 border border-red-500/30 text-red-400 font-mono font-semibold">
                   {unreadCount} новых
                 </span>
               )}
             </h1>
-            <p className="text-xs text-[#9A94AA]">
+            <p className="text-xs text-[#94A3B8]">
               Мгновенные оповещения о друзьях, новых отзывах, релизах и достижениях
             </p>
           </div>
@@ -339,10 +339,10 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
             type="button"
             onClick={() => setSoundEnabled(!soundEnabled)}
             title={soundEnabled ? 'Звук уведомлений включен' : 'Звук уведомлений выключен'}
-            className={`p-2 rounded-xl border transition-all ${
+            className={`p-2 rounded-xl border transition-all cursor-pointer ${
               soundEnabled
-                ? 'bg-[#191724] border-[#9B6BFF]/40 text-[#AC82FF] hover:border-[#9B6BFF]'
-                : 'bg-[#14131A] border-[#252233] text-[#656075] hover:text-[#9A94AA]'
+                ? 'bg-[#11152A] border-[#8B5CF6]/40 text-[#A78BFA] hover:border-[#8B5CF6]'
+                : 'bg-[#0B0D20] border-[#1E2442] text-[#64748B] hover:text-[#94A3B8]'
             }`}
           >
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
@@ -353,7 +353,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
             type="button"
             onClick={triggerTestToast}
             title="Проверить появление всплывающего уведомления"
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#191724] hover:bg-[#252233] border border-[#2E2A40] text-xs font-semibold text-[#D5D0E3] hover:text-white transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#11152A] hover:bg-[#151932] border border-[#1E2442] text-xs font-semibold text-[#F8FAFC] hover:text-white transition-colors cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
             <span className="hidden sm:inline">Тест Toast</span>
@@ -364,7 +364,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
             type="button"
             onClick={() => onNavigate && onNavigate('/settings')}
             title="Настройки каналов уведомлений"
-            className="p-2 rounded-xl bg-[#191724] hover:bg-[#252233] border border-[#2E2A40] text-[#9A94AA] hover:text-[#F3F1F8] transition-colors"
+            className="p-2 rounded-xl bg-[#11152A] hover:bg-[#151932] border border-[#1E2442] text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
           >
             <Settings className="w-4 h-4" />
           </button>
@@ -372,9 +372,9 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
       </div>
 
       {/* Main card */}
-      <div className="rounded-2xl bg-[#14131A] border border-[#252233] p-5 sm:p-6 space-y-5 shadow-xl shadow-black/20">
+      <div className="rounded-2xl bg-[#0B0D20] border border-[#1E2442] p-5 sm:p-6 space-y-5 shadow-xl shadow-black/20">
         {/* Filter bar & Actions */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b border-[#252233]">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b border-[#1E2442]">
           {/* Filter Pills */}
           <div className="flex flex-wrap items-center gap-1.5">
             {filterTabs.map((tab) => (
@@ -382,17 +382,17 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                 key={`tab-${tab.id}`}
                 type="button"
                 onClick={() => setActiveFilter(tab.id)}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                   activeFilter === tab.id
-                    ? 'bg-[#9B6BFF] text-white shadow-md shadow-purple-950/50'
-                    : 'bg-[#191724] text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#252233]'
+                    ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md shadow-[#7C3AED]/25'
+                    : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] border border-[#1E2442]'
                 }`}
               >
                 <span>{tab.label}</span>
                 {typeof tab.count === 'number' && tab.count > 0 && (
                   <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                      activeFilter === tab.id ? 'bg-white/20 text-white' : 'bg-[#252233] text-[#7A748E]'
+                    className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono ${
+                      activeFilter === tab.id ? 'bg-white/20 text-white' : 'bg-[#151932] text-[#A78BFA]'
                     }`}
                   >
                     {tab.count}
@@ -408,7 +408,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
               <button
                 type="button"
                 onClick={() => markAllAsRead()}
-                className="flex items-center gap-1.5 text-xs text-[#AC82FF] hover:text-white transition-colors"
+                className="flex items-center gap-1.5 text-xs text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
               >
                 <CheckCheck className="w-4 h-4" />
                 <span>Прочитать всё</span>
@@ -419,7 +419,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
               <button
                 type="button"
                 onClick={() => clearReadNotifications()}
-                className="flex items-center gap-1.5 text-xs text-[#7A748E] hover:text-red-400 transition-colors"
+                className="flex items-center gap-1.5 text-xs text-[#64748B] hover:text-rose-400 transition-colors cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Очистить прочитанные</span>
@@ -430,18 +430,18 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
 
         {/* Notifications List */}
         {loading && notifications.length === 0 ? (
-          <div className="py-16 flex flex-col items-center justify-center text-[#9A94AA] gap-3">
-            <Loader2 className="w-8 h-8 animate-spin text-[#9B6BFF]" />
+          <div className="py-16 flex flex-col items-center justify-center text-[#94A3B8] gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-[#8B5CF6]" />
             <p className="text-xs font-medium">Загрузка уведомлений...</p>
           </div>
         ) : filteredNotifications.length === 0 ? (
-          <div className="py-16 flex flex-col items-center justify-center text-center text-[#9A94AA] gap-3">
-            <div className="w-14 h-14 rounded-2xl bg-[#191724] border border-[#252233] flex items-center justify-center">
-              <Bell className="w-6 h-6 text-[#656075]" />
+          <div className="py-16 flex flex-col items-center justify-center text-center text-[#94A3B8] gap-3">
+            <div className="w-14 h-14 rounded-2xl bg-[#11152A] border border-[#1E2442] flex items-center justify-center">
+              <Bell className="w-6 h-6 text-[#64748B]" />
             </div>
             <div className="space-y-1">
-              <h3 className="text-sm font-bold text-[#D5D0E3]">Нет уведомлений</h3>
-              <p className="text-xs text-[#7A748E] max-w-xs">
+              <h3 className="text-sm font-bold text-[#F8FAFC]">Нет уведомлений</h3>
+              <p className="text-xs text-[#64748B] max-w-xs">
                 {activeFilter === 'UNREAD'
                   ? 'Все входящие уведомления уже прочитаны.'
                   : 'В этой категории пока нет новых событий.'}
@@ -461,13 +461,13 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                   onClick={() => handleNotificationClick(notif)}
                   className={`group relative p-4 rounded-2xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-start gap-4 ${
                     notif.isRead
-                      ? 'bg-[#191724]/40 border-[#252233] text-[#9A94AA] hover:bg-[#191724]/80'
-                      : 'bg-[#191724] border-[#9B6BFF]/30 text-[#F3F1F8] shadow-md shadow-purple-950/10 hover:border-[#9B6BFF]/70'
+                      ? 'bg-[#11152A]/50 border-[#1E2442] text-[#94A3B8] hover:bg-[#11152A]'
+                      : 'bg-[#11152A] border-[#8B5CF6]/30 text-[#F8FAFC] shadow-sm hover:border-[#8B5CF6]/60'
                   }`}
                 >
                   {/* Left unread bar indicator */}
                   {!notif.isRead && (
-                    <div className="absolute top-4 left-2 bottom-4 w-1 bg-[#9B6BFF] rounded-full" />
+                    <div className="absolute top-4 left-2 bottom-4 w-1 bg-[#8B5CF6] rounded-full" />
                   )}
 
                   {/* Avatar or Category Icon */}
@@ -476,7 +476,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                       <img
                         src={notif.senderAvatar}
                         alt=""
-                        className="w-11 h-11 rounded-2xl object-cover border border-[#2E2A40]"
+                        className="w-11 h-11 rounded-2xl object-cover border border-[#1E2442]"
                       />
                     ) : (
                       <div className={`w-11 h-11 rounded-2xl flex items-center justify-center border ${visuals.badgeColor}`}>
@@ -498,19 +498,19 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                           {visuals.categoryName}
                         </span>
                         {!notif.isRead && (
-                          <span className="w-2 h-2 rounded-full bg-[#9B6BFF] inline-block animate-pulse" />
+                          <span className="w-2 h-2 rounded-full bg-[#8B5CF6] inline-block animate-pulse" />
                         )}
                       </div>
-                      <span className="text-[11px] text-[#656075] whitespace-nowrap font-mono">
+                      <span className="text-[11px] text-[#64748B] whitespace-nowrap font-mono">
                         {formatRelativeTime(notif.createdAt)}
                       </span>
                     </div>
 
-                    <h4 className={`text-sm font-bold tracking-tight ${notif.isRead ? 'text-[#D5D0E3]' : 'text-white'}`}>
+                    <h4 className={`text-sm font-bold tracking-tight ${notif.isRead ? 'text-[#94A3B8]' : 'text-white'}`}>
                       {notif.title}
                     </h4>
 
-                    <p className={`text-xs leading-relaxed ${notif.isRead ? 'text-[#9A94AA]' : 'text-[#C5C0D6]'}`}>
+                    <p className={`text-xs leading-relaxed ${notif.isRead ? 'text-[#94A3B8]' : 'text-[#CBD5E1]'}`}>
                       {notif.message || notif.body || notif.content}
                     </p>
 
@@ -523,7 +523,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             type="button"
                             disabled={processingFriendId === notif.id}
                             onClick={(e) => handleFriendAction(notif, 'ACCEPT', e)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors disabled:opacity-50"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
                           >
                             <UserCheck className="w-3.5 h-3.5" />
                             Принять дружбу
@@ -532,7 +532,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             type="button"
                             disabled={processingFriendId === notif.id}
                             onClick={(e) => handleFriendAction(notif, 'DECLINE', e)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#252233] hover:bg-red-500/20 hover:text-red-300 text-[#9A94AA] text-xs font-semibold transition-colors disabled:opacity-50"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#151932] hover:bg-rose-500/20 hover:text-rose-300 text-[#94A3B8] text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
                           >
                             <UserX className="w-3.5 h-3.5" />
                             Отклонить
@@ -547,7 +547,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             type="button"
                             disabled={processingInviteId === notif.id}
                             onClick={(e) => handleListInviteAction(notif, 'ACCEPT', e)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold shadow transition-colors disabled:opacity-50"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs font-semibold shadow transition-colors disabled:opacity-50 cursor-pointer"
                           >
                             {processingInviteId === notif.id ? (
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -560,7 +560,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             type="button"
                             disabled={processingInviteId === notif.id}
                             onClick={(e) => handleListInviteAction(notif, 'DECLINE', e)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#252233] hover:bg-red-500/20 hover:text-red-300 text-[#9A94AA] text-xs font-semibold transition-colors disabled:opacity-50"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#151932] hover:bg-rose-500/20 hover:text-rose-300 text-[#94A3B8] text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
                           >
                             <UserX className="w-3.5 h-3.5" />
                             Отклонить
@@ -576,7 +576,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             e.stopPropagation();
                             handleNotificationClick(notif);
                           }}
-                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold transition-colors"
+                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold transition-colors cursor-pointer"
                         >
                           <span>Открыть тир-лист</span>
                           <ExternalLink className="w-3 h-3" />
@@ -591,7 +591,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             e.stopPropagation();
                             handleNotificationClick(notif);
                           }}
-                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-xs font-semibold transition-colors"
+                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-xs font-semibold transition-colors cursor-pointer"
                         >
                           <span>Посмотреть ответ поддержки</span>
                           <ExternalLink className="w-3 h-3" />
@@ -606,7 +606,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             e.stopPropagation();
                             setQuickReplyTo(notif);
                           }}
-                          className="flex items-center gap-1 px-3 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-xs font-semibold transition-colors"
+                          className="flex items-center gap-1 px-3 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-xs font-semibold transition-colors cursor-pointer"
                         >
                           <MessageSquare className="w-3 h-3" />
                           Быстрый ответ
@@ -621,10 +621,10 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                             e.stopPropagation();
                             handleNotificationClick(notif);
                           }}
-                          className="flex items-center gap-1 px-3 py-1 rounded-lg bg-[#252233]/70 hover:bg-[#252233] text-xs text-[#D5D0E3] hover:text-white transition-colors"
+                          className="flex items-center gap-1 px-3 py-1 rounded-lg bg-[#151932] hover:bg-[#1E2442] border border-[#1E2442] text-xs text-[#94A3B8] hover:text-white transition-colors cursor-pointer"
                         >
                           <span>Перейти к объекту</span>
-                          <ExternalLink className="w-3 h-3 text-[#9B6BFF]" />
+                          <ExternalLink className="w-3 h-3 text-[#8B5CF6]" />
                         </button>
                       )}
                     </div>
@@ -640,7 +640,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                           markAsRead(notif.id);
                         }}
                         title="Отметить как прочитанное"
-                        className="p-1.5 text-[#7A748E] hover:text-[#AC82FF] hover:bg-[#252233] rounded-lg transition-colors"
+                        className="p-1.5 text-[#64748B] hover:text-[#A78BFA] hover:bg-[#151932] rounded-lg transition-colors cursor-pointer"
                       >
                         <CheckCheck className="w-4 h-4" />
                       </button>
@@ -652,7 +652,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                         deleteNotification(notif.id);
                       }}
                       title="Удалить уведомление"
-                      className="p-1.5 text-[#7A748E] hover:text-red-400 hover:bg-[#252233] rounded-lg transition-colors"
+                      className="p-1.5 text-[#64748B] hover:text-rose-400 hover:bg-[#151932] rounded-lg transition-colors cursor-pointer"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -667,7 +667,7 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
       {/* Quick reply modal dialog */}
       {quickReplyTo && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-[#14131A] border border-[#2E2A40] rounded-2xl p-5 space-y-4 shadow-2xl">
+          <div className="w-full max-w-md bg-[#0B0D20] border border-[#1E2442] rounded-2xl p-5 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <MessageSquare className="w-4 h-4 text-sky-400" />
@@ -676,13 +676,13 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
               <button
                 type="button"
                 onClick={() => setQuickReplyTo(null)}
-                className="p-1 text-[#7A748E] hover:text-white rounded-lg"
+                className="p-1 text-[#64748B] hover:text-white rounded-lg cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <p className="text-xs text-[#9A94AA] bg-[#191724] p-3 rounded-xl border border-[#252233]">
+            <p className="text-xs text-[#94A3B8] bg-[#11152A] p-3 rounded-xl border border-[#1E2442]">
               «{quickReplyTo.body || quickReplyTo.content}»
             </p>
 
@@ -693,21 +693,21 @@ export const NotificationCenterView: React.FC<NotificationCenterViewProps> = ({ 
                 placeholder="Напишите ответ..."
                 rows={3}
                 autoFocus
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#191724] border border-[#252233] text-sm text-white placeholder-[#656075] focus:outline-none focus:border-[#9B6BFF] resize-none"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#11152A] border border-[#1E2442] text-sm text-white placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] resize-none"
               />
 
               <div className="flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setQuickReplyTo(null)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-[#9A94AA] hover:text-white hover:bg-[#252233] transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-[#94A3B8] hover:text-white hover:bg-[#151932] transition-colors cursor-pointer"
                 >
                   Отмена
                 </button>
                 <button
                   type="submit"
                   disabled={sendingReply || !replyText.trim()}
-                  className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-bold transition-all disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {sendingReply ? 'Отправка...' : 'Отправить'}
                 </button>

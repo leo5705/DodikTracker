@@ -439,9 +439,10 @@ export class ProviderManager {
       }
     }
 
-    // Deduplicate across providers
+    // Deduplicate across providers and preserve provider rank
     const seen = new Set<string>();
-    const results: MediaSearchResult[] = [];
+    const uniqueItems: { item: MediaSearchResult; providerIndex: number }[] = [];
+    let idx = 0;
     for (const item of rawResults) {
       const key = `${item.provider}-${item.externalId}`;
       const titleKey = `${item.type}-${(item.title || '').trim().toLowerCase()}-${item.year || ''}`;
@@ -450,8 +451,41 @@ export class ProviderManager {
       }
       seen.add(key);
       seen.add(titleKey);
-      results.push(item);
+      uniqueItems.push({ item, providerIndex: idx++ });
     }
+
+    // Rank items dynamically by Trend Score (Provider Signal + Recency Weight)
+    const currentYear = new Date().getFullYear();
+    const scoredResults = uniqueItems.map(({ item, providerIndex }) => {
+      // Base score from provider ranking order (100 down to 20)
+      let score = Math.max(20, 100 - providerIndex * 3.5);
+
+      // Recency multiplier (favor contemporary & current-year releases over decade-old classics)
+      const year = item.year;
+      if (year) {
+        if (year >= currentYear) {
+          score *= 1.25; // Upcoming / current year release
+        } else if (year === currentYear - 1) {
+          score *= 1.1; // Last year release
+        } else if (year === currentYear - 2) {
+          score *= 0.95;
+        } else if (year >= currentYear - 5) {
+          score *= 0.8;
+        } else {
+          score *= 0.6; // Older than 5 years
+        }
+      }
+
+      // Small rating bonus if available
+      if (item.rating) {
+        score += Math.min(item.rating * 1.5, 15);
+      }
+
+      return { item, score };
+    });
+
+    scoredResults.sort((a, b) => b.score - a.score);
+    const results = scoredResults.map((s) => s.item);
 
     // Cache trending for 5 minutes
     this.trendingCache.set(cacheKey, {

@@ -31,6 +31,7 @@ async function startServer() {
   app.use(helmet({
     contentSecurityPolicy: false, // Disabled to prevent breaking Vite HMR and inline styles/scripts without complex setup
     crossOriginEmbedderPolicy: false,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   }));
 
   // General Rate Limiter (very lenient)
@@ -84,6 +85,9 @@ async function startServer() {
       });
     }
   });
+
+  // Serve uploaded files statically
+  app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
   // Mount API router
   app.use('/api', apiRouter);

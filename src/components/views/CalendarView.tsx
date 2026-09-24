@@ -12,15 +12,12 @@ import {
   getTodayDateString,
   MONTH_NAMES_RU,
   formatDateRussian,
-  computePeriodDates,
 } from '../calendar/calendarUtils.ts';
 import { CalendarHeader } from '../calendar/CalendarHeader.tsx';
 import { CalendarFilters } from '../calendar/CalendarFilters.tsx';
 import { WeekView } from '../calendar/views/WeekView.tsx';
 import { MonthView } from '../calendar/views/MonthView.tsx';
-import { ListView } from '../calendar/views/ListView.tsx';
-import { TimelineView } from '../calendar/views/TimelineView.tsx';
-import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle2, Sparkles } from 'lucide-react';
 
 export const CalendarView: React.FC = () => {
   const { authFetch, dbUser } = useAuth();
@@ -29,7 +26,7 @@ export const CalendarView: React.FC = () => {
   // Helper to read initial state from URL query params
   const getInitialFilters = (): CalendarFiltersType => {
     const p = route.params || {};
-    const validViews: ViewMode[] = ['week', 'month', 'list', 'timeline'];
+    const validViews: ViewMode[] = ['week', 'month'];
     const validScopes: ScopeMode[] = ['upcoming', 'past', 'all'];
 
     const view: ViewMode = validViews.includes(p.view as ViewMode) ? (p.view as ViewMode) : 'week';
@@ -63,9 +60,6 @@ export const CalendarView: React.FC = () => {
   const [releases, setReleases] = useState<ReleaseItem[]>([]);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
-  const [page, setPage] = useState<number>(1);
-  const [hasMore, setHasMore] = useState<boolean>(false);
-  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
   // Toast feedback
@@ -88,146 +82,101 @@ export const CalendarView: React.FC = () => {
     if (filters.view === 'month') {
       return `${MONTH_NAMES_RU[currentMonth]} ${currentYear}`;
     }
-    if (filters.view === 'week') {
-      const dayOfWeek = (baseDateObj.getUTCDay() + 6) % 7;
-      const mon = new Date(baseDateObj.getTime() - dayOfWeek * 86400000);
-      const sun = new Date(mon.getTime() + 6 * 86400000);
-      const monStr = mon.toISOString().slice(0, 10);
-      const sunStr = sun.toISOString().slice(0, 10);
-      return `${formatDateRussian(monStr, false)} — ${formatDateRussian(sunStr, true)}`;
-    }
-    if (filters.period === 'today') {
-      return `Сегодня (${formatDateRussian(getTodayDateString(), true)})`;
-    }
-    if (filters.dateFrom && filters.dateTo) {
-      return `${formatDateRussian(filters.dateFrom, false)} — ${formatDateRussian(filters.dateTo, true)}`;
-    }
-    return `${MONTH_NAMES_RU[currentMonth]} ${currentYear}`;
+    // Week view
+    const dayOfWeek = (baseDateObj.getUTCDay() + 6) % 7;
+    const mon = new Date(baseDateObj.getTime() - dayOfWeek * 86400000);
+    const sun = new Date(mon.getTime() + 6 * 86400000);
+    const monStr = mon.toISOString().slice(0, 10);
+    const sunStr = sun.toISOString().slice(0, 10);
+    return `${formatDateRussian(monStr, false)} — ${formatDateRussian(sunStr, true)}`;
   };
 
-  // Synchronize filters to URL params (replace mode so history isn't bloated)
+  // Sync state to URL params cleanly
   const syncFiltersToUrl = useCallback(
-    (currentFilters: CalendarFiltersType) => {
-      const sp = new URLSearchParams();
-      if (currentFilters.view !== 'week') sp.set('view', currentFilters.view);
-      if (currentFilters.scope !== 'upcoming') sp.set('scope', currentFilters.scope);
-      if (currentFilters.categories.length > 0 && !currentFilters.categories.includes('all')) {
-        sp.set('category', currentFilters.categories.join(','));
+    (f: CalendarFiltersType) => {
+      const q = new URLSearchParams();
+      if (f.view !== 'week') q.set('view', f.view);
+      if (f.scope !== 'upcoming') q.set('scope', f.scope);
+      if (f.categories.length > 0 && !f.categories.includes('all')) {
+        q.set('category', f.categories.join(','));
       }
-      if (currentFilters.period !== 'month') sp.set('period', currentFilters.period);
-      if (currentFilters.dateFrom) sp.set('date_from', currentFilters.dateFrom);
-      if (currentFilters.dateTo) sp.set('date_to', currentFilters.dateTo);
-      if (currentFilters.followedOnly) sp.set('my', '1');
-      if (currentFilters.genre) sp.set('genre', currentFilters.genre);
-      if (currentFilters.platform) sp.set('platform', currentFilters.platform);
-      if (currentFilters.search) sp.set('search', currentFilters.search);
-      if (currentFilters.sort !== 'date') sp.set('sort', currentFilters.sort);
-      if (currentFilters.order !== 'asc') sp.set('order', currentFilters.order);
+      if (f.followedOnly) q.set('followed', 'true');
+      if (f.search.trim()) q.set('search', f.search.trim());
 
-      const qs = sp.toString();
-      const newPath = qs ? `/calendar?${qs}` : '/calendar';
-      if (window.location.search !== (qs ? `?${qs}` : '')) {
-        navigate(newPath, { replace: true });
+      const qs = q.toString();
+      const newUrl = qs ? `/calendar?${qs}` : '/calendar';
+      if (window.location.pathname + window.location.search !== newUrl) {
+        window.history.replaceState(null, '', newUrl);
       }
     },
-    [navigate]
+    []
   );
 
-  // Fetch releases from API
-  const fetchReleases = useCallback(
-    async (isLoadMore = false, targetPage = 1) => {
-      if (isLoadMore) {
-        setIsLoadingMore(true);
+  // Core Data Fetcher
+  const fetchReleases = useCallback(async () => {
+    setLoading(true);
+    try {
+      const query = new URLSearchParams();
+      query.set('scope', filters.scope);
+      if (filters.categories.length > 0 && !filters.categories.includes('all')) {
+        query.set('categories', filters.categories.join(','));
+      }
+      if (filters.followedOnly) {
+        query.set('followed_only', 'true');
+      }
+      if (filters.search.trim()) {
+        query.set('search', filters.search.trim());
+      }
+
+      if (filters.view === 'week') {
+        // Fetch full week window
+        const dayOfWeek = (baseDateObj.getUTCDay() + 6) % 7;
+        const mon = new Date(baseDateObj.getTime() - dayOfWeek * 86400000);
+        const sun = new Date(mon.getTime() + 6 * 86400000);
+        query.set('date_from', mon.toISOString().slice(0, 10));
+        query.set('date_to', sun.toISOString().slice(0, 10));
+        query.set('limit', '100');
       } else {
-        setLoading(true);
+        // Month view
+        const startM = new Date(Date.UTC(currentYear, currentMonth, 1));
+        const endM = new Date(Date.UTC(currentYear, currentMonth + 1, 0));
+        const expandedStart = new Date(startM.getTime() - 7 * 86400000);
+        const expandedEnd = new Date(endM.getTime() + 7 * 86400000);
+        query.set('date_from', expandedStart.toISOString().slice(0, 10));
+        query.set('date_to', expandedEnd.toISOString().slice(0, 10));
+        query.set('limit', '200');
       }
 
+      let res: Response | null = null;
       try {
-        const query = new URLSearchParams();
-        query.set('scope', filters.scope);
-
-        if (filters.categories.length > 0 && !filters.categories.includes('all')) {
-          query.set('category', filters.categories.join(','));
+        res = await authFetch(`/api/releases?${query.toString()}`);
+      } catch (_fetchErr) {
+        try {
+          res = await fetch(`/api/releases?${query.toString()}`);
+        } catch (_fallbackErr) {
+          console.warn('Network offline during releases fetch');
         }
-
-        if (filters.followedOnly) {
-          query.set('followed', 'true');
-        }
-
-        if (filters.search) {
-          query.set('search', filters.search);
-        }
-
-        if (filters.genre) {
-          query.set('genre', filters.genre);
-        }
-
-        if (filters.platform) {
-          query.set('platform', filters.platform);
-        }
-
-        query.set('sort', filters.sort);
-        query.set('order', filters.order);
-        query.set('page', targetPage.toString());
-
-        // View-specific date constraints
-        if (filters.view === 'week') {
-          // Fetch exact week
-          const dayOfWeek = (baseDateObj.getUTCDay() + 6) % 7;
-          const mon = new Date(baseDateObj.getTime() - dayOfWeek * 86400000);
-          const sun = new Date(mon.getTime() + 6 * 86400000);
-          query.set('date_from', mon.toISOString().slice(0, 10));
-          query.set('date_to', sun.toISOString().slice(0, 10));
-          query.set('limit', '100');
-        } else if (filters.view === 'month') {
-          // Fetch month (including week edges)
-          const startM = new Date(Date.UTC(currentYear, currentMonth, 1));
-          const endM = new Date(Date.UTC(currentYear, currentMonth + 1, 0));
-          // Expand 7 days before and after to cover trailing grid cells
-          const expandedStart = new Date(startM.getTime() - 7 * 86400000);
-          const expandedEnd = new Date(endM.getTime() + 7 * 86400000);
-          query.set('date_from', expandedStart.toISOString().slice(0, 10));
-          query.set('date_to', expandedEnd.toISOString().slice(0, 10));
-          query.set('limit', '200');
-        } else {
-          // List / Timeline views: respect custom dates or period
-          if (filters.dateFrom && filters.dateTo) {
-            query.set('date_from', filters.dateFrom);
-            query.set('date_to', filters.dateTo);
-          } else if (filters.period && filters.period !== 'custom') {
-            query.set('period', filters.period);
-          }
-          query.set('limit', '30');
-        }
-
-        const res = await authFetch(`/api/releases?${query.toString()}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (isLoadMore) {
-            setReleases((prev) => [...prev, ...(data.items || [])]);
-          } else {
-            setReleases(data.items || []);
-          }
-          setTotalCount(data.total || 0);
-          setHasMore((data.page || 1) < (data.totalPages || 1));
-          setPage(targetPage);
-        }
-      } catch (err) {
-        console.error('Failed to load releases:', err);
-        showFeedback('Не удалось загрузить календарь релизов', 'error');
-      } finally {
-        setLoading(false);
-        setIsLoadingMore(false);
       }
-    },
-    [authFetch, filters, baseDate, currentYear, currentMonth]
-  );
+
+      if (res && res.ok) {
+        const data = await res.json();
+        setReleases(data.items || []);
+        setTotalCount(data.total || 0);
+      } else {
+        setReleases([]);
+      }
+    } catch (err: any) {
+      console.warn('Could not refresh releases calendar:', err?.message || err);
+    } finally {
+      setLoading(false);
+    }
+  }, [authFetch, filters, baseDate, currentYear, currentMonth]);
 
   // Debounce refetch when filters change
   useEffect(() => {
     syncFiltersToUrl(filters);
     const timer = setTimeout(() => {
-      fetchReleases(false, 1);
+      fetchReleases();
     }, 200);
     return () => clearTimeout(timer);
   }, [filters, baseDate, syncFiltersToUrl]);
@@ -259,13 +208,9 @@ export const CalendarView: React.FC = () => {
     if (filters.view === 'week') {
       const prevWeek = new Date(baseDateObj.getTime() - 7 * 86400000);
       setBaseDate(prevWeek.toISOString().slice(0, 10));
-    } else if (filters.view === 'month') {
+    } else {
       const prevMonth = new Date(Date.UTC(currentYear, currentMonth - 1, 1));
       setBaseDate(prevMonth.toISOString().slice(0, 10));
-    } else {
-      // In list/timeline, shift window by 30 days
-      const prevPeriod = new Date(baseDateObj.getTime() - 30 * 86400000);
-      setBaseDate(prevPeriod.toISOString().slice(0, 10));
     }
   };
 
@@ -273,57 +218,51 @@ export const CalendarView: React.FC = () => {
     if (filters.view === 'week') {
       const nextWeek = new Date(baseDateObj.getTime() + 7 * 86400000);
       setBaseDate(nextWeek.toISOString().slice(0, 10));
-    } else if (filters.view === 'month') {
+    } else {
       const nextMonth = new Date(Date.UTC(currentYear, currentMonth + 1, 1));
       setBaseDate(nextMonth.toISOString().slice(0, 10));
-    } else {
-      // In list/timeline, shift window by 30 days
-      const nextPeriod = new Date(baseDateObj.getTime() + 30 * 86400000);
-      setBaseDate(nextPeriod.toISOString().slice(0, 10));
     }
   };
 
   const handleToday = () => {
-    const today = getTodayDateString();
-    setBaseDate(today);
+    setBaseDate(getTodayDateString());
   };
 
-  // Follow / Unfollow toggle
+  // Follow / Unfollow Release Action
   const handleToggleFollow = async (item: ReleaseItem): Promise<boolean> => {
     if (!dbUser) {
       showFeedback('Войдите в аккаунт, чтобы следить за релизами', 'error');
       return false;
     }
-
-    const wasFollowed = item.isFollowed || item.isSubscribed;
-    const method = wasFollowed ? 'DELETE' : 'POST';
-
+    const willFollow = !(item.isFollowed || item.isSubscribed);
     try {
-      const res = await authFetch(`/api/releases/${item.mediaId}/follow`, { method });
+      const res = await authFetch('/api/releases/subscriptions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mediaId: item.mediaId || item.id,
+          targetType: item.type,
+          enabled: willFollow,
+        }),
+      });
       if (res.ok) {
-        // Update local item
         setReleases((prev) =>
           prev.map((r) =>
-            r.id === item.id || r.mediaId === item.mediaId
-              ? { ...r, isFollowed: !wasFollowed, isSubscribed: !wasFollowed }
+            r.id === item.id || (r.mediaId === item.mediaId && r.type === item.type)
+              ? { ...r, isFollowed: willFollow, isSubscribed: willFollow }
               : r
           )
         );
         showFeedback(
-          wasFollowed
-            ? `Вы больше не следите за релизом «${item.title}»`
-            : `Вы подписались на уведомления о релизе «${item.title}»`,
+          willFollow ? `Вы подписались на «${item.title}»` : `Вы отписались от «${item.title}»`,
           'success'
         );
         return true;
-      } else {
-        const data = await res.json().catch(() => ({}));
-        showFeedback(data.error || 'Ошибка при обновлении подписки', 'error');
-        return false;
       }
-    } catch (err) {
-      console.error('Toggle follow failed:', err);
-      showFeedback('Ошибка соединения с сервером', 'error');
+      showFeedback('Не удалось обновить подписку', 'error');
+      return false;
+    } catch {
+      showFeedback('Ошибка сети при обновлении подписки', 'error');
       return false;
     }
   };
@@ -333,15 +272,13 @@ export const CalendarView: React.FC = () => {
     setIsExporting(true);
     try {
       const query = new URLSearchParams();
-      query.set('scope', filters.scope);
       if (filters.categories.length > 0 && !filters.categories.includes('all')) {
-        query.set('category', filters.categories.join(','));
+        query.set('categories', filters.categories.join(','));
       }
-      if (filters.followedOnly) query.set('followed', 'true');
-      if (filters.dateFrom) query.set('date_from', filters.dateFrom);
-      if (filters.dateTo) query.set('date_to', filters.dateTo);
-
-      const res = await authFetch(`/api/calendar/export.ics?${query.toString()}`);
+      if (filters.followedOnly) {
+        query.set('followed_only', 'true');
+      }
+      const res = await authFetch(`/api/releases/export/ics?${query.toString()}`);
       if (res.ok) {
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
@@ -352,45 +289,41 @@ export const CalendarView: React.FC = () => {
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
-        showFeedback('Календарь успешно экспортирован в .ics', 'success');
+        showFeedback('Календарь успешно скачан (.ics)', 'success');
       } else {
         showFeedback('Не удалось экспортировать календарь', 'error');
       }
-    } catch (err) {
-      console.error('Export ICS failed:', err);
-      showFeedback('Ошибка при экспорте', 'error');
+    } catch {
+      showFeedback('Ошибка при скачивании .ics файла', 'error');
     } finally {
       setIsExporting(false);
     }
   };
 
-  // Count followed in current list
-  const followedCount = releases.filter((r) => r.isFollowed || r.isSubscribed).length;
-
   return (
-    <div className="space-y-5 pb-16 max-w-7xl mx-auto px-2 sm:px-4">
+    <div className="max-w-7xl mx-auto px-2 sm:px-4 space-y-5 pb-16 animate-in fade-in duration-300">
       {/* Toast Feedback */}
       {feedback && (
         <div
-          className={`fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px)+1rem)] md:bottom-6 right-4 sm:right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl border text-xs font-semibold shadow-2xl backdrop-blur-md animate-in slide-in-from-bottom-3 duration-200 pointer-events-auto ${
+          className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-2xl border text-xs font-bold shadow-2xl flex items-center gap-2 animate-in slide-in-from-top-3 ${
             feedback.type === 'success'
-              ? 'bg-emerald-950/90 text-emerald-200 border-emerald-700/50'
-              : 'bg-rose-950/90 text-rose-200 border-rose-700/50'
+              ? 'bg-[#151932] border-emerald-500/40 text-emerald-300'
+              : 'bg-[#151932] border-rose-500/40 text-rose-300'
           }`}
         >
           {feedback.type === 'success' ? (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           ) : (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <AlertCircle className="w-4 h-4 text-rose-400" />
           )}
           <span>{feedback.text}</span>
         </div>
       )}
 
-      {/* Header with Navigation and View Mode selector */}
+      {/* Header */}
       <CalendarHeader
         view={filters.view}
-        onViewChange={(view) => handleFiltersChange({ view })}
+        onViewChange={(v) => handleFiltersChange({ view: v })}
         periodLabel={getPeriodLabel()}
         onPrev={handlePrev}
         onNext={handleNext}
@@ -399,25 +332,30 @@ export const CalendarView: React.FC = () => {
         isExporting={isExporting}
       />
 
-      {/* Unified Filters Bar */}
+      {/* Category Filters & Search */}
       <CalendarFilters
         filters={filters}
         onChange={handleFiltersChange}
         onReset={handleResetFilters}
         totalCount={totalCount}
-        followedCount={followedCount}
       />
 
-      {/* Main Content Area */}
+      {/* Main Content View (Week or Month) */}
       {loading ? (
-        <div className="py-24 flex flex-col items-center justify-center space-y-3 bg-[#13121B]/30 rounded-3xl border border-[#232032]">
-          <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
-          <p className="text-xs text-zinc-400 font-mono">
-            Загрузка расписания релизов...
-          </p>
+        <div className="py-24 flex flex-col items-center justify-center text-[#94A3B8] gap-3">
+          <Loader2 className="w-8 h-8 animate-spin text-[#8B5CF6]" />
+          <span className="text-xs font-mono">Загрузка релизов...</span>
+        </div>
+      ) : releases.length === 0 && filters.view === 'week' ? (
+        <div className="space-y-4">
+          <WeekView
+            baseDate={baseDate}
+            items={[]}
+            onToggleFollow={handleToggleFollow}
+          />
         </div>
       ) : (
-        <div>
+        <div className="space-y-4">
           {filters.view === 'week' && (
             <WeekView
               baseDate={baseDate}
@@ -430,23 +368,6 @@ export const CalendarView: React.FC = () => {
             <MonthView
               year={currentYear}
               month={currentMonth}
-              items={releases}
-              onToggleFollow={handleToggleFollow}
-            />
-          )}
-
-          {filters.view === 'list' && (
-            <ListView
-              items={releases}
-              onToggleFollow={handleToggleFollow}
-              onLoadMore={() => fetchReleases(true, page + 1)}
-              hasMore={hasMore}
-              isLoadingMore={isLoadingMore}
-            />
-          )}
-
-          {filters.view === 'timeline' && (
-            <TimelineView
               items={releases}
               onToggleFollow={handleToggleFollow}
             />

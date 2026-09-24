@@ -81,6 +81,49 @@ export class ITunesProvider implements MediaProvider {
   ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
     const offset = Math.max((page - 1) * limit, 0);
     try {
+      // 1. Try Apple Music Top Albums RSS Chart Feed (Real Charts)
+      try {
+        const rssRes = await fetch('https://itunes.apple.com/us/rss/topalbums/limit=50/json');
+        if (rssRes.ok) {
+          const rssData = await rssRes.json();
+          const entries = rssData.feed?.entry || [];
+          if (Array.isArray(entries) && entries.length > 0) {
+            const chartResults: MediaSearchResult[] = [];
+            for (const entry of entries.slice(offset, offset + limit)) {
+              const albumName = entry['im:name']?.label || entry.title?.label || 'Без названия';
+              const artist = entry['im:artist']?.label;
+              const images = entry['im:image'] || [];
+              const posterUrl = images.length > 0 ? images[images.length - 1]?.label : undefined;
+              const extId = entry.id?.attributes?.['im:id'] || String(Math.random());
+              const releaseDateStr = entry['im:releaseDate']?.label;
+              const year = releaseDateStr ? parseInt(releaseDateStr.split('-')[0], 10) : undefined;
+              const genre = entry.category?.attributes?.label;
+
+              chartResults.push({
+                provider: 'ITUNES',
+                externalId: extId,
+                type: 'MUSIC',
+                title: albumName,
+                originalTitle: artist,
+                description: artist ? `Исполнитель: ${artist}` : undefined,
+                posterUrl,
+                backdropUrl: posterUrl,
+                releaseDate: releaseDateStr ? releaseDateStr.split('T')[0] : undefined,
+                year,
+                genres: genre ? [genre] : [],
+              });
+            }
+
+            if (chartResults.length > 0) {
+              return { results: chartResults, hasMore: offset + limit < entries.length, page, total: entries.length };
+            }
+          }
+        }
+      } catch (rssErr) {
+        console.warn('iTunes RSS charts fetch failed, falling back to search:', rssErr);
+      }
+
+      // 2. Fallback to search query
       const trendingTerms = ['hits', 'popular', 'top', 'chart', 'album'];
       const term = trendingTerms[(page - 1) % trendingTerms.length];
       const url = `https://itunes.apple.com/search?term=${term}&entity=album&limit=${limit}&offset=${offset}`;
@@ -148,6 +191,7 @@ export class ITunesProvider implements MediaProvider {
         year,
         genres: item.primaryGenreName ? [item.primaryGenreName] : [],
         creators: [item.artistName],
+        ageRating: item.contentAdvisoryRating || undefined,
         statusText: year ? `Релиз ${year}` : undefined,
         sourceText: 'Apple Music / iTunes API',
         website: item.collectionViewUrl,

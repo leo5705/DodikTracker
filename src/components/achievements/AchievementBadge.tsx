@@ -23,6 +23,8 @@ import {
   Bookmark,
   CalendarDays,
   Medal,
+  Clock,
+  CircleDot,
 } from 'lucide-react';
 
 const ICON_MAP: Record<string, React.FC<{ className?: string }>> = {
@@ -77,47 +79,60 @@ export interface AchievementItemProps {
 
 export const RARITY_CONFIG: Record<
   string,
-  { label: string; bg: string; text: string; border: string; glow: string; badgeBg: string }
+  {
+    label: string;
+    bg: string;
+    text: string;
+    border: string;
+    glow: string;
+    badgeBg: string;
+    iconColor: string;
+  }
 > = {
   COMMON: {
     label: 'Обычное',
-    bg: 'bg-[#14131A]',
-    text: 'text-zinc-300',
-    border: 'border-zinc-800',
-    glow: 'group-hover:border-zinc-700',
-    badgeBg: 'bg-zinc-800/80 text-zinc-300 border-zinc-700',
+    bg: 'bg-[#0B0D20]',
+    text: 'text-[#94A3B8]',
+    border: 'border-[#1E2442]',
+    glow: 'hover:border-[#8B5CF6]/40 hover:shadow-lg hover:shadow-[#7C3AED]/10',
+    badgeBg: 'bg-[#151932] text-[#94A3B8] border-[#1E2442]',
+    iconColor: 'text-[#94A3B8]',
   },
   RARE: {
     label: 'Редкое',
-    bg: 'bg-[#0e1626]',
+    bg: 'bg-[#0B0D20]',
     text: 'text-sky-300',
-    border: 'border-sky-800/40',
-    glow: 'group-hover:border-sky-500/60 shadow-sky-950/30',
-    badgeBg: 'bg-sky-950/80 text-sky-300 border-sky-700/50',
+    border: 'border-sky-500/30',
+    glow: 'hover:border-sky-400/60 shadow-md shadow-sky-950/40 hover:shadow-sky-500/20',
+    badgeBg: 'bg-sky-950/60 text-sky-300 border-sky-500/40',
+    iconColor: 'text-sky-400',
   },
   EPIC: {
     label: 'Эпическое',
-    bg: 'bg-[#171026]',
+    bg: 'bg-[#0D0B24]',
     text: 'text-purple-300',
-    border: 'border-purple-800/50',
-    glow: 'group-hover:border-purple-500/70 shadow-purple-950/40',
-    badgeBg: 'bg-purple-950/80 text-purple-300 border-purple-700/60',
+    border: 'border-purple-500/40',
+    glow: 'hover:border-purple-400/70 shadow-lg shadow-[#7C3AED]/20 hover:shadow-purple-500/30',
+    badgeBg: 'bg-purple-950/60 text-purple-300 border-purple-500/40',
+    iconColor: 'text-[#A78BFA]',
   },
   LEGENDARY: {
     label: 'Легендарное',
-    bg: 'bg-[#221808]',
+    bg: 'bg-[#181109]',
     text: 'text-amber-300',
-    border: 'border-amber-700/50',
-    glow: 'group-hover:border-amber-500/80 shadow-amber-950/50',
-    badgeBg: 'bg-amber-950/90 text-amber-300 border-amber-600/60',
+    border: 'border-amber-500/40',
+    glow: 'hover:border-amber-400/70 shadow-lg shadow-amber-950/50 hover:shadow-amber-500/25',
+    badgeBg: 'bg-amber-950/60 text-amber-300 border-amber-500/40',
+    iconColor: 'text-amber-400',
   },
   MYTHIC: {
     label: 'Мифическое',
-    bg: 'bg-[#240c1d]',
+    bg: 'bg-[#180918]',
     text: 'text-rose-300',
-    border: 'border-rose-700/60',
-    glow: 'group-hover:border-rose-500/90 shadow-rose-950/60',
-    badgeBg: 'bg-rose-950/90 text-rose-300 border-rose-600/70',
+    border: 'border-rose-500/40',
+    glow: 'hover:border-rose-400/80 shadow-lg shadow-rose-950/60 hover:shadow-rose-500/30',
+    badgeBg: 'bg-rose-950/60 text-rose-300 border-rose-500/40',
+    iconColor: 'text-rose-400',
   },
 };
 
@@ -136,97 +151,146 @@ export const AchievementBadge: React.FC<AchievementItemProps> = ({
   const IconComponent = isUnlocked || !isSecret ? ICON_MAP[icon] || Trophy : Lock;
   const rarityInfo = RARITY_CONFIG[rarity] || RARITY_CONFIG.COMMON;
 
+  // Has progress in progress
+  const hasProgress = progress && progress.target > 1;
+  const progressPct = progress ? Math.min(100, Math.max(0, progress.percentage)) : 0;
+
   return (
     <div
-      id={`achievement-card-${title.toLowerCase().replace(/\s+/g, '-')}`}
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className={`group relative flex flex-col justify-between p-4 rounded-2xl border transition-all duration-200 cursor-pointer select-none ${
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick?.();
+        }
+      }}
+      className={`group relative flex flex-col justify-between p-4 rounded-3xl border transition-all duration-200 cursor-pointer select-none focus:outline-none focus:ring-1 focus:ring-[#8B5CF6] ${
         isUnlocked
-          ? `${rarityInfo.bg} ${rarityInfo.border} ${rarityInfo.glow} shadow-md`
-          : 'bg-[#111015] border-[#252233]/70 opacity-60 hover:opacity-80 hover:border-[#3A344E]'
+          ? `${rarityInfo.bg} ${rarityInfo.border} ${rarityInfo.glow} shadow-xl shadow-[#7C3AED]/10 hover:-translate-y-0.5`
+          : 'bg-[#0B0D20]/75 border-[#1E2442] hover:border-[#8B5CF6]/40 hover:bg-[#11152A] opacity-85 hover:opacity-100'
       }`}
     >
-      {/* Top Header: Icon + Rarity & Points */}
+      {/* Top row: Icon + Rarity Badge + PTS Reward */}
       <div className="flex items-start justify-between gap-3">
-        <div
-          className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border transition-transform duration-200 group-hover:scale-105 ${
-            isUnlocked
-              ? `${rarityInfo.badgeBg} shadow-inner`
-              : 'bg-[#1A1822] text-[#656075] border-[#2B273C]'
-          }`}
-        >
-          <IconComponent className={`w-6 h-6 ${isUnlocked ? rarityInfo.text : 'text-zinc-500'}`} />
+        {/* Icon Container with Rarity glow */}
+        <div className="relative">
+          <div
+            className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 border transition-all duration-300 group-hover:scale-105 ${
+              isUnlocked
+                ? `${rarityInfo.badgeBg} shadow-lg shadow-[#7C3AED]/15 ring-1 ring-[#8B5CF6]/30`
+                : 'bg-[#151932] text-[#64748B] border-[#1E2442]'
+            }`}
+          >
+            <IconComponent
+              className={`w-6 h-6 ${isUnlocked ? rarityInfo.iconColor : 'text-[#64748B]'}`}
+            />
+          </div>
+
+          {/* Unlocked check badge on icon corner */}
+          {isUnlocked && (
+            <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center border-2 border-[#0B0D20] shadow-sm">
+              <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-col items-end gap-1">
+        {/* Right side: Rarity badge & PTS reward */}
+        <div className="flex flex-col items-end gap-1.5">
           <div className="flex items-center gap-1.5">
             <span
-              className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${rarityInfo.badgeBg}`}
+              className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded-lg border uppercase tracking-wider ${
+                isUnlocked ? rarityInfo.badgeBg : 'bg-[#151932] text-[#64748B] border-[#1E2442]'
+              }`}
             >
               {rarityInfo.label}
             </span>
-            <span className="text-[11px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-[#1C1A24] text-[#AC82FF] border border-[#2F2B42]">
-              +{points}
+            <span
+              className={`text-[11px] font-mono font-black px-2 py-0.5 rounded-lg border ${
+                isUnlocked
+                  ? 'bg-[#8B5CF6]/20 text-[#A78BFA] border-[#8B5CF6]/40 shadow-sm'
+                  : 'bg-[#151932] text-[#94A3B8] border-[#1E2442]'
+              }`}
+            >
+              +{points} PTS
             </span>
           </div>
 
-          {isUnlocked && (
-            <div className="flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Открыто</span>
-            </div>
+          {/* Status Label */}
+          {isUnlocked ? (
+            <span className="text-[10px] font-mono text-emerald-400 font-bold flex items-center gap-1">
+              Получено
+            </span>
+          ) : hasProgress && progress.current > 0 ? (
+            <span className="text-[10px] font-mono text-purple-300 font-bold flex items-center gap-1">
+              <CircleDot className="w-3 h-3 text-[#A78BFA] animate-pulse" />
+              В процессе
+            </span>
+          ) : (
+            <span className="text-[10px] font-mono text-[#64748B] flex items-center gap-1">
+              <Lock className="w-3 h-3" />
+              {isSecret ? 'Секрет' : 'Закрыто'}
+            </span>
           )}
         </div>
       </div>
 
-      {/* Title & Description */}
-      <div className="mt-3 space-y-1 flex-1">
+      {/* Middle: Title & Description */}
+      <div className="my-3 space-y-1 flex-1 min-w-0">
         <h4
-          className={`text-sm font-bold tracking-tight line-clamp-1 ${
-            isUnlocked ? 'text-[#F3F1F8]' : 'text-zinc-400'
+          className={`text-sm font-bold tracking-tight line-clamp-1 group-hover:text-[#A78BFA] transition-colors ${
+            isUnlocked ? 'text-white' : 'text-[#CBD5E1]'
           }`}
         >
           {isSecret && !isUnlocked ? 'Секретное достижение' : title}
         </h4>
-        <p className="text-xs text-[#9A94AA] line-clamp-2 leading-relaxed">
+        <p className="text-xs text-[#94A3B8] line-clamp-2 leading-relaxed">
           {isSecret && !isUnlocked
-            ? 'Условия получения скрыты до момента открытия.'
+            ? 'Условия получения скрыты. Исследуйте трекер, чтобы открыть это достижение!'
             : description}
         </p>
       </div>
 
-      {/* Progress or Unlock Date */}
-      <div className="mt-4 pt-3 border-t border-[#252233]/50 flex items-center justify-between text-[11px]">
+      {/* Bottom: Progress Bar or Unlock Date */}
+      <div className="pt-3 border-t border-[#1E2442] flex items-center justify-between text-[11px] font-mono">
         {isUnlocked ? (
-          <span className="text-[#656075] font-mono">
-            {unlockedAt
-              ? new Date(unlockedAt).toLocaleDateString('ru-RU', {
-                  day: 'numeric',
-                  month: 'short',
-                  year: 'numeric',
-                })
-              : 'Получено'}
-          </span>
-        ) : progress && progress.target > 1 ? (
-          <div className="w-full space-y-1">
-            <div className="flex items-center justify-between text-[10px] text-[#9A94AA] font-mono">
+          <div className="flex items-center justify-between w-full text-[#94A3B8]">
+            <span className="flex items-center gap-1.5 text-[10px]">
+              <Clock className="w-3 h-3 text-[#64748B]" />
+              {unlockedAt
+                ? new Date(unlockedAt).toLocaleDateString('ru-RU', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                  })
+                : 'Разблокировано'}
+            </span>
+            <span className="text-emerald-400 font-bold text-[10px]">100%</span>
+          </div>
+        ) : hasProgress ? (
+          <div className="w-full space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] text-[#94A3B8]">
               <span>Прогресс</span>
-              <span>
-                {progress.current} / {progress.target} ({progress.percentage}%)
+              <span className="text-[#A78BFA] font-bold">
+                {progress.current} / {progress.target} ({progressPct}%)
               </span>
             </div>
-            <div className="w-full h-1.5 rounded-full bg-[#1F1C2B] overflow-hidden">
+            <div className="w-full h-1.5 rounded-full bg-[#151932] overflow-hidden">
               <div
-                className="h-full bg-gradient-to-r from-[#9B6BFF] to-[#AC82FF] transition-all duration-300"
-                style={{ width: `${Math.min(100, progress.percentage)}%` }}
+                className="h-full bg-gradient-to-r from-[#7C3AED] to-[#6366F1] transition-all duration-300 rounded-full"
+                style={{ width: `${progressPct}%` }}
               />
             </div>
           </div>
         ) : (
-          <span className="text-zinc-500 flex items-center gap-1 font-mono">
-            <Lock className="w-3 h-3" />
-            Заблокировано
-          </span>
+          <div className="flex items-center justify-between w-full text-[#64748B] text-[10px]">
+            <span className="flex items-center gap-1">
+              <Lock className="w-3 h-3 text-[#64748B]" />
+              Не начато
+            </span>
+            <span>0%</span>
+          </div>
         )}
       </div>
     </div>

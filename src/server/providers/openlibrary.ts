@@ -229,13 +229,50 @@ export class OpenLibraryProvider implements MediaProvider {
   ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
     const isComic = type === 'COMIC';
     const isBoardGame = type === 'BOARD_GAME';
-    const subject = isBoardGame ? 'board_games' : isComic ? 'graphic_novels' : 'popular';
     const offset = Math.max((page - 1) * limit, 0);
-    const cacheKey = `trending:${subject}:${offset}:${limit}`;
+    const cacheKey = `trending:${type || 'BOOK'}:${page}:${limit}`;
     const cached = this.getFromCache<import('./types.ts').PaginatedResult<MediaSearchResult>>(cacheKey);
     if (cached) return cached;
 
     try {
+      if (!isComic && !isBoardGame) {
+        // Use weekly trending endpoint for books
+        const res = await fetchWithTimeout(
+          `https://openlibrary.org/trending/weekly.json?page=${page}&limit=${limit}`,
+          { headers: this.headers },
+          6000
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const results: MediaSearchResult[] = [];
+          for (const item of data.works || []) {
+            const coverUrl = item.cover_i ? `https://covers.openlibrary.org/b/id/${item.cover_i}-L.jpg` : undefined;
+            const author = Array.isArray(item.author_name) ? item.author_name.join(', ') : undefined;
+            const title = item.title || 'Без названия';
+            const displayTitle = author ? `${title} (${author})` : title;
+
+            results.push({
+              provider: 'OpenLibrary',
+              externalId: item.key ? item.key.replace(/^\//, '') : String(item.cover_i || Math.random()),
+              type: 'BOOK',
+              title: displayTitle,
+              originalTitle: item.title,
+              posterUrl: coverUrl,
+              year: item.first_publish_year || undefined,
+              genres: Array.isArray(item.subject) ? item.subject.slice(0, 4) : ['trending'],
+            });
+          }
+
+          if (results.length > 0) {
+            const paginated = { results, hasMore: (data.works?.length || 0) >= limit, page, total: data.numFound || 100 };
+            this.setCache(cacheKey, paginated);
+            return paginated;
+          }
+        }
+      }
+
+      // Fallback or subject-specific (Comics / Board games)
+      const subject = isBoardGame ? 'board_games' : isComic ? 'graphic_novels' : 'popular';
       const res = await fetchWithTimeout(
         `https://openlibrary.org/subjects/${subject}.json?limit=${limit}&offset=${offset}`,
         { headers: this.headers },

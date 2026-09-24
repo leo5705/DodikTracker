@@ -3,7 +3,7 @@ import { optionalAuth, requireAdmin, AuthRequest } from '../../middleware/auth.t
 import { UnifiedGameService } from '../game/unifiedGameService.ts';
 import { ContentVisibilityService } from '../services/contentVisibilityService.ts';
 import { db } from '../../db/index.ts';
-import { userMedia, media, mediaExternalIds } from '../../db/schema.ts';
+import { userMedia, media, mediaExternalIds, mediaRatings } from '../../db/schema.ts';
 import { eq, and } from 'drizzle-orm';
 import { GameCatalogFilters } from '../../types/unifiedGame.ts';
 import { deduplicateAndNormalizeStores } from '../../utils/storeNormalizer.ts';
@@ -368,8 +368,71 @@ gamesRouter.get('/:id', optionalAuth, async (req: AuthRequest, res: Response) =>
       if (um.length > 0) userTracking = um[0];
     }
 
+    // Compute Dodik Tracker rating & score distribution for the game
+    let dodikRating = {
+      averageRating: null as number | null,
+      ratingCount: 0,
+      distribution: {} as Record<string, number>,
+      userRating: null as number | null,
+    };
+
+    if (game.mediaId) {
+      const allRatings = await db
+        .select({ rating: mediaRatings.rating, userId: mediaRatings.userId })
+        .from(mediaRatings)
+        .where(eq(mediaRatings.mediaId, game.mediaId));
+
+      const totalCount = allRatings.length;
+      const avgRating = totalCount > 0
+        ? Math.round((allRatings.reduce((acc, r) => acc + r.rating, 0) / totalCount) * 100) / 100
+        : null;
+
+      const distribution: Record<string, number> = {};
+      for (let r = 0.5; r <= 10.0; r += 0.5) {
+        distribution[r.toFixed(1)] = 0;
+      }
+      allRatings.forEach((r) => {
+        const key = (Math.round(r.rating * 2) / 2).toFixed(1);
+        if (distribution[key] !== undefined) {
+          distribution[key]++;
+        }
+      });
+
+      let userRating: number | null = null;
+      if (targetUserId) {
+        const found = allRatings.find((r) => r.userId === targetUserId);
+        if (found) userRating = found.rating;
+      }
+
+      dodikRating = {
+        averageRating: avgRating,
+        ratingCount: totalCount,
+        distribution,
+        userRating,
+      };
+    }
+
+    // External Ratings array
+    const externalRatings: { source: string; score: number; max: number }[] = [];
+    if (game.rating && game.rating > 0) {
+      externalRatings.push({
+        source: 'RAWG / IGDB',
+        score: Math.round(game.rating * 10) / 10,
+        max: 10,
+      });
+    }
+    if (game.metacritic) {
+      externalRatings.push({
+        source: 'Metacritic',
+        score: Math.round(game.metacritic / 10 * 10) / 10,
+        max: 10,
+      });
+    }
+
     return res.json({
       ...game,
+      dodikRating,
+      externalRatings,
       userTracking,
     });
   } catch (err: any) {

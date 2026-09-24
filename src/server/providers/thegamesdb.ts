@@ -118,8 +118,7 @@ export class TheGamesDBProvider implements MediaProvider {
       }
 
       const results: MediaSearchResult[] = [];
-      const startIndex = Math.max((page - 1) * limit, 0);
-      const pagedGames = games.length > limit ? games.slice(startIndex, startIndex + limit) : games;
+      const pagedGames = games.slice(0, limit);
 
       for (const game of pagedGames) {
         const gameIdStr = String(game.id);
@@ -171,7 +170,7 @@ export class TheGamesDBProvider implements MediaProvider {
         });
       }
 
-      const hasMore = games.length > limit ? (startIndex + pagedGames.length) < games.length : games.length >= limit;
+      const hasMore = games.length >= limit;
       return { results, hasMore, page, total: games.length };
     } catch (err) {
       console.error('TheGamesDB search error:', err);
@@ -363,6 +362,7 @@ export class TheGamesDBProvider implements MediaProvider {
         screenshots,
         videos,
         trailerUrl,
+        ageRating: typeof game.rating === 'string' ? game.rating.replace(/^ESRB\s*-\s*/i, '').replace(/^PEGI\s*-\s*/i, '') : undefined,
         statusText: year ? `Вышла в ${year}` : 'Выпущена',
         sourceText: 'TheGamesDB',
       };
@@ -376,8 +376,10 @@ export class TheGamesDBProvider implements MediaProvider {
     _type?: string,
     credentials?: Record<string, any>,
     page: number = 1,
-    limit: number = 20
+    limit: number = 20,
+    filters?: import('./types.ts').UnifiedSearchFilters
   ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
-    return this.search('Final Fantasy', credentials, page, limit);
+    const term = filters?.query || '2025';
+    return this.search(term, credentials, page, limit);
   }
 }

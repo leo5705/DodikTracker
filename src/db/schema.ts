@@ -49,6 +49,8 @@ export const media = pgTable('media', {
   year: integer('year'),
   genres: text('genres'), // JSON array string or comma separated
   rating: doublePrecision('rating').default(0), // average public/external rating
+  dodikRating: doublePrecision('dodik_rating'), // Dodik Tracker average community rating (0-100 scale)
+  dodikRatingCount: integer('dodik_rating_count').notNull().default(0), // Dodik Tracker rating count
   totalSeasons: integer('total_seasons').default(0),
   totalEpisodes: integer('total_episodes').default(0),
   totalDurationMinutes: integer('total_duration_minutes'),
@@ -57,7 +59,10 @@ export const media = pgTable('media', {
   ageRating: text('age_rating'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
-});
+}, (table) => ({
+  dodikRatingIdx: index('media_dodik_rating_idx').on(table.dodikRating),
+  dodikRatingCountIdx: index('media_dodik_rating_count_idx').on(table.dodikRatingCount),
+}));
 
 // 3. Media External IDs Table
 export const mediaExternalIds = pgTable('media_external_ids', {
@@ -731,4 +736,224 @@ export const announcementReadsRelations = relations(announcementReads, ({ one })
   announcement: one(announcements, { fields: [announcementReads.announcementId], references: [announcements.id] }),
   user: one(users, { fields: [announcementReads.userId], references: [users.id] }),
 }));
+
+// 36. Media Dodik Ratings Table
+export const mediaRatings = pgTable('media_ratings', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  mediaId: integer('media_id').references(() => media.id, { onDelete: 'cascade' }).notNull(),
+  rating: doublePrecision('rating').notNull(), // 0.5 to 10.0
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  unqUserMediaRating: uniqueIndex('media_ratings_user_media_unq').on(table.userId, table.mediaId),
+  mediaIdIdx: index('media_ratings_media_id_idx').on(table.mediaId),
+  userIdx: index('media_ratings_user_id_idx').on(table.userId),
+}));
+
+export const mediaRatingsRelations = relations(mediaRatings, ({ one }) => ({
+  user: one(users, { fields: [mediaRatings.userId], references: [users.id] }),
+  media: one(media, { fields: [mediaRatings.mediaId], references: [media.id] }),
+}));
+
+// 37. News Comments Table
+export const newsComments = pgTable('news_comments', {
+  id: serial('id').primaryKey(),
+  newsId: integer('news_id').references(() => news.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  parentId: integer('parent_id'),
+  content: text('content').notNull(),
+  isHidden: boolean('is_hidden').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  newsIdIdx: index('news_comments_news_id_idx').on(table.newsId),
+  userIdx: index('news_comments_user_id_idx').on(table.userId),
+}));
+
+export const newsCommentsRelations = relations(newsComments, ({ one }) => ({
+  news: one(news, { fields: [newsComments.newsId], references: [news.id] }),
+  user: one(users, { fields: [newsComments.userId], references: [users.id] }),
+}));
+
+// 38. News Emoji Reactions Table
+export const newsReactions = pgTable('news_reactions', {
+  id: serial('id').primaryKey(),
+  newsId: integer('news_id').references(() => news.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  emoji: text('emoji').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  unqNewsUserEmoji: uniqueIndex('news_reactions_news_user_emoji_unq').on(table.newsId, table.userId, table.emoji),
+  newsIdIdx: index('news_reactions_news_id_idx').on(table.newsId),
+  userIdIdx: index('news_reactions_user_id_idx').on(table.userId),
+}));
+
+export const newsReactionsRelations = relations(newsReactions, ({ one }) => ({
+  news: one(news, { fields: [newsReactions.newsId], references: [news.id] }),
+  user: one(users, { fields: [newsReactions.userId], references: [users.id] }),
+}));
+
+// ==========================================
+// MUSIC MODULE TABLES
+// ==========================================
+
+// 39. Artist / Musician Profiles
+export const artistProfiles = pgTable('artist_profiles', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull().unique(),
+  stageName: text('stage_name').notNull(),
+  slug: text('slug').notNull().unique(),
+  avatar: text('avatar'),
+  description: text('description'),
+  status: text('status').notNull().default('ACTIVE'), // 'ACTIVE' | 'PENDING' | 'SUSPENDED'
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  userIdIdx: uniqueIndex('artist_profiles_user_id_idx').on(table.userId),
+  slugIdx: uniqueIndex('artist_profiles_slug_idx').on(table.slug),
+}));
+
+// 40. Music Genres
+export const musicGenres = pgTable('music_genres', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  slug: text('slug').notNull().unique(),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  slugIdx: uniqueIndex('music_genres_slug_idx').on(table.slug),
+}));
+
+// 41. Music Releases
+export const musicReleases = pgTable('music_releases', {
+  id: serial('id').primaryKey(),
+  artistId: integer('artist_id').references(() => artistProfiles.id, { onDelete: 'cascade' }).notNull(),
+  title: text('title').notNull(),
+  slug: text('slug').notNull().unique(),
+  type: text('type').notNull(), // 'SINGLE' | 'EP' | 'ALBUM'
+  description: text('description'),
+  cover: text('cover'),
+  releaseDate: text('release_date'),
+  status: text('status').notNull().default('DRAFT'), // 'DRAFT' | 'PENDING_REVIEW' | 'PUBLISHED' | 'REJECTED' | 'ARCHIVED'
+  rejectionReason: text('rejection_reason'),
+  reviewedBy: integer('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  artistIdIdx: index('music_releases_artist_id_idx').on(table.artistId),
+  slugIdx: uniqueIndex('music_releases_slug_idx').on(table.slug),
+  statusIdx: index('music_releases_status_idx').on(table.status),
+  typeIdx: index('music_releases_type_idx').on(table.type),
+}));
+
+// 42. Music Release Genres (Junction)
+export const musicReleaseGenres = pgTable('music_release_genres', {
+  id: serial('id').primaryKey(),
+  releaseId: integer('release_id').references(() => musicReleases.id, { onDelete: 'cascade' }).notNull(),
+  genreId: integer('genre_id').references(() => musicGenres.id, { onDelete: 'cascade' }).notNull(),
+}, (table) => ({
+  unqReleaseGenre: uniqueIndex('music_release_genres_unq').on(table.releaseId, table.genreId),
+  releaseIdIdx: index('music_release_genres_release_id_idx').on(table.releaseId),
+  genreIdIdx: index('music_release_genres_genre_id_idx').on(table.genreId),
+}));
+
+// 43. Music Tracks
+export const musicTracks = pgTable('music_tracks', {
+  id: serial('id').primaryKey(),
+  releaseId: integer('release_id').references(() => musicReleases.id, { onDelete: 'cascade' }).notNull(),
+  artistId: integer('artist_id').references(() => artistProfiles.id, { onDelete: 'cascade' }).notNull(),
+  title: text('title').notNull(),
+  slug: text('slug'),
+  trackNumber: integer('track_number').notNull().default(1),
+  audioFile: text('audio_file').notNull(),
+  duration: integer('duration'),
+  lyrics: text('lyrics'),
+  authorNote: text('author_note'),
+  explicit: boolean('explicit').notNull().default(false),
+  status: text('status').notNull().default('PUBLISHED'), // 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  releaseIdIdx: index('music_tracks_release_id_idx').on(table.releaseId),
+  artistIdIdx: index('music_tracks_artist_id_idx').on(table.artistId),
+  trackNumberIdx: index('music_tracks_release_track_no_idx').on(table.releaseId, table.trackNumber),
+}));
+
+// 44. Music Reviews (100-Point Scoring System)
+export const musicReviews = pgTable('music_reviews', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  releaseId: integer('release_id').references(() => musicReleases.id, { onDelete: 'cascade' }).notNull(),
+  musicScore: integer('music_score').notNull(),
+  performanceScore: integer('performance_score').notNull(),
+  productionScore: integer('production_score').notNull(),
+  lyricsScore: integer('lyrics_score').notNull(),
+  atmosphereScore: integer('atmosphere_score').notNull(),
+  cohesionScore: integer('cohesion_score').notNull(),
+  overallScore: doublePrecision('overall_score').notNull(),
+  text: text('text'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  unqUserReleaseReview: uniqueIndex('music_reviews_user_release_unq').on(table.userId, table.releaseId),
+  releaseIdIdx: index('music_reviews_release_id_idx').on(table.releaseId),
+  userIdIdx: index('music_reviews_user_id_idx').on(table.userId),
+}));
+
+// Music Relations
+export const artistProfilesRelations = relations(artistProfiles, ({ one, many }) => ({
+  user: one(users, { fields: [artistProfiles.userId], references: [users.id] }),
+  releases: many(musicReleases),
+  tracks: many(musicTracks),
+}));
+
+export const musicReleasesRelations = relations(musicReleases, ({ one, many }) => ({
+  artist: one(artistProfiles, { fields: [musicReleases.artistId], references: [artistProfiles.id] }),
+  tracks: many(musicTracks),
+  genres: many(musicReleaseGenres),
+  reviews: many(musicReviews),
+}));
+
+export const musicGenresRelations = relations(musicGenres, ({ many }) => ({
+  releases: many(musicReleaseGenres),
+}));
+
+export const musicReleaseGenresRelations = relations(musicReleaseGenres, ({ one }) => ({
+  release: one(musicReleases, { fields: [musicReleaseGenres.releaseId], references: [musicReleases.id] }),
+  genre: one(musicGenres, { fields: [musicReleaseGenres.genreId], references: [musicGenres.id] }),
+}));
+
+export const musicTracksRelations = relations(musicTracks, ({ one }) => ({
+  release: one(musicReleases, { fields: [musicTracks.releaseId], references: [musicReleases.id] }),
+  artist: one(artistProfiles, { fields: [musicTracks.artistId], references: [artistProfiles.id] }),
+}));
+
+export const musicReviewsRelations = relations(musicReviews, ({ one }) => ({
+  user: one(users, { fields: [musicReviews.userId], references: [users.id] }),
+  release: one(musicReleases, { fields: [musicReviews.releaseId], references: [musicReleases.id] }),
+}));
+
+// 45. Musician Status Applications
+export const musicianApplications = pgTable('musician_applications', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  status: text('status').notNull().default('PENDING'), // 'PENDING' | 'APPROVED' | 'REJECTED'
+  message: text('message'),
+  reviewedBy: integer('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at'),
+  rejectionReason: text('rejection_reason'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  userIdIdx: index('musician_applications_user_id_idx').on(table.userId),
+  statusIdx: index('musician_applications_status_idx').on(table.status),
+}));
+
+export const musicianApplicationsRelations = relations(musicianApplications, ({ one }) => ({
+  user: one(users, { fields: [musicianApplications.userId], references: [users.id] }),
+  reviewer: one(users, { fields: [musicianApplications.reviewedBy], references: [users.id] }),
+}));
+
+
 

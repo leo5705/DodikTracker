@@ -1,7 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
-import { ListOrdered, Plus, Loader2, Globe, Users, Lock, X, Search, ShieldCheck, Eye, Trash2, Clock, UserCheck, UserX, Check } from 'lucide-react';
+import {
+  ListOrdered,
+  Plus,
+  Loader2,
+  Globe,
+  Users,
+  Lock,
+  X,
+  Search,
+  Trash2,
+  Clock,
+  UserCheck,
+  UserX,
+  ArrowRight,
+  FolderPlus,
+} from 'lucide-react';
+import { PrimaryButton, SecondaryButton, EmptyState } from '../design-system/index.ts';
 
 const LIST_CATEGORIES = [
   { id: 'MOVIES_TV', label: 'Фильмы и сериалы' },
@@ -50,68 +66,34 @@ export const ListsView: React.FC = () => {
         setPendingInvitations(data);
       }
     } catch (err) {
-      console.error('Failed to fetch list invitations:', err);
+      console.error('Failed to load pending invitations:', err);
     }
   };
 
   const fetchLists = async () => {
-    if (!dbUser) return;
     try {
-      const res = await authFetch('/api/lists/my');
+      setLoading(true);
+      const res = await authFetch('/api/lists');
       if (res.ok) {
         const data = await res.json();
         setLists(data);
       }
     } catch (err) {
-      console.error('Failed to fetch lists:', err);
+      console.error('Failed to load lists:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (dbUser) {
-      fetchLists();
-      fetchInvitations();
-    } else {
-      setLoading(false);
-    }
+    fetchLists();
+    fetchInvitations();
   }, [dbUser]);
 
-  const handleAcceptInvitation = async (invId: number, listId: number) => {
-    setRespondingInviteId(invId);
-    try {
-      const res = await authFetch(`/api/list-invitations/${invId}/accept`, { method: 'POST' });
-      if (res.ok) {
-        await Promise.all([fetchInvitations(), fetchLists()]);
-        navigate(`/lists/${listId}`);
-      }
-    } catch (err) {
-      console.error('Failed to accept invitation:', err);
-    } finally {
-      setRespondingInviteId(null);
-    }
-  };
-
-  const handleDeclineInvitation = async (invId: number) => {
-    setRespondingInviteId(invId);
-    try {
-      const res = await authFetch(`/api/list-invitations/${invId}/decline`, { method: 'POST' });
-      if (res.ok) {
-        await fetchInvitations();
-      }
-    } catch (err) {
-      console.error('Failed to decline invitation:', err);
-    } finally {
-      setRespondingInviteId(null);
-    }
-  };
-
-  // Debounced search for users
+  // Search users for co-author invitations
   useEffect(() => {
-    if (!userSearchQuery.trim() || userSearchQuery.trim().length < 1) {
+    if (!userSearchQuery.trim() || userSearchQuery.trim().length < 2) {
       setUserSearchResults([]);
-      setSearchingUsers(false);
       return;
     }
 
@@ -122,28 +104,28 @@ export const ListsView: React.FC = () => {
         if (res.ok) {
           const data = await res.json();
           // Filter out current user and already selected collaborators
-          const filtered = (Array.isArray(data) ? data : []).filter(
+          const filtered = (data.users || data || []).filter(
             (u: any) => u.id !== dbUser?.id && !collaborators.some((c) => c.id === u.id)
           );
           setUserSearchResults(filtered);
         }
       } catch (err) {
-        console.error('User search failed:', err);
+        console.error('Search users error:', err);
       } finally {
         setSearchingUsers(false);
       }
-    }, 250);
+    }, 300);
 
     return () => clearTimeout(timer);
-  }, [userSearchQuery, collaborators, dbUser]);
+  }, [userSearchQuery, collaborators, dbUser?.id]);
 
-  const handleAddCollaborator = (user: any) => {
+  const handleAddCollaborator = (u: any) => {
     setCollaborators((prev) => [
       ...prev,
       {
-        id: user.id,
-        username: user.username,
-        avatar: user.avatar,
+        id: u.id,
+        username: u.username,
+        avatar: u.avatar,
         role: 'EDITOR',
       },
     ]);
@@ -151,14 +133,45 @@ export const ListsView: React.FC = () => {
     setUserSearchResults([]);
   };
 
-  const handleRemoveCollaborator = (userId: number) => {
-    setCollaborators((prev) => prev.filter((c) => c.id !== userId));
+  const handleRemoveCollaborator = (id: number) => {
+    setCollaborators((prev) => prev.filter((c) => c.id !== id));
   };
 
-  const handleUpdateCollaboratorRole = (userId: number, role: 'EDITOR' | 'VIEWER') => {
-    setCollaborators((prev) =>
-      prev.map((c) => (c.id === userId ? { ...c, role } : c))
-    );
+  const handleUpdateCollaboratorRole = (id: number, newRole: 'EDITOR' | 'VIEWER') => {
+    setCollaborators((prev) => prev.map((c) => (c.id === id ? { ...c, role: newRole } : c)));
+  };
+
+  const handleAcceptInvitation = async (invitationId: number, listId: number) => {
+    setRespondingInviteId(invitationId);
+    try {
+      const res = await authFetch(`/api/lists/${listId}/invitations/accept`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        await fetchInvitations();
+        await fetchLists();
+      }
+    } catch (err) {
+      console.error('Accept invite error:', err);
+    } finally {
+      setRespondingInviteId(null);
+    }
+  };
+
+  const handleDeclineInvitation = async (invitationId: number) => {
+    setRespondingInviteId(invitationId);
+    try {
+      const res = await authFetch(`/api/user/list-invitations/${invitationId}/decline`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        await fetchInvitations();
+      }
+    } catch (err) {
+      console.error('Decline invite error:', err);
+    } finally {
+      setRespondingInviteId(null);
+    }
   };
 
   const handleCreateList = async (e: React.FormEvent) => {
@@ -167,34 +180,26 @@ export const ListsView: React.FC = () => {
 
     setCreating(true);
     setCreateError(null);
-    try {
-      const payload = {
-        title: title.trim(),
-        description: description ? description.trim() : null,
-        visibility,
-        category,
-        members: collaborators.map((c) => ({
-          userId: c.id,
-          role: c.role,
-        })),
-      };
 
+    try {
       const res = await authFetch('/api/lists', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          title,
+          description,
+          visibility,
+          category,
+          collaborators: collaborators.map((c) => ({ userId: c.id, role: c.role })),
+        }),
       });
 
       if (res.ok) {
         const created = await res.json();
+        setShowCreateModal(false);
         setTitle('');
         setDescription('');
-        setCategory('MOVIES_TV');
-        setVisibility('PUBLIC');
         setCollaborators([]);
-        setUserSearchQuery('');
-        setUserSearchResults([]);
-        setShowCreateModal(false);
         fetchLists();
         if (created?.id) {
           navigate(`/lists/${created.id}`);
@@ -212,19 +217,22 @@ export const ListsView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 pb-12 animate-fade-in">
+    <div className="space-y-8 pb-16 animate-fade-in">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1E2442] pb-6">
         <div>
-          <h1 className="text-2xl font-black text-[#F3F1F8] font-mono tracking-tight flex items-center gap-2">
-            <ListOrdered className="w-6 h-6 text-[#AC82FF]" />
-            СПИСКИ & КОЛЛЕКЦИИ
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#A78BFA] uppercase tracking-wider font-mono">
+            <ListOrdered className="w-4 h-4 text-[#8B5CF6]" />
+            <span>Коллекции и подборки</span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-black text-[#F8FAFC] tracking-tight mt-1">
+            Списки & Коллекции
           </h1>
-          <p className="text-xs text-[#9A94AA] mt-1">
+          <p className="text-xs text-[#94A3B8] mt-1">
             Тематические подборки, совместные списки для просмотра и персональные коллекции
           </p>
         </div>
-        <button
+        <PrimaryButton
           onClick={() => {
             if (!dbUser) login();
             else {
@@ -232,22 +240,21 @@ export const ListsView: React.FC = () => {
               setShowCreateModal(true);
             }
           }}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold shadow-lg transition-all"
+          icon={<Plus className="w-4 h-4" />}
         >
-          <Plus className="w-4 h-4" />
           Создать коллекцию
-        </button>
+        </PrimaryButton>
       </div>
 
       {/* Incoming Invitations Banner */}
       {pendingInvitations.length > 0 && (
-        <div className="p-4 sm:p-5 rounded-3xl bg-[#191724] border border-[#9B6BFF]/40 shadow-xl space-y-3">
+        <div className="p-5 rounded-3xl bg-[#11152A] border border-[#8B5CF6]/40 shadow-xl space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-[#F3F1F8] flex items-center gap-2">
+            <h2 className="text-sm font-bold text-[#F8FAFC] flex items-center gap-2">
               <Clock className="w-4 h-4 text-amber-400" />
               Приглашения в совместные списки ({pendingInvitations.length})
             </h2>
-            <span className="text-[11px] text-zinc-400 font-mono">Требуется ваше решение</span>
+            <span className="text-[11px] text-[#94A3B8] font-mono">Требуется ваше решение</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -256,34 +263,34 @@ export const ListsView: React.FC = () => {
               return (
                 <div
                   key={inv.id}
-                  className="p-3.5 rounded-2xl bg-[#14131A] border border-[#2E2A40] space-y-3 flex flex-col justify-between"
+                  className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-3 flex flex-col justify-between shadow-md"
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#9B6BFF]/20 text-[#AC82FF] border border-[#9B6BFF]/30 font-mono font-medium">
+                      <span className="text-[10px] px-2 py-0.5 rounded-md bg-[#8B5CF6]/15 text-[#A78BFA] border border-[#8B5CF6]/30 font-mono font-medium">
                         {inv.permission === 'EDITOR' ? 'Редактор' : 'Читатель'}
                       </span>
-                      <span className="text-[10px] text-zinc-500 font-mono">от @{inv.inviterUsername}</span>
+                      <span className="text-[10px] text-[#64748B] font-mono">от @{inv.inviterUsername}</span>
                     </div>
-                    <h3 className="text-xs font-bold text-white line-clamp-1">{inv.listTitle}</h3>
+                    <h3 className="text-xs font-bold text-[#F8FAFC] line-clamp-1">{inv.listTitle}</h3>
                     {inv.listDescription && (
-                      <p className="text-[11px] text-zinc-400 line-clamp-2">{inv.listDescription}</p>
+                      <p className="text-[11px] text-[#94A3B8] line-clamp-2">{inv.listDescription}</p>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 pt-1">
+                  <div className="flex items-center gap-2 pt-2 border-t border-[#1E2442]">
                     <button
                       onClick={() => handleAcceptInvitation(inv.id, inv.listId)}
                       disabled={isResponding}
-                      className="flex-1 py-1.5 px-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                      className="flex-1 py-1.5 px-3 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer shadow-md shadow-[#7C3AED]/20"
                     >
-                      {isResponding ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserCheck className="w-3.5 h-3.5" />}
+                      {isResponding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserCheck className="w-3.5 h-3.5" />}
                       <span>Принять</span>
                     </button>
                     <button
                       onClick={() => handleDeclineInvitation(inv.id)}
                       disabled={isResponding}
-                      className="py-1.5 px-2.5 rounded-xl bg-[#1F1C2E] hover:bg-rose-950/40 border border-[#2E2A40] hover:border-rose-800/50 text-zinc-400 hover:text-rose-300 text-xs font-semibold flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                      className="py-1.5 px-3 rounded-xl bg-[#151932] hover:bg-rose-950/40 border border-[#1E2442] hover:border-rose-800/50 text-[#94A3B8] hover:text-rose-300 text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50 cursor-pointer"
                     >
                       <UserX className="w-3.5 h-3.5" />
                       <span>Отклонить</span>
@@ -296,22 +303,29 @@ export const ListsView: React.FC = () => {
         </div>
       )}
 
+      {/* Main lists display */}
       {loading ? (
-        <div className="py-20 flex flex-col items-center justify-center space-y-3">
-          <Loader2 className="w-8 h-8 text-[#AC82FF] animate-spin" />
-          <p className="text-xs text-[#9A94AA]">Загрузка списков...</p>
+        <div className="py-24 flex flex-col items-center justify-center space-y-3">
+          <Loader2 className="w-8 h-8 text-[#8B5CF6] animate-spin" />
+          <p className="text-xs text-[#94A3B8] font-mono">Загрузка списков...</p>
         </div>
       ) : lists.length > 0 ? (
         <div className="space-y-10">
-          {LIST_CATEGORIES.map(cat => {
-            const catLists = lists.filter(l => l.category === cat.id);
+          {LIST_CATEGORIES.map((cat) => {
+            const catLists = lists.filter((l) => l.category === cat.id);
             if (catLists.length === 0) return null;
-            
+
             return (
               <div key={cat.id} className="space-y-4">
-                <h2 className="text-lg font-bold text-[#F3F1F8] border-b border-[#252233] pb-2">
-                  {cat.label}
-                </h2>
+                <div className="flex items-center justify-between border-b border-[#1E2442] pb-3">
+                  <h2 className="text-base sm:text-lg font-bold text-[#F8FAFC] tracking-tight">
+                    {cat.label}
+                  </h2>
+                  <span className="text-xs font-mono text-[#64748B]">
+                    {catLists.length} {catLists.length === 1 ? 'список' : 'списков'}
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {catLists.map((lst) => {
                     const isOwner = dbUser?.id === lst.ownerId;
@@ -324,37 +338,58 @@ export const ListsView: React.FC = () => {
                         onClick={() => navigate(`/lists/${lst.id}`)}
                         role="link"
                         tabIndex={0}
-                        className="group p-5 rounded-3xl bg-[#14131A] border border-[#252233] hover:border-[#AC82FF]/60 cursor-pointer transition-all shadow-lg hover:-translate-y-1 space-y-3 text-left"
+                        className="group p-5 rounded-3xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#8B5CF6]/50 cursor-pointer transition-all shadow-xl hover:-translate-y-1 space-y-3 text-left flex flex-col justify-between"
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#1F1C2E] text-[#AC82FF] border border-[#3A344E] font-mono flex items-center gap-1">
-                            {lst.visibility === 'PUBLIC' ? (
-                              <Globe className="w-3 h-3 text-emerald-400" />
-                            ) : lst.visibility === 'FRIENDS' || lst.visibility === 'FRIENDS' ? (
-                              <Users className="w-3 h-3 text-amber-400" />
-                            ) : (
-                              <Lock className="w-3 h-3 text-rose-400" />
-                            )}
-                            {lst.visibility === 'PUBLIC' ? 'Публичный' : (lst.visibility === 'FRIENDS' || lst.visibility === 'FRIENDS') ? 'Для друзей' : 'Приватный'}
-                          </span>
-
-                          {isCollaborator && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#9B6BFF]/20 text-[#AC82FF] border border-[#9B6BFF]/40 font-mono">
-                              {userRole === 'EDITOR' ? 'Соавтор (Редактор)' : 'Читатель'}
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] px-2.5 py-0.5 rounded-md bg-[#151932] text-[#A78BFA] border border-[#1E2442] font-mono flex items-center gap-1.5">
+                              {lst.visibility === 'PUBLIC' ? (
+                                <Globe className="w-3 h-3 text-emerald-400" />
+                              ) : lst.visibility === 'FRIENDS' ? (
+                                <Users className="w-3 h-3 text-amber-400" />
+                              ) : (
+                                <Lock className="w-3 h-3 text-rose-400" />
+                              )}
+                              <span>
+                                {lst.visibility === 'PUBLIC'
+                                  ? 'Публичный'
+                                  : lst.visibility === 'FRIENDS'
+                                  ? 'Для друзей'
+                                  : 'Приватный'}
+                              </span>
                             </span>
-                          )}
 
-                          <span className="text-[11px] text-[#9A94AA] truncate max-w-[120px]">@{lst.ownerUsername}</span>
+                            {isCollaborator && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md bg-[#8B5CF6]/15 text-[#A78BFA] border border-[#8B5CF6]/30 font-mono">
+                                {userRole === 'EDITOR' ? 'Соавтор' : 'Читатель'}
+                              </span>
+                            )}
+
+                            <span className="text-[11px] text-[#64748B] font-mono truncate max-w-[120px]">
+                              @{lst.ownerUsername}
+                            </span>
+                          </div>
+
+                          <h3 className="text-sm font-bold text-[#F8FAFC] group-hover:text-[#A78BFA] transition-colors line-clamp-1">
+                            {lst.title}
+                          </h3>
+
+                          {lst.description ? (
+                            <p className="text-xs text-[#94A3B8] line-clamp-2 leading-relaxed">
+                              {lst.description}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-[#64748B] italic">Без описания</p>
+                          )}
                         </div>
-                        <h3 className="text-sm font-bold text-[#F3F1F8] group-hover:text-[#AC82FF] transition-colors">
-                          {lst.title}
-                        </h3>
-                        {lst.description && (
-                          <p className="text-xs text-[#9A94AA] line-clamp-2 leading-relaxed">{lst.description}</p>
-                        )}
-                        <div className="pt-2 flex items-center justify-between text-[11px] text-[#AC82FF] font-medium border-t border-[#252233]/60">
-                          <span>{lst.itemsCount ? `${lst.itemsCount} тайтлов` : 'Коллекция'}</span>
-                          <span className="group-hover:translate-x-0.5 transition-transform">Открыть список →</span>
+
+                        <div className="pt-3 flex items-center justify-between text-xs text-[#A78BFA] font-medium border-t border-[#1E2442]">
+                          <span className="font-mono text-[11px] text-[#94A3B8]">
+                            {lst.itemsCount ? `${lst.itemsCount} тайтлов` : 'Пустой список'}
+                          </span>
+                          <span className="inline-flex items-center gap-1 group-hover:translate-x-1 transition-transform font-bold text-xs">
+                            Открыть <ArrowRight className="w-3.5 h-3.5" />
+                          </span>
                         </div>
                       </div>
                     );
@@ -365,26 +400,16 @@ export const ListsView: React.FC = () => {
           })}
         </div>
       ) : (
-        <div className="py-20 text-center space-y-3 bg-[#14131A] rounded-2xl border border-[#252233] p-8 max-w-lg mx-auto">
-          <div className="w-12 h-12 rounded-full bg-[#191724] border border-[#2E2A40] flex items-center justify-center mx-auto text-[#9A94AA]">
-            <ListOrdered className="w-6 h-6" />
-          </div>
-          <h3 className="text-sm font-semibold text-[#F3F1F8] font-mono">У вас пока нет списков</h3>
-          <p className="text-xs text-[#9A94AA] max-w-sm mx-auto">
-            Создайте свою первую коллекцию или совместный список для совместного наполнения с друзьями!
-          </p>
-          <div className="pt-2">
-            <button
-              onClick={() => {
-                if (!dbUser) login();
-                else setShowCreateModal(true);
-              }}
-              className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold shadow-md"
-            >
-              Создать первый список
-            </button>
-          </div>
-        </div>
+        <EmptyState
+          icon={<FolderPlus className="w-10 h-10 text-[#8B5CF6]" />}
+          title="У вас пока нет списков"
+          description="Создайте свою первую коллекцию или совместный список для совместного наполнения с друзьями!"
+          actionLabel="Создать первый список"
+          onAction={() => {
+            if (!dbUser) login();
+            else setShowCreateModal(true);
+          }}
+        />
       )}
 
       {/* Create List Modal */}
@@ -392,76 +417,80 @@ export const ListsView: React.FC = () => {
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in overflow-y-auto">
           <form
             onSubmit={handleCreateList}
-            className="bg-[#14131A] border border-[#252233] rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl animate-in zoom-in-95 my-8 max-h-[90vh] overflow-y-auto"
+            className="bg-[#0B0D20] border border-[#1E2442] rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl animate-in zoom-in-95 my-8 max-h-[90vh] overflow-y-auto"
           >
-            <div className="flex items-center justify-between pb-3 border-b border-[#252233]">
-              <h3 className="text-sm font-bold text-[#F3F1F8] font-mono tracking-wider flex items-center gap-2">
-                <ListOrdered className="w-4 h-4 text-[#AC82FF]" />
+            <div className="flex items-center justify-between pb-3 border-b border-[#1E2442]">
+              <h3 className="text-sm font-bold text-[#F8FAFC] font-mono tracking-wider flex items-center gap-2">
+                <ListOrdered className="w-4 h-4 text-[#8B5CF6]" />
                 НОВАЯ КОЛЛЕКЦИЯ
               </h3>
               <button
                 type="button"
                 onClick={() => setShowCreateModal(false)}
-                className="p-1.5 rounded-lg text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#252233]"
+                className="p-1.5 rounded-xl text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {createError && (
-              <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/40 text-xs text-rose-300">
+              <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800/40 text-xs text-rose-300">
                 {createError}
               </div>
             )}
-            
+
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#D5D0E3]">Название списка *</label>
+                <label className="text-xs font-semibold text-[#CBD5E1]">Название списка *</label>
                 <input
                   type="text"
                   required
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Например: Любимый киберпанк или Лучшие игры 2026"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-sm text-[#F3F1F8] focus:outline-none focus:border-[#9B6BFF]"
+                  placeholder="Например: Любимый киберпанк или Топ игр 2026"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs text-[#F8FAFC] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                 />
-              </div>
-              
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#D5D0E3]">Категория медиа</label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-sm text-[#F3F1F8] focus:outline-none focus:border-[#9B6BFF] cursor-pointer appearance-none"
-                >
-                  {LIST_CATEGORIES.map(c => (
-                    <option key={c.id} value={c.id}>{c.label}</option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-[#9A94AA] pt-0.5">В этот список можно будет добавлять медиа только выбранной категории.</p>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#D5D0E3]">Описание (необязательно)</label>
+                <label className="text-xs font-semibold text-[#CBD5E1]">Категория медиа</label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs text-[#F8FAFC] focus:outline-none focus:border-[#8B5CF6] cursor-pointer"
+                >
+                  {LIST_CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-[#94A3B8]">
+                  В этот список можно будет добавлять тайтлы выбранной категории.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#CBD5E1]">Описание (необязательно)</label>
                 <textarea
                   rows={2}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Для чего этот список..."
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-sm text-[#F3F1F8] focus:outline-none focus:border-[#9B6BFF] resize-none"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs text-[#F8FAFC] focus:outline-none focus:border-[#8B5CF6] resize-none transition-colors"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#D5D0E3]">Видимость</label>
+                <label className="text-xs font-semibold text-[#CBD5E1]">Видимость</label>
                 <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => setVisibility('PUBLIC')}
-                    className={`py-2 px-2 rounded-xl text-xs font-medium border text-center transition-all ${
+                    className={`py-2 px-2 rounded-xl text-xs font-medium border text-center transition-all cursor-pointer ${
                       visibility === 'PUBLIC'
-                        ? 'bg-[#9B6BFF] text-white border-[#9B6BFF]'
-                        : 'bg-[#191724] text-[#9A94AA] border-[#2E2A40] hover:text-[#F3F1F8]'
+                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white border-transparent font-bold shadow-md shadow-[#7C3AED]/25'
+                        : 'bg-[#11152A] text-[#94A3B8] border-[#1E2442] hover:text-[#F8FAFC] hover:bg-[#151932]'
                     }`}
                   >
                     Публичный
@@ -469,10 +498,10 @@ export const ListsView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setVisibility('FRIENDS')}
-                    className={`py-2 px-2 rounded-xl text-xs font-medium border text-center transition-all ${
+                    className={`py-2 px-2 rounded-xl text-xs font-medium border text-center transition-all cursor-pointer ${
                       visibility === 'FRIENDS'
-                        ? 'bg-[#9B6BFF] text-white border-[#9B6BFF]'
-                        : 'bg-[#191724] text-[#9A94AA] border-[#2E2A40] hover:text-[#F3F1F8]'
+                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white border-transparent font-bold shadow-md shadow-[#7C3AED]/25'
+                        : 'bg-[#11152A] text-[#94A3B8] border-[#1E2442] hover:text-[#F8FAFC] hover:bg-[#151932]'
                     }`}
                   >
                     Для друзей
@@ -480,10 +509,10 @@ export const ListsView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setVisibility('PRIVATE')}
-                    className={`py-2 px-2 rounded-xl text-xs font-medium border text-center transition-all ${
+                    className={`py-2 px-2 rounded-xl text-xs font-medium border text-center transition-all cursor-pointer ${
                       visibility === 'PRIVATE'
-                        ? 'bg-[#9B6BFF] text-white border-[#9B6BFF]'
-                        : 'bg-[#191724] text-[#9A94AA] border-[#2E2A40] hover:text-[#F3F1F8]'
+                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white border-transparent font-bold shadow-md shadow-[#7C3AED]/25'
+                        : 'bg-[#11152A] text-[#94A3B8] border-[#1E2442] hover:text-[#F8FAFC] hover:bg-[#151932]'
                     }`}
                   >
                     Только мне
@@ -492,55 +521,55 @@ export const ListsView: React.FC = () => {
               </div>
 
               {/* Соавторы / Участники совместного списка */}
-              <div className="space-y-2 pt-2 border-t border-[#252233]">
+              <div className="space-y-2 pt-3 border-t border-[#1E2442]">
                 <div className="flex items-center justify-between">
                   <div>
-                    <label className="text-xs font-semibold text-[#D5D0E3] flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5 text-[#AC82FF]" />
+                    <label className="text-xs font-semibold text-[#CBD5E1] flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-[#8B5CF6]" />
                       Пригласить соавторов
                     </label>
-                    <p className="text-[10px] text-[#9A94AA] mt-0.5">
-                      Пользователи получат приглашение и смогут принять участие
+                    <p className="text-[10px] text-[#94A3B8] mt-0.5">
+                      Пользователи получат приглашение и смогут наполнять список
                     </p>
                   </div>
-                  <span className="text-[10px] text-[#AC82FF] font-mono">
+                  <span className="text-[10px] text-[#A78BFA] font-mono">
                     {collaborators.length > 0 ? `${collaborators.length} в списке` : 'Необязательно'}
                   </span>
                 </div>
 
                 <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Search className="w-3.5 h-3.5 text-[#64748B] absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={userSearchQuery}
                     onChange={(e) => setUserSearchQuery(e.target.value)}
                     placeholder="Найти пользователя по логину..."
-                    className="w-full pl-8 pr-8 py-2 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-zinc-600 focus:outline-none focus:border-[#9B6BFF]"
+                    className="w-full pl-8 pr-8 py-2 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                   />
                   {searchingUsers && (
-                    <Loader2 className="w-3.5 h-3.5 text-[#AC82FF] animate-spin absolute right-3 top-1/2 -translate-y-1/2" />
+                    <Loader2 className="w-3.5 h-3.5 text-[#8B5CF6] animate-spin absolute right-3 top-1/2 -translate-y-1/2" />
                   )}
 
                   {/* Dropdown with search results */}
                   {userSearchResults.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1.5 z-20 rounded-xl bg-[#191724] border border-[#2E2A40] shadow-2xl max-h-48 overflow-y-auto p-1.5 space-y-1">
+                    <div className="absolute top-full left-0 right-0 mt-1.5 z-20 rounded-2xl bg-[#11152A] border border-[#1E2442] shadow-2xl max-h-48 overflow-y-auto p-1.5 space-y-1">
                       {userSearchResults.map((u) => (
                         <div
                           key={u.id}
                           onClick={() => handleAddCollaborator(u)}
-                          className="flex items-center justify-between p-2 rounded-lg hover:bg-[#252233] cursor-pointer transition-colors"
+                          className="flex items-center justify-between p-2 rounded-xl hover:bg-[#151932] cursor-pointer transition-colors"
                         >
                           <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full bg-[#2E2A40] overflow-hidden shrink-0 flex items-center justify-center text-[10px] text-[#AC82FF] font-bold">
+                            <div className="w-6 h-6 rounded-full bg-[#151932] border border-[#1E2442] overflow-hidden shrink-0 flex items-center justify-center text-[10px] text-[#A78BFA] font-bold">
                               {u.avatar ? (
                                 <img src={u.avatar} alt={u.username} className="w-full h-full object-cover" />
                               ) : (
                                 u.username?.[0]?.toUpperCase() || 'U'
                               )}
                             </div>
-                            <span className="text-xs text-[#F3F1F8] font-medium">@{u.username}</span>
+                            <span className="text-xs text-[#F8FAFC] font-medium">@{u.username}</span>
                           </div>
-                          <span className="text-[10px] text-[#AC82FF] font-medium">+ Добавить</span>
+                          <span className="text-[10px] text-[#A78BFA] font-medium">+ Добавить</span>
                         </div>
                       ))}
                     </div>
@@ -553,24 +582,24 @@ export const ListsView: React.FC = () => {
                     {collaborators.map((c) => (
                       <div
                         key={c.id}
-                        className="flex items-center justify-between p-2 rounded-xl bg-[#191724] border border-[#252233] gap-2 text-xs"
+                        className="flex items-center justify-between p-2.5 rounded-xl bg-[#11152A] border border-[#1E2442] gap-2 text-xs"
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <div className="w-6 h-6 rounded-full bg-[#2E2A40] overflow-hidden shrink-0 flex items-center justify-center text-[10px] text-[#AC82FF] font-bold">
+                          <div className="w-6 h-6 rounded-full bg-[#151932] border border-[#1E2442] overflow-hidden shrink-0 flex items-center justify-center text-[10px] text-[#A78BFA] font-bold">
                             {c.avatar ? (
                               <img src={c.avatar} alt={c.username} className="w-full h-full object-cover" />
                             ) : (
                               c.username?.[0]?.toUpperCase() || 'U'
                             )}
                           </div>
-                          <span className="text-xs text-[#F3F1F8] font-medium truncate">@{c.username}</span>
+                          <span className="text-xs text-[#F8FAFC] font-medium truncate">@{c.username}</span>
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
                           <select
                             value={c.role}
                             onChange={(e) => handleUpdateCollaboratorRole(c.id, e.target.value as any)}
-                            className="px-2 py-1 rounded-lg bg-[#14131A] border border-[#2E2A40] text-[11px] text-[#AC82FF] focus:outline-none focus:border-[#9B6BFF] cursor-pointer"
+                            className="px-2 py-1 rounded-lg bg-[#0B0D20] border border-[#1E2442] text-[11px] text-[#A78BFA] focus:outline-none focus:border-[#8B5CF6] cursor-pointer"
                           >
                             <option value="EDITOR">Редактор</option>
                             <option value="VIEWER">Читатель</option>
@@ -578,7 +607,7 @@ export const ListsView: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => handleRemoveCollaborator(c.id)}
-                            className="p-1 text-zinc-500 hover:text-rose-400 transition-colors"
+                            className="p-1 text-[#64748B] hover:text-rose-400 transition-colors cursor-pointer"
                             title="Удалить"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -591,21 +620,13 @@ export const ListsView: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 pt-3 border-t border-[#252233]">
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 rounded-xl text-xs text-[#9A94AA] hover:text-[#F3F1F8]"
-              >
+            <div className="flex justify-end gap-2.5 pt-3 border-t border-[#1E2442]">
+              <SecondaryButton type="button" onClick={() => setShowCreateModal(false)}>
                 Отмена
-              </button>
-              <button
-                type="submit"
-                disabled={creating}
-                className="px-5 py-2 rounded-xl bg-[#F3F1F8] hover:bg-white text-[#0F0E12] text-xs font-bold shadow-md transition-colors disabled:opacity-50"
-              >
+              </SecondaryButton>
+              <PrimaryButton type="submit" disabled={creating}>
                 {creating ? 'Создание...' : 'Создать список'}
-              </button>
+              </PrimaryButton>
             </div>
           </form>
         </div>
@@ -613,4 +634,3 @@ export const ListsView: React.FC = () => {
     </div>
   );
 };
-

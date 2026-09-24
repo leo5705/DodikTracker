@@ -127,7 +127,7 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
     <AnimatePresence>
       <div
         id="share-content-modal-backdrop"
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#080A18]/80 backdrop-blur-sm"
         onClick={(e) => {
           if (e.target === e.currentTarget) onClose();
         }}
@@ -138,19 +138,19 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: 10 }}
           transition={{ duration: 0.2 }}
-          className="w-full max-w-lg overflow-hidden bg-[#181622] border border-white/10 rounded-2xl shadow-2xl flex flex-col max-h-[90vh]"
+          className="w-full max-w-lg overflow-hidden bg-[#11152A] border border-[#1E2442] rounded-3xl shadow-2xl flex flex-col max-h-[90vh]"
         >
           {/* Header */}
-          <div className="flex items-center justify-between p-5 border-b border-white/10 bg-white/[0.02]">
+          <div className="flex items-center justify-between p-5 border-b border-[#1E2442] bg-[#0B0D20]/50">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-400">
+              <div className="p-2.5 rounded-xl bg-[#151932] border border-[#8B5CF6]/30 text-[#A78BFA]">
                 <Share2 className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-semibold text-lg text-white">
+                <h3 className="font-bold text-base text-[#F8FAFC]">
                   {isCompletion ? 'Поделиться завершением' : 'Поделиться с друзьями'}
                 </h3>
-                <p className="text-xs text-white/50">
+                <p className="text-xs text-[#94A3B8]">
                   {isCompletion
                     ? 'Расскажите друзьям, что вы завершили этот контент'
                     : 'Отправьте персональную рекомендацию'}
@@ -160,35 +160,35 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
             <button
               id="close-share-modal-btn"
               onClick={onClose}
-              className="p-2 text-white/40 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              className="p-2 text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] rounded-lg transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
           {/* Content Preview Mini Card */}
-          <div className="p-4 bg-white/[0.03] border-b border-white/10 flex items-center gap-3.5">
+          <div className="p-4 bg-[#0B0D20] border-b border-[#1E2442] flex items-center gap-3.5">
             {media.posterUrl ? (
               <img
                 src={media.posterUrl}
                 alt={media.title}
                 referrerPolicy="no-referrer"
-                className="w-12 h-16 object-cover rounded-lg border border-white/10 flex-shrink-0"
+                className="w-12 h-16 object-cover rounded-xl border border-[#1E2442] flex-shrink-0 shadow-sm"
               />
             ) : (
-              <div className="w-12 h-16 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0">
-                <Sparkles className="w-5 h-5 text-white/30" />
+              <div className="w-12 h-16 rounded-xl bg-[#151932] border border-[#1E2442] flex items-center justify-center flex-shrink-0 text-[#A78BFA]">
+                <Sparkles className="w-5 h-5" />
               </div>
             )}
             <div className="min-w-0 flex-1">
-              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/30">
+              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-[#151932] text-[#A78BFA] border border-[#8B5CF6]/30 font-mono">
                 {media.type || 'МЕДИА'}
               </span>
-              <h4 className="font-semibold text-white truncate text-sm mt-1">{media.title}</h4>
+              <h4 className="font-bold text-[#F8FAFC] truncate text-sm mt-1">{media.title}</h4>
               {media.rating ? (
-                <div className="flex items-center gap-1.5 mt-1 text-xs text-amber-400">
+                <div className="flex items-center gap-1.5 mt-1 text-xs text-amber-400 font-mono">
                   <Star className="w-3.5 h-3.5 fill-amber-400" />
-                  <span className="font-medium">{media.rating}/10</span>
+                  <span className="font-semibold">{media.rating}/10</span>
                   {isCompletion && (
                     <span className="text-[11px] text-emerald-400 font-medium ml-1">
                       • Завершено
@@ -206,30 +206,30 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
             {/* Search and select all controls */}
             <div className="space-y-2.5">
               <div className="relative">
-                <Search className="w-4 h-4 text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-4 h-4 text-[#64748B] absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   id="share-friend-search-input"
                   type="text"
                   placeholder="Поиск по друзьям..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-violet-500/50"
+                  className="w-full pl-9 pr-4 py-2 bg-[#080A18] border border-[#1E2442] rounded-xl text-xs text-[#F8FAFC] placeholder:text-[#64748B] focus:outline-none focus:border-[#8B5CF6]"
                 />
               </div>
 
               {friends.length > 0 && (
-                <div className="flex items-center justify-between text-xs text-white/50 px-1">
+                <div className="flex items-center justify-between text-xs text-[#94A3B8] px-1">
                   <span>
                     Выбрано:{' '}
-                    <strong className="text-violet-300">{selectedFriendIds.length}</strong> из{' '}
-                    {friends.length}
+                    <strong className="text-[#A78BFA] font-mono">{selectedFriendIds.length}</strong> из{' '}
+                    <span className="font-mono">{friends.length}</span>
                   </span>
                   <div className="flex items-center gap-2">
                     <button
                       id="select-all-friends-btn"
                       type="button"
                       onClick={handleSelectAll}
-                      className="text-violet-400 hover:text-violet-300 transition-colors"
+                      className="text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
                     >
                       Выбрать всех
                     </button>
@@ -238,7 +238,7 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
                       id="deselect-all-friends-btn"
                       type="button"
                       onClick={handleDeselectAll}
-                      className="hover:text-white/80 transition-colors"
+                      className="hover:text-white transition-colors cursor-pointer"
                     >
                       Снять
                     </button>
@@ -248,18 +248,18 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
             </div>
 
             {/* Friends list */}
-            <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+            <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1 custom-scrollbar">
               {loading ? (
-                <div className="py-8 text-center text-sm text-white/40">Загрузка друзей...</div>
+                <div className="py-8 text-center text-xs text-[#64748B]">Загрузка друзей...</div>
               ) : friends.length === 0 ? (
-                <div className="py-8 text-center text-sm text-white/40 space-y-2">
+                <div className="py-8 text-center text-xs text-[#94A3B8] space-y-2">
                   <p>У вас пока нет добавленных друзей</p>
-                  <p className="text-xs text-white/30">
+                  <p className="text-[11px] text-[#64748B]">
                     Добавьте друзей в профиле, чтобы делиться завершённым контентом
                   </p>
                 </div>
               ) : filteredFriends.length === 0 ? (
-                <div className="py-6 text-center text-sm text-white/40">
+                <div className="py-6 text-center text-xs text-[#64748B]">
                   Друзья по запросу «{searchQuery}» не найдены
                 </div>
               ) : (
@@ -273,10 +273,10 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
                       key={friend.id}
                       type="button"
                       onClick={() => toggleSelectFriend(friend.id)}
-                      className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all ${
+                      className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-violet-600/20 border-violet-500/40 text-white'
-                          : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.06] text-white/80'
+                          ? 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-white'
+                          : 'bg-[#0B0D20] border-[#1E2442] hover:bg-[#151932] text-[#CBD5E1]'
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
@@ -285,20 +285,20 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
                             <img
                               src={friend.avatar}
                               alt={friend.username}
-                              className="w-8 h-8 rounded-full object-cover border border-white/10"
+                              className="w-8 h-8 rounded-full object-cover border border-[#1E2442]"
                             />
                           ) : (
-                            <div className="w-8 h-8 rounded-full bg-violet-600/30 text-violet-300 font-semibold flex items-center justify-center text-xs border border-violet-500/20">
+                            <div className="w-8 h-8 rounded-full bg-[#151932] text-[#A78BFA] font-bold flex items-center justify-center text-xs border border-[#8B5CF6]/30">
                               {friend.username.charAt(0).toUpperCase()}
                             </div>
                           )}
                         </div>
                         <div className="min-w-0">
-                          <span className="font-medium text-sm block truncate">
+                          <span className="font-semibold text-xs block truncate text-[#F8FAFC]">
                             {friend.username}
                           </span>
                           {isAlreadyShared && (
-                            <span className="text-[10px] text-amber-400/90 flex items-center gap-1">
+                            <span className="text-[10px] text-amber-400 flex items-center gap-1">
                               <UserCheck className="w-3 h-3" />
                               Уже делились
                             </span>
@@ -309,8 +309,8 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
                       <div
                         className={`w-5 h-5 rounded-md flex items-center justify-center border transition-all ${
                           isSelected
-                            ? 'bg-violet-600 border-violet-500 text-white'
-                            : 'border-white/20 bg-white/5'
+                            ? 'bg-[#7C3AED] border-[#8B5CF6] text-white'
+                            : 'border-[#1E2442] bg-[#080A18]'
                         }`}
                       >
                         {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
@@ -325,9 +325,9 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
             <div className="space-y-1.5 pt-2">
               <label
                 htmlFor="share-note-input"
-                className="text-xs font-medium text-white/60 flex items-center gap-1.5"
+                className="text-xs font-medium text-[#CBD5E1] flex items-center gap-1.5"
               >
-                <MessageSquare className="w-3.5 h-3.5" />
+                <MessageSquare className="w-3.5 h-3.5 text-[#A78BFA]" />
                 Сообщение к рекомендации (опционально):
               </label>
               <textarea
@@ -337,18 +337,18 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
                 placeholder="Например: Отличный финал, рекомендую к просмотру!"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                className="w-full p-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-violet-500/50 resize-none"
+                className="w-full p-2.5 bg-[#080A18] border border-[#1E2442] rounded-xl text-xs text-[#F8FAFC] placeholder:text-[#64748B] focus:outline-none focus:border-[#8B5CF6] resize-none"
               />
             </div>
           </div>
 
           {/* Footer */}
-          <div className="p-4 border-t border-white/10 bg-white/[0.02] flex items-center justify-end gap-3">
+          <div className="p-4 border-t border-[#1E2442] bg-[#0B0D20] flex items-center justify-end gap-3">
             <button
               id="cancel-share-btn"
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 rounded-xl transition-colors"
+              className="px-4 py-2 text-xs font-medium text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] rounded-xl transition-colors cursor-pointer"
             >
               Отмена
             </button>
@@ -357,14 +357,14 @@ export const ShareContentModal: React.FC<ShareContentModalProps> = ({
               type="button"
               disabled={selectedFriendIds.length === 0 || submitting}
               onClick={handleShare}
-              className="px-5 py-2 text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:hover:bg-violet-600 rounded-xl transition-all shadow-lg shadow-violet-600/20 flex items-center gap-2"
+              className="px-5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 disabled:opacity-40 rounded-xl transition-all shadow-lg shadow-[#7C3AED]/25 flex items-center gap-2 cursor-pointer"
             >
               {submitting ? (
                 <>Отправка...</>
               ) : (
                 <>
                   <Share2 className="w-4 h-4" />
-                  Поделиться ({selectedFriendIds.length})
+                  <span>Поделиться ({selectedFriendIds.length})</span>
                 </>
               )}
             </button>

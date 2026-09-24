@@ -10,6 +10,12 @@ import {
   Book,
   Flame,
   Music,
+  Info,
+  Users,
+  GitFork,
+  MessageSquare,
+  AlignLeft,
+  Star,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
@@ -24,6 +30,7 @@ import { ContentHero } from '../content/ContentHero.tsx';
 import { ContentOverview } from '../content/ContentOverview.tsx';
 import { ContentMetadataGrid } from '../content/ContentMetadataGrid.tsx';
 import { ContentCastCrew } from '../content/ContentCastCrew.tsx';
+import { ContentPlot } from '../content/ContentPlot.tsx';
 import { ContentSeasonsEpisodes } from '../content/ContentSeasonsEpisodes.tsx';
 import { ContentMusicTracklist } from '../content/ContentMusicTracklist.tsx';
 import { ContentMangaRelations } from '../content/ContentMangaRelations.tsx';
@@ -36,6 +43,8 @@ import { ContentReviewModal } from '../content/ContentReviewModal.tsx';
 import { AddToListModal } from '../modals/AddToListModal.tsx';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
 import { AdultContentWarning } from '../common/AdultContentWarning.tsx';
+
+type DetailTab = 'OVERVIEW' | 'INFO' | 'CAST_CREW' | 'PLOT' | 'REVIEWS' | 'RELATED';
 
 interface ContentDetailViewProps {
   mediaId: number | string;
@@ -52,6 +61,7 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
   const { navigate, goBack } = useRouter();
   const { openCompletionModal, openShareModal } = useShare();
 
+  const [activeTab, setActiveTab] = useState<DetailTab>('OVERVIEW');
   const [rawMedia, setRawMedia] = useState<any>(null);
   const [contentItem, setContentItem] = useState<UnifiedContentItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -84,7 +94,16 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
       if (queryParams?.provider) qParams.set('provider', queryParams.provider);
       const queryString = qParams.toString() ? `?${qParams.toString()}` : '';
 
-      const res = await authFetch(`/api/media/${mediaId}${queryString}`);
+      let res = await authFetch(`/api/media/${mediaId}${queryString}`);
+      
+      // Fallback for games if not in media endpoint directly
+      if (!res.ok && (mediaType?.toUpperCase() === 'GAME' || (!isNaN(Number(mediaId)) && String(mediaId).length > 6))) {
+        const gameRes = await authFetch(`/api/games/${encodeURIComponent(String(mediaId))}`);
+        if (gameRes.ok) {
+          res = gameRes;
+        }
+      }
+
       if (!res.ok) {
         if (res.status === 403) {
           const errBody = await res.json().catch(() => ({}));
@@ -219,6 +238,44 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
     }
   };
 
+  // Handle Progress update
+  const handleProgressUpdate = async (newProgress: number) => {
+    if (!dbUser) {
+      await login();
+      return;
+    }
+    const currentTracking = contentItem?.userTracking || {};
+
+    try {
+      const res = await authFetch('/api/library', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mediaId: contentItem?.id || mediaId,
+          status: currentTracking.status || 'IN_PROGRESS',
+          progress: newProgress,
+          rating: currentTracking.rating || currentTracking.score,
+          isFavorite: currentTracking.isFavorite,
+        }),
+      });
+
+      if (res.ok) {
+        setContentItem((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            userTracking: {
+              ...prev.userTracking,
+              progress: newProgress,
+            },
+          };
+        });
+      }
+    } catch (err) {
+      console.error('Failed to update progress:', err);
+    }
+  };
+
   // Handle Favorite toggle
   const handleToggleFavorite = async () => {
     if (!dbUser) {
@@ -319,29 +376,41 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
       throw new Error(errJson.message || 'Не удалось сохранить отзыв');
     }
 
+    await fetchReviews();
+    if (data.score) {
+      setContentItem((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          userTracking: {
+            ...prev.userTracking,
+            score: data.score || undefined,
+            rating: data.score || undefined,
+          },
+        };
+      });
+    }
     setEditingReview(null);
-    fetchReviews();
   };
 
-  // Handle Delete Review
+  // Handle Review Delete
   const handleDeleteReview = async () => {
-    if (!reviewToDelete || !contentItem) return;
+    if (!reviewToDelete) return;
+    const targetId = contentItem?.id || mediaId;
     try {
-      const res = await authFetch(`/api/media/${contentItem.id}/reviews/${reviewToDelete}`, {
+      const res = await authFetch(`/api/media/${targetId}/reviews/${reviewToDelete}`, {
         method: 'DELETE',
       });
       if (res.ok) {
         setReviewsList((prev) => prev.filter((r) => r.id !== reviewToDelete));
       }
-    } catch (err) {
-      console.error('Failed to delete review:', err);
     } finally {
       setReviewToDelete(null);
     }
   };
 
-  // Handle React to Review (like or custom reaction)
-  const handleReactReview = async (reviewId: number, type: string = 'LIKE') => {
+  // Handle Review Reaction
+  const handleReactReview = async (reviewId: number, reactionType: string) => {
     if (!dbUser) {
       await login();
       return;
@@ -351,22 +420,23 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
       const res = await authFetch(`/api/media/${targetId}/reviews/${reviewId}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type }),
+        body: JSON.stringify({ reaction: reactionType }),
       });
       if (res.ok) {
         const data = await res.json();
         setReviewsList((prev) =>
-          prev.map((r) =>
-            r.id === reviewId
-              ? {
-                  ...r,
-                  likesCount: data.likesCount ?? r.likesCount,
-                  isLiked: Boolean(data.isLiked),
-                  userReaction: data.userReaction ?? null,
-                  reactions: data.reactions ?? r.reactions,
-                }
-              : r
-          )
+          prev.map((r) => {
+            if (r.id === reviewId) {
+              return {
+                ...r,
+                userReaction: data.userReaction,
+                isLiked: data.userReaction === 'LIKE',
+                reactions: data.reactions || r.reactions,
+                likesCount: data.reactions?.LIKE || (data.userReaction === 'LIKE' ? r.likesCount + 1 : r.likesCount),
+              };
+            }
+            return r;
+          })
         );
       }
     } catch (err) {
@@ -374,47 +444,44 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
     }
   };
 
-  // Handle Episode watched toggle
-  const handleToggleEpisodeWatched = (seasonNumber: number, episodeNumber: number, watched: boolean) => {
-    const key = `${seasonNumber}-${episodeNumber}`;
+  // Episode watch toggle
+  const handleToggleEpisodeWatched = (seasonNumber: number, episodeNumber: number, _watched: boolean) => {
+    const epKey = `${seasonNumber}-${episodeNumber}`;
     setWatchedEpisodes((prev) => {
       const next = new Set(prev);
-      if (watched) next.add(key);
-      else next.delete(key);
+      if (next.has(epKey)) next.delete(epKey);
+      else next.add(epKey);
       return next;
     });
   };
 
-  // Loading Screen matching Game page
+  // Adult Content Modal confirmation
+  const isContentAdult = Boolean((contentItem as any)?.isAdult || contentItem?.ageRating === '18+' || contentItem?.ageRating === 'AO' || contentItem?.ageRating === 'NC-17' || contentItem?.ageRating === 'R18+');
+  if ((isAdultRestricted || isContentAdult) && !adultConfirmed && (!dbUser || !dbUser.showAdultContent)) {
+    return (
+      <AdultContentWarning
+        title={contentItem?.title || rawMedia?.title}
+        ageRating={contentItem?.ageRating || rawMedia?.ageRating || '18+'}
+        contentWarnings={(contentItem as any)?.contentWarnings || (rawMedia as any)?.contentWarnings || []}
+        onConfirm={async () => {
+          setAdultConfirmed(true);
+          setIsAdultRestricted(false);
+          await fetchMedia();
+        }}
+        onBack={goBack}
+      />
+    );
+  }
+
+  // Loading Screen
   if (loading) {
     return (
-      <div className="max-w-7xl mx-auto px-4 py-8 space-y-8 animate-pulse">
-        <div className="h-6 w-48 bg-zinc-800/80 rounded-xl" />
-        <div className="h-[460px] bg-zinc-900/90 rounded-3xl border border-zinc-800" />
-        <div className="h-64 bg-zinc-900/80 rounded-3xl border border-zinc-800" />
+      <div className="max-w-7xl mx-auto px-4 py-16 flex flex-col items-center justify-center space-y-4">
+        <Loader2 className="w-10 h-10 animate-spin text-[#8B5CF6]" />
+        <span className="text-xs text-[#94A3B8] font-medium tracking-wide">
+          Загрузка информации о произведении...
+        </span>
       </div>
-    );
-  }
-
-  // 18+ Adult Restricted Check
-  const isItemAdult = Boolean(rawMedia?.isAdult || rawMedia?.ageRating === '18+' || rawMedia?.ageRating === '18');
-  if (isAdultRestricted || (isItemAdult && !dbUser?.showAdultContent)) {
-    return (
-      <AdultContentWarning
-        mode="restricted"
-        title={contentItem?.title || rawMedia?.title}
-      />
-    );
-  }
-
-  // 18+ Adult Confirmation Check
-  if (isItemAdult && dbUser?.showAdultContent && !adultConfirmed) {
-    return (
-      <AdultContentWarning
-        mode="confirm"
-        title={contentItem?.title || rawMedia?.title}
-        onConfirm={() => setAdultConfirmed(true)}
-      />
     );
   }
 
@@ -422,16 +489,16 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
   if (error || !contentItem) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-16 text-center space-y-6">
-        <div className="w-16 h-16 rounded-2xl bg-rose-950/50 border border-rose-800/50 flex items-center justify-center text-rose-400 mx-auto">
+        <div className="w-16 h-16 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mx-auto">
           <AlertCircle className="w-8 h-8" />
         </div>
         <div className="space-y-2">
-          <h2 className="text-xl font-bold text-zinc-100">Не удалось загрузить тайтл</h2>
-          <p className="text-xs text-zinc-400 max-w-md mx-auto">{error || 'Страница недоступна'}</p>
+          <h2 className="text-xl font-bold text-[#F8FAFC]">Не удалось загрузить тайтл</h2>
+          <p className="text-xs text-[#94A3B8] max-w-md mx-auto">{error || 'Страница недоступна'}</p>
         </div>
         <button
           onClick={goBack}
-          className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold inline-flex items-center gap-2 transition-all"
+          className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-semibold inline-flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-[#7C3AED]/25"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Вернуться назад</span>
@@ -459,14 +526,38 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
     { label: contentItem.title },
   ];
 
+  // Tab definitions with icons & counts
+  const tabsList: Array<{ id: DetailTab; label: string; icon: any; count?: number }> = [
+    { id: 'OVERVIEW', label: 'Обзор', icon: AlignLeft },
+    { id: 'INFO', label: 'Информация', icon: Info },
+    {
+      id: 'CAST_CREW',
+      label: 'Актеры / Команда',
+      icon: Users,
+      count:
+        (contentItem.cast?.length || 0) +
+        (contentItem.directors?.length || 0) +
+        (contentItem.authors?.length || 0) +
+        (contentItem.developers?.length || 0) || undefined,
+    },
+    { id: 'PLOT', label: 'Сюжет', icon: BookOpen },
+    { id: 'REVIEWS', label: 'Отзывы', icon: MessageSquare, count: reviewsList.length || undefined },
+    {
+      id: 'RELATED',
+      label: 'Связанный контент',
+      icon: GitFork,
+      count: (contentItem.relations?.length || 0) + (contentItem.similar?.length || 0) || undefined,
+    },
+  ];
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-8 animate-in fade-in duration-300">
       {/* Navigation Header with Breadcrumbs & Back Button */}
-      <div className="flex items-center justify-between gap-4 pb-2 border-b border-zinc-800/60">
+      <div className="flex items-center justify-between gap-4 pb-2 border-b border-[#1E2442]">
         <div className="flex items-center gap-3">
           <button
             onClick={goBack}
-            className="p-2 rounded-xl bg-zinc-900/90 border border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700 transition-all flex items-center gap-1.5 text-xs font-semibold"
+            className="p-2 rounded-xl bg-[#11152A] border border-[#1E2442] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span className="hidden sm:inline">Назад</span>
@@ -476,13 +567,33 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
         </div>
       </div>
 
-      {/* 1. Unified Hero Section */}
+      {/* 1. Immersive Hero Section */}
       <ContentHero
         item={contentItem}
         userTracking={contentItem.userTracking}
         onStatusChange={handleStatusChange}
+        onProgressUpdate={handleProgressUpdate}
         onToggleFavorite={handleToggleFavorite}
         onOpenRatingModal={() => setShowRatingModal(true)}
+        onRatingUpdated={(newRating, newDodikData) => {
+          setContentItem((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              dodikRating: newDodikData ? {
+                averageRating: newDodikData.averageRating,
+                ratingCount: newDodikData.ratingCount,
+                distribution: newDodikData.distribution,
+                userRating: newRating,
+              } : prev.dodikRating,
+              userTracking: {
+                ...prev.userTracking,
+                rating: newRating || undefined,
+                score: newRating || undefined,
+              },
+            };
+          });
+        }}
         onOpenReviewModal={() => {
           setEditingReview(null);
           setShowReviewModal(true);
@@ -502,112 +613,205 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
         }
       />
 
-      {/* 2. Structured Sections Grid */}
+      {/* 2. Navigation Tabs Under Hero */}
+      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2 border-b border-[#1E2442]">
+        {tabsList.map((tab) => {
+          const TabIcon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+                isActive
+                  ? 'bg-[#151932] text-white border border-[#8B5CF6]/50 shadow-md shadow-[#8B5CF6]/10'
+                  : 'text-[#94A3B8] hover:text-[#CBD5E1] hover:bg-[#11152A] border border-transparent'
+              }`}
+            >
+              <TabIcon className={`w-4 h-4 ${isActive ? 'text-[#A78BFA]' : 'text-[#64748B]'}`} />
+              <span>{tab.label}</span>
+              {tab.count !== undefined && tab.count > 0 && (
+                <span
+                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                    isActive ? 'bg-[#8B5CF6]/30 text-white' : 'bg-[#1E2442] text-[#94A3B8]'
+                  }`}
+                >
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 3. Tab Content Panels */}
       <div className="space-y-8">
-        {/* Overview & Synopsis */}
-        <ContentOverview item={contentItem} />
+        {/* TAB 1: OVERVIEW */}
+        {activeTab === 'OVERVIEW' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Description / Synopsis */}
+            <ContentOverview item={contentItem} />
 
-        {/* Detailed Metadata Grid */}
-        <ContentMetadataGrid item={contentItem} />
+            {/* Quick Metadata Highlights */}
+            <ContentMetadataGrid item={contentItem} />
 
-        {/* TV Series / Anime Seasons & Episodes */}
-        {contentItem.seasons && contentItem.seasons.length > 0 && (
-          <ContentSeasonsEpisodes
-            seasons={contentItem.seasons}
-            onToggleEpisodeWatched={handleToggleEpisodeWatched}
-            watchedEpisodes={watchedEpisodes}
-          />
+            {/* TV Series / Anime Seasons & Episodes */}
+            {contentItem.seasons && contentItem.seasons.length > 0 && (
+              <ContentSeasonsEpisodes
+                seasons={contentItem.seasons}
+                onToggleEpisodeWatched={handleToggleEpisodeWatched}
+                watchedEpisodes={watchedEpisodes}
+              />
+            )}
+
+            {/* Music Album Tracklist */}
+            {contentItem.tracks && contentItem.tracks.length > 0 && (
+              <ContentMusicTracklist tracks={contentItem.tracks} />
+            )}
+
+            {/* Screenshots / Photos Gallery */}
+            {contentItem.screenshots && contentItem.screenshots.length > 0 && (
+              <ContentGallery images={contentItem.screenshots} />
+            )}
+
+            {/* Official Trailers & Videos */}
+            {contentItem.videos && contentItem.videos.length > 0 && (
+              <ContentVideos
+                videos={contentItem.videos}
+                contentTitle={contentItem.title || contentItem.originalTitle}
+              />
+            )}
+
+            {/* Dodik Community Reviews & Rating Breakdown */}
+            <ContentReviewsSection
+              reviews={reviewsList}
+              dodikRating={contentItem.dodikRating}
+              loading={reviewsLoading}
+              onOpenReviewModal={() => {
+                setEditingReview(null);
+                setShowReviewModal(true);
+              }}
+              onEditReview={(rev) => {
+                setEditingReview(rev);
+                setShowReviewModal(true);
+              }}
+              onDeleteReview={async (id) => setReviewToDelete(id)}
+              onLikeReview={(id) => handleReactReview(id, 'LIKE')}
+              onReactReview={handleReactReview}
+            />
+
+            {/* Similar Recommendations */}
+            {contentItem.similar && contentItem.similar.length > 0 && (
+              <ContentSimilar items={contentItem.similar} />
+            )}
+          </div>
         )}
 
-        {/* Music Album Tracklist */}
-        {contentItem.tracks && contentItem.tracks.length > 0 && (
-          <ContentMusicTracklist tracks={contentItem.tracks} />
+        {/* TAB 2: INFORMATION */}
+        {activeTab === 'INFO' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            <ContentMetadataGrid item={contentItem} />
+          </div>
         )}
 
-        {/* Anime & Manga Relations (Franchise adaptations, Sequels, Prequels) */}
-        {contentItem.relations && contentItem.relations.length > 0 && (
-          <ContentMangaRelations relations={contentItem.relations} />
+        {/* TAB 3: CAST & CREW */}
+        {activeTab === 'CAST_CREW' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            <ContentCastCrew
+              cast={contentItem.cast}
+              crew={[
+                ...(contentItem.directors || []),
+                ...(contentItem.writers || []),
+                ...(contentItem.producers || []),
+                ...(contentItem.authors || []),
+                ...(contentItem.mangaka || []),
+                ...(contentItem.developers?.map((d) => ({ name: d.name, role: 'Разработчик' })) || []),
+                ...(contentItem.publishers?.map((p) => ({ name: p.name, role: 'Издатель' })) || []),
+              ]}
+              type={contentItem.type}
+            />
+          </div>
         )}
 
-        {/* Cast & Crew / Authors / Staff */}
-        {((contentItem.cast && contentItem.cast.length > 0) ||
-          (contentItem.directors && contentItem.directors.length > 0) ||
-          (contentItem.authors && contentItem.authors.length > 0)) && (
-          <ContentCastCrew
-            cast={contentItem.cast}
-            crew={[
-              ...(contentItem.directors || []),
-              ...(contentItem.writers || []),
-              ...(contentItem.producers || []),
-              ...(contentItem.authors || []),
-              ...(contentItem.mangaka || []),
-            ]}
-            type={contentItem.type}
-          />
+        {/* TAB 4: PLOT */}
+        {activeTab === 'PLOT' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            <ContentPlot item={contentItem} />
+          </div>
         )}
 
-        {/* Screenshots / Photos Gallery */}
-        {contentItem.screenshots && contentItem.screenshots.length > 0 && (
-          <ContentGallery images={contentItem.screenshots} />
+        {/* TAB 5: REVIEWS */}
+        {activeTab === 'REVIEWS' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            <ContentReviewsSection
+              reviews={reviewsList}
+              dodikRating={contentItem.dodikRating}
+              loading={reviewsLoading}
+              onOpenReviewModal={() => {
+                setEditingReview(null);
+                setShowReviewModal(true);
+              }}
+              onEditReview={(rev) => {
+                setEditingReview(rev);
+                setShowReviewModal(true);
+              }}
+              onDeleteReview={async (id) => setReviewToDelete(id)}
+              onLikeReview={(id) => handleReactReview(id, 'LIKE')}
+              onReactReview={handleReactReview}
+            />
+          </div>
         )}
 
-        {/* Official Trailers & Videos */}
-        {contentItem.videos && contentItem.videos.length > 0 && (
-          <ContentVideos videos={contentItem.videos} />
-        )}
-
-        {/* Dodik Community Reviews & Rating Breakdown */}
-        <ContentReviewsSection
-          reviews={reviewsList}
-          dodikRating={contentItem.dodikRating}
-          loading={reviewsLoading}
-          onOpenReviewModal={() => {
-            setEditingReview(null);
-            setShowReviewModal(true);
-          }}
-          onEditReview={(rev) => {
-            setEditingReview(rev);
-            setShowReviewModal(true);
-          }}
-          onDeleteReview={async (id) => setReviewToDelete(id)}
-          onLikeReview={(id) => handleReactReview(id, 'LIKE')}
-          onReactReview={handleReactReview}
-        />
-
-        {/* Similar Recommendations */}
-        {contentItem.similar && contentItem.similar.length > 0 && (
-          <ContentSimilar items={contentItem.similar} />
+        {/* TAB 6: RELATED CONTENT */}
+        {activeTab === 'RELATED' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {contentItem.relations && contentItem.relations.length > 0 && (
+              <ContentMangaRelations relations={contentItem.relations} />
+            )}
+            {contentItem.similar && contentItem.similar.length > 0 && (
+              <ContentSimilar items={contentItem.similar} />
+            )}
+            {!contentItem.relations?.length && !contentItem.similar?.length && (
+              <div className="p-8 rounded-3xl bg-[#11152A] border border-[#1E2442] text-center space-y-2">
+                <GitFork className="w-8 h-8 text-[#64748B] mx-auto stroke-1" />
+                <p className="text-xs text-[#94A3B8]">Связанный контент и франшизы не найдены</p>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
-      {/* Modals */}
-      {/* 1. Rating (1-10) Modal */}
-      <ContentRatingModal
-        isOpen={showRatingModal}
-        currentRating={contentItem.userTracking?.rating || contentItem.userTracking?.score}
-        itemTitle={contentItem.title}
-        onClose={() => setShowRatingModal(false)}
-        onSaveRating={handleSaveRating}
-      />
+      {/* Rating Modal */}
+      {showRatingModal && (
+        <ContentRatingModal
+          isOpen={showRatingModal}
+          onClose={() => setShowRatingModal(false)}
+          currentRating={contentItem.userTracking?.rating || contentItem.userTracking?.score || null}
+          onSaveRating={handleSaveRating}
+          itemTitle={contentItem.title}
+        />
+      )}
 
-      {/* 2. Review Modal */}
-      <ContentReviewModal
-        isOpen={showReviewModal}
-        itemTitle={contentItem.title}
-        existingReview={editingReview}
-        onClose={() => {
-          setShowReviewModal(false);
-          setEditingReview(null);
-        }}
-        onSubmit={handleSubmitReview}
-      />
+      {/* Review Modal */}
+      {showReviewModal && (
+        <ContentReviewModal
+          isOpen={showReviewModal}
+          onClose={() => {
+            setShowReviewModal(false);
+            setEditingReview(null);
+          }}
+          onSubmit={handleSubmitReview}
+          existingReview={editingReview}
+          itemTitle={contentItem.title}
+        />
+      )}
 
-      {/* 3. Add to List Modal */}
+      {/* Add To List Modal */}
       {showAddToList && (
         <AddToListModal
           media={{
-            id: typeof contentItem.id === 'number' ? contentItem.id : undefined,
-            mediaId: typeof contentItem.id === 'number' ? contentItem.id : undefined,
+            id: Number(contentItem.id || mediaId),
+            mediaId: Number(contentItem.id || mediaId),
             title: contentItem.title,
             type: contentItem.type,
             posterUrl: contentItem.posterUrl,
@@ -615,19 +819,20 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
             rating: contentItem.rating,
             provider: contentItem.provider,
             externalId: contentItem.externalId,
-            description: contentItem.description,
           }}
           onClose={() => setShowAddToList(false)}
+          onAdded={() => setShowAddToList(false)}
         />
       )}
 
-      {/* 4. Confirm Delete Review Modal */}
+      {/* Delete Review Confirm Modal */}
       {reviewToDelete !== null && (
         <ConfirmModal
           isOpen={true}
-          title="Удалить рецензию?"
-          message="Вы уверены, что хотите удалить вашу рецензию? Это действие нельзя отменить."
+          title="Удалить отзыв"
+          message="Вы уверены, что хотите удалить свой отзыв? Это действие необратимо."
           confirmText="Удалить"
+          cancelText="Отмена"
           variant="danger"
           onConfirm={handleDeleteReview}
           onCancel={() => setReviewToDelete(null)}

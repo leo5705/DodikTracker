@@ -29,10 +29,10 @@ interface ContentReviewsSectionProps {
 }
 
 const REACTION_OPTIONS = [
-  { type: 'LIKE', label: 'Класс', icon: ThumbsUp, color: 'text-purple-400', activeBg: 'bg-purple-950/70 border-purple-700/60 text-purple-300' },
-  { type: 'HEART', label: 'Любовь', icon: Heart, color: 'text-rose-400', activeBg: 'bg-rose-950/70 border-rose-700/60 text-rose-300' },
-  { type: 'FIRE', label: 'Огонь', icon: Flame, color: 'text-amber-400', activeBg: 'bg-amber-950/70 border-amber-700/60 text-amber-300' },
-  { type: 'LAUGH', label: 'Ха-ха', icon: Laugh, color: 'text-emerald-400', activeBg: 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300' },
+  { type: 'LIKE', label: 'Класс', icon: ThumbsUp, color: 'text-[#A78BFA]', activeBg: 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-[#A78BFA]' },
+  { type: 'HEART', label: 'Любовь', icon: Heart, color: 'text-rose-400', activeBg: 'bg-rose-500/20 border-rose-500/50 text-rose-300' },
+  { type: 'FIRE', label: 'Огонь', icon: Flame, color: 'text-amber-400', activeBg: 'bg-amber-500/20 border-amber-500/50 text-amber-300' },
+  { type: 'LAUGH', label: 'Ха-ха', icon: Laugh, color: 'text-emerald-400', activeBg: 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' },
 ];
 
 export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
@@ -72,16 +72,16 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
   const totalVotes = dodikRating?.ratingCount || reviews.length;
 
   return (
-    <div className="p-6 md:p-8 rounded-3xl bg-zinc-900/80 border border-zinc-800 space-y-6">
+    <div className="p-6 md:p-8 rounded-3xl bg-[#11152A] border border-[#1E2442] space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1E2442] pb-4">
         <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-xl bg-purple-950/40 border border-purple-800/40 text-purple-400">
+          <div className="p-2 rounded-xl bg-[#151932] border border-[#8B5CF6]/30 text-[#A78BFA]">
             <MessageSquare className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-zinc-100">Рецензии и отзывы сообщества</h2>
-            <p className="text-xs text-zinc-400">
+            <h2 className="text-base font-bold text-[#F8FAFC]">Рецензии и отзывы сообщества</h2>
+            <p className="text-xs text-[#94A3B8]">
               {reviews.length > 0
                 ? `${reviews.length} реценз${reviews.length === 1 ? 'ия' : reviews.length < 5 ? 'ии' : 'ий'} от пользователей Dodik Tracker`
                 : 'Пока нет рецензий. Будьте первым!'}
@@ -91,52 +91,57 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
 
         <button
           onClick={onOpenReviewModal}
-          className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-lg shadow-purple-600/25 transition-all shrink-0"
+          className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-lg shadow-[#7C3AED]/25 transition-all shrink-0 cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           <span>Написать рецензию</span>
         </button>
       </div>
 
-      {/* Dodik Rating Breakdown (1 to 10 stars) */}
+      {/* Dodik Rating Breakdown (0 to 100 scale) */}
       {totalVotes > 0 && (
-        <div className="p-5 rounded-2xl bg-zinc-950/60 border border-zinc-800/60 flex flex-col md:flex-row items-center gap-6">
+        <div className="p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] flex flex-col md:flex-row items-center gap-6">
           {/* Average Box */}
-          <div className="text-center md:text-left shrink-0 md:pr-6 md:border-r border-zinc-800/80">
-            <div className="text-4xl font-black text-zinc-100 flex items-baseline justify-center md:justify-start gap-1">
-              <span>{dodikRating?.averageRating ? dodikRating.averageRating.toFixed(1) : '—'}</span>
-              <span className="text-sm text-zinc-500 font-normal">/ 10</span>
+          <div className="text-center md:text-left shrink-0 md:pr-6 md:border-r border-[#1E2442]">
+            <div className="text-4xl font-black text-[#F8FAFC] flex items-baseline justify-center md:justify-start gap-1 font-mono">
+              <span>{dodikRating?.averageRating ? dodikRating.averageRating.toFixed(dodikRating.averageRating % 1 === 0 ? 0 : 1) : '—'}</span>
+              <span className="text-sm text-[#64748B] font-normal font-sans">/ 100</span>
             </div>
-            <div className="flex items-center justify-center md:justify-start gap-1 text-amber-400 my-1">
-              {[1, 2, 3, 4, 5].map((s) => (
-                <Star
-                  key={s}
-                  className={`w-3.5 h-3.5 ${
-                    (dodikRating?.averageRating || 0) / 2 >= s
-                      ? 'fill-amber-400'
-                      : 'text-zinc-600'
-                  }`}
-                />
-              ))}
+            <div className="text-[11px] text-[#94A3B8] font-medium font-mono mt-1">
+              {totalVotes} {totalVotes === 1 ? 'оценка' : totalVotes < 5 ? 'оценки' : 'оценок'} Dodik Tracker
             </div>
-            <div className="text-[11px] text-zinc-400 font-medium">{totalVotes} оценок сообщества</div>
           </div>
 
-          {/* Distribution Bars */}
+          {/* Distribution Bars (deciles) */}
           <div className="flex-1 w-full space-y-1">
-            {[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map((score) => {
-              const count = distribution[score] || 0;
+            {[
+              { label: '91-100', min: 91, max: 100 },
+              { label: '81-90', min: 81, max: 90 },
+              { label: '71-80', min: 71, max: 80 },
+              { label: '61-70', min: 61, max: 70 },
+              { label: '51-60', min: 51, max: 60 },
+              { label: '41-50', min: 41, max: 50 },
+              { label: '0-40', min: 0, max: 40 },
+            ].map((range) => {
+              let count = 0;
+              Object.entries(distribution).forEach(([k, cnt]) => {
+                const num = Number(k);
+                const norm = num <= 10 && num > 0 ? num * 10 : num;
+                if (norm >= range.min && norm <= range.max) {
+                  count += cnt;
+                }
+              });
               const percent = totalVotes > 0 ? (count / totalVotes) * 100 : 0;
               return (
-                <div key={score} className="flex items-center gap-2 text-xs">
-                  <span className="w-4 font-mono font-bold text-zinc-400 text-right">{score}</span>
-                  <div className="flex-1 h-2 rounded-full bg-zinc-900 border border-zinc-800 overflow-hidden">
+                <div key={range.label} className="flex items-center gap-2 text-xs">
+                  <span className="w-12 font-mono font-bold text-[#64748B] text-right text-[11px]">{range.label}</span>
+                  <div className="flex-1 h-2 rounded-full bg-[#080A18] border border-[#1E2442] overflow-hidden">
                     <div
-                      className="h-full bg-purple-500 rounded-full transition-all duration-500"
+                      className="h-full bg-gradient-to-r from-[#7C3AED] to-[#A78BFA] rounded-full transition-all duration-500"
                       style={{ width: `${percent}%` }}
                     />
                   </div>
-                  <span className="w-8 font-mono text-[10px] text-zinc-500 text-right">{count}</span>
+                  <span className="w-8 font-mono text-[10px] text-[#64748B] text-right">{count}</span>
                 </div>
               );
             })}
@@ -148,7 +153,7 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
       {loading ? (
         <div className="space-y-4 animate-pulse">
           {[1, 2].map((i) => (
-            <div key={i} className="h-32 rounded-2xl bg-zinc-950/60 border border-zinc-800" />
+            <div key={i} className="h-32 rounded-2xl bg-[#0B0D20] border border-[#1E2442]" />
           ))}
         </div>
       ) : reviews.length > 0 ? (
@@ -162,12 +167,12 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
             return (
               <div
                 key={rev.id}
-                className="p-5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 space-y-3.5 hover:border-zinc-700/80 transition-all"
+                className="p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-3.5 hover:border-[#8B5CF6]/40 transition-all"
               >
                 {/* Author Info & Rating */}
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl overflow-hidden bg-purple-950/50 border border-purple-800/40 flex items-center justify-center text-purple-300 font-bold shrink-0">
+                    <div className="w-10 h-10 rounded-xl overflow-hidden bg-[#151932] border border-[#8B5CF6]/30 flex items-center justify-center text-[#A78BFA] font-bold shrink-0">
                       {rev.user?.avatarUrl ? (
                         <img
                           src={rev.user.avatarUrl}
@@ -179,11 +184,11 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
                       )}
                     </div>
                     <div>
-                      <div className="text-xs font-bold text-zinc-100">
+                      <div className="text-xs font-bold text-[#F8FAFC]">
                         {rev.user?.displayName || rev.user?.username || 'Пользователь'}
                       </div>
-                      <div className="text-[10px] text-zinc-500 flex items-center gap-1.5 mt-0.5">
-                        <Calendar className="w-3 h-3" />
+                      <div className="text-[10px] text-[#64748B] flex items-center gap-1.5 mt-0.5 font-mono">
+                        <Calendar className="w-3 h-3 text-[#A78BFA]" />
                         <span>
                           {new Date(rev.createdAt).toLocaleDateString('ru-RU', {
                             day: 'numeric',
@@ -198,9 +203,9 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
                   {/* Rating Badge */}
                   <div className="flex items-center gap-2">
                     {score && (
-                      <div className="px-2.5 py-1 rounded-xl bg-amber-950/40 border border-amber-800/40 text-amber-400 font-bold text-xs flex items-center gap-1 font-mono">
-                        <Star className="w-3 h-3 fill-amber-400" />
-                        <span>{score} / 10</span>
+                      <div className="px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-1 font-mono">
+                        <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                        <span>{score <= 10 && score > 0 ? score * 10 : score} / 100</span>
                       </div>
                     )}
 
@@ -210,7 +215,7 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
                         {onEditReview && (
                           <button
                             onClick={() => onEditReview(rev)}
-                            className="p-1.5 rounded-lg bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+                            className="p-1.5 rounded-lg bg-[#151932] text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
                             title="Редактировать"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
@@ -219,7 +224,7 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
                         {onDeleteReview && (
                           <button
                             onClick={() => onDeleteReview(rev.id)}
-                            className="p-1.5 rounded-lg bg-zinc-800 text-rose-400 hover:text-rose-300 transition-colors"
+                            className="p-1.5 rounded-lg bg-rose-500/15 text-rose-300 hover:text-rose-200 transition-colors cursor-pointer"
                             title="Удалить"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -232,32 +237,32 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
 
                 {/* Review Title */}
                 {rev.title && (
-                  <h4 className="text-sm font-bold text-zinc-100">{rev.title}</h4>
+                  <h4 className="text-sm font-bold text-[#F8FAFC]">{rev.title}</h4>
                 )}
 
                 {/* Review Text with Spoiler Shield */}
                 {hasSpoilers && !isRevealed ? (
-                  <div className="p-4 rounded-xl bg-zinc-900 border border-amber-500/20 flex flex-col sm:flex-row items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-xs text-amber-400">
-                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <div className="p-4 rounded-xl bg-[#080A18] border border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-xs text-amber-300">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
                       <span>Рецензия содержит спойлеры к сюжету</span>
                     </div>
                     <button
                       onClick={() => toggleSpoiler(rev.id)}
-                      className="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition-colors"
+                      className="px-3 py-1 rounded-lg bg-[#151932] hover:bg-[#1E2442] text-[#CBD5E1] text-xs font-medium transition-colors cursor-pointer"
                     >
                       Показать текст
                     </button>
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed whitespace-pre-line font-sans">
+                    <p className="text-xs sm:text-sm text-[#CBD5E1] leading-relaxed whitespace-pre-line font-sans">
                       {rev.content}
                     </p>
                     {hasSpoilers && (
                       <button
                         onClick={() => toggleSpoiler(rev.id)}
-                        className="text-[11px] text-zinc-500 hover:text-zinc-400 underline"
+                        className="text-[11px] text-[#64748B] hover:text-[#94A3B8] underline cursor-pointer"
                       >
                         Скрыть спойлеры
                       </button>
@@ -267,7 +272,7 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
 
                 {/* Reactions and Likes Bar */}
                 {(onReactReview || onLikeReview) && (
-                  <div className="pt-2 border-t border-zinc-800/60 flex flex-wrap items-center justify-between gap-2 relative">
+                  <div className="pt-2 border-t border-[#1E2442] flex flex-wrap items-center justify-between gap-2 relative">
                     {/* Existing Reactions Badges */}
                     <div className="flex flex-wrap items-center gap-1.5">
                       {REACTION_OPTIONS.map((opt) => {
@@ -280,10 +285,10 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
                           <button
                             key={opt.type}
                             onClick={() => handleReactionClick(rev.id, opt.type)}
-                            className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-medium border transition-all ${
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-medium border transition-all cursor-pointer ${
                               isSelected
                                 ? opt.activeBg
-                                : 'bg-zinc-900/90 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                                : 'bg-[#080A18] border-[#1E2442] text-[#94A3B8] hover:text-[#F8FAFC] hover:border-[#8B5CF6]/40'
                             }`}
                             title={opt.label}
                           >
@@ -299,24 +304,24 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
                       {/* Quick Like / Toggle button */}
                       <button
                         onClick={() => handleReactionClick(rev.id, rev.userReaction || 'LIKE')}
-                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-xl border transition-all ${
+                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-xl border transition-all cursor-pointer ${
                           rev.isLiked || rev.userReaction
-                            ? 'bg-purple-950/60 border-purple-800/50 text-purple-300'
-                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                            ? 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-[#A78BFA]'
+                            : 'bg-[#080A18] border-[#1E2442] text-[#94A3B8] hover:text-[#F8FAFC] hover:border-[#8B5CF6]/40'
                         }`}
                         title="Поставить реакцию"
                       >
-                        <ThumbsUp className={`w-3.5 h-3.5 ${rev.isLiked || rev.userReaction === 'LIKE' ? 'fill-purple-400 text-purple-400' : ''}`} />
-                        <span>{rev.likesCount || 0}</span>
+                        <ThumbsUp className={`w-3.5 h-3.5 ${rev.isLiked || rev.userReaction === 'LIKE' ? 'fill-[#8B5CF6] text-[#A78BFA]' : ''}`} />
+                        <span className="font-mono">{rev.likesCount || 0}</span>
                       </button>
 
                       {/* Reaction Picker Button */}
                       <button
                         onClick={() => setActivePickerId(activePickerId === rev.id ? null : rev.id)}
-                        className={`p-1.5 rounded-xl border transition-all ${
+                        className={`p-1.5 rounded-xl border transition-all cursor-pointer ${
                           activePickerId === rev.id
-                            ? 'bg-purple-900/50 border-purple-700 text-purple-200'
-                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                            ? 'bg-[#151932] border-[#8B5CF6] text-[#A78BFA]'
+                            : 'bg-[#080A18] border-[#1E2442] text-[#94A3B8] hover:text-[#F8FAFC] hover:border-[#8B5CF6]/40'
                         }`}
                         title="Выбрать реакцию"
                       >
@@ -325,7 +330,7 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
 
                       {/* Popover Menu with reaction options */}
                       {activePickerId === rev.id && (
-                        <div className="absolute right-0 bottom-full mb-2 p-1.5 rounded-2xl bg-zinc-900 border border-zinc-700/80 shadow-2xl flex items-center gap-1 z-30 animate-in fade-in zoom-in-95">
+                        <div className="absolute right-0 bottom-full mb-2 p-1.5 rounded-2xl bg-[#11152A] border border-[#1E2442] shadow-2xl flex items-center gap-1 z-30 animate-in fade-in zoom-in-95">
                           {REACTION_OPTIONS.map((opt) => {
                             const Icon = opt.icon;
                             const isSelected = rev.userReaction === opt.type;
@@ -333,10 +338,10 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
                               <button
                                 key={opt.type}
                                 onClick={() => handleReactionClick(rev.id, opt.type)}
-                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                                   isSelected
                                     ? opt.activeBg
-                                    : 'hover:bg-zinc-800 text-zinc-300 hover:text-white'
+                                    : 'hover:bg-[#151932] text-[#CBD5E1] hover:text-white'
                                 }`}
                                 title={opt.label}
                               >
@@ -355,14 +360,14 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
           })}
         </div>
       ) : (
-        <div className="p-10 rounded-2xl bg-zinc-950/40 border border-zinc-800/40 text-center space-y-3">
-          <MessageSquare className="w-10 h-10 text-zinc-600 mx-auto" />
-          <p className="text-xs text-zinc-400 max-w-sm mx-auto">
+        <div className="p-10 rounded-2xl bg-[#0B0D20] border border-[#1E2442] text-center space-y-3">
+          <MessageSquare className="w-10 h-10 text-[#64748B] mx-auto" />
+          <p className="text-xs text-[#94A3B8] max-w-sm mx-auto">
             Оставьте свой первый отзыв или напишите развёрнутую рецензию, чтобы помочь другим пользователям определиться с выбором!
           </p>
           <button
             onClick={onOpenReviewModal}
-            className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold inline-flex items-center gap-2 transition-all"
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-semibold inline-flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-[#7C3AED]/25"
           >
             <Plus className="w-4 h-4" />
             <span>Написать первый отзыв</span>

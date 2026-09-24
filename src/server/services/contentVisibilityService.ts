@@ -1,5 +1,29 @@
 // src/server/services/contentVisibilityService.ts
 
+export interface ContentSafety {
+  isAdult: boolean;
+  containsNudity: boolean;
+  containsSexualContent: boolean;
+  containsViolence: boolean;
+  containsExplicitLanguage: boolean;
+  ageRating: string | null;
+  source: string | null;
+  warningLabels: string[];
+}
+
+export interface ContentSafetyFilters {
+  hideAdult?: boolean | string;
+  hide_adult?: boolean | string;
+  hideNudity?: boolean | string;
+  hide_nudity?: boolean | string;
+  hideSexualContent?: boolean | string;
+  hide_sexual_content?: boolean | string;
+  hideViolence?: boolean | string;
+  hide_violence?: boolean | string;
+  hideExplicitLanguage?: boolean | string;
+  hide_explicit_language?: boolean | string;
+}
+
 export interface ContentItemLike {
   id?: number | string;
   mediaId?: number;
@@ -15,7 +39,17 @@ export interface ContentItemLike {
   age_rating?: string | null;
   ratingAgeLimits?: string | null;
   contentRating?: string | null;
+  maturityRating?: string | null;
   genres?: string | any[] | null;
+  tags?: string | any[] | null;
+  format?: string | null;
+  esrb_rating?: any;
+  pegi?: any;
+  cero?: any;
+  explicit?: boolean;
+  collectionExplicitness?: string;
+  trackExplicitness?: string;
+  contentAdvisoryRating?: string;
   [key: string]: any;
 }
 
@@ -28,7 +62,7 @@ export interface UserLike {
 
 export class ContentVisibilityService {
   /**
-   * Checks whether a given role is staff / admin.
+   * Checks whether a given user is staff / admin.
    */
   public static isStaffOrAdmin(user?: UserLike | null): boolean {
     if (!user || !user.role) return false;
@@ -37,81 +71,195 @@ export class ContentVisibilityService {
   }
 
   /**
-   * Normalizes and detects whether an item is adult 18+ content.
+   * Evaluates comprehensive ContentSafety metadata for an item across all categories.
    */
-  public static isAdultContent(item?: ContentItemLike | null): boolean {
-    if (!item) return false;
-
-    // Explicit boolean flags
-    if (item.isAdult === true || item.is_adult === true || item.adult === true) {
-      return true;
+  public static evaluateContentSafety(item?: ContentItemLike | null): ContentSafety {
+    if (!item) {
+      return {
+        isAdult: false,
+        containsNudity: false,
+        containsSexualContent: false,
+        containsViolence: false,
+        containsExplicitLanguage: false,
+        ageRating: null,
+        source: null,
+        warningLabels: [],
+      };
     }
 
-    // Check age ratings / certifications
-    const ratingsToCheck = [
+    const warnings: string[] = [];
+    let isAdult = false;
+    let containsNudity = false;
+    let containsSexualContent = false;
+    let containsViolence = false;
+    let containsExplicitLanguage = false;
+
+    // 1. Explicit boolean flags from providers
+    if (item.isAdult === true || item.is_adult === true || item.adult === true || item.explicit === true) {
+      isAdult = true;
+      warnings.push('18+ Adult Content');
+    }
+
+    // 2. Normalizing age rating string
+    const rawRating = [
       item.ageRating,
       item.age_rating,
       item.ratingAgeLimits,
       item.contentRating,
+      item.maturityRating,
+      item.contentAdvisoryRating,
       typeof item.esrb_rating === 'string' ? item.esrb_rating : item.esrb_rating?.name,
+      typeof item.pegi === 'string' ? item.pegi : item.pegi?.name,
+      typeof item.cero === 'string' ? item.cero : item.cero?.name,
     ]
       .filter(Boolean)
-      .map((r) => String(r).trim().toUpperCase());
+      .map((r) => String(r).trim())[0] || null;
 
-    for (const r of ratingsToCheck) {
-      if (
-        r === '18' ||
-        r === '18+' ||
-        r === 'R18' ||
-        r === 'R18+' ||
-        r === 'R-18' ||
-        r === 'NC-17' ||
-        r === 'NC17' ||
-        r === 'RX' ||
-        r === 'EXPLICIT' ||
-        r === 'ADULT' ||
-        r === 'ADULTS ONLY' ||
-        r === 'AO' ||
-        r === 'AGE18' ||
-        r === 'TV-MA' ||
-        r.includes('18+') ||
-        r.includes('R18') ||
-        r.includes('ADULT') ||
-        r.includes('NC-17')
-      ) {
-        return true;
+    const ratingUpper = rawRating ? rawRating.toUpperCase() : '';
+
+    if (
+      ratingUpper === '18' ||
+      ratingUpper === '18+' ||
+      ratingUpper === 'R18' ||
+      ratingUpper === 'R18+' ||
+      ratingUpper === 'R-18' ||
+      ratingUpper === 'NC-17' ||
+      ratingUpper === 'NC17' ||
+      ratingUpper === 'RX' ||
+      ratingUpper === 'EXPLICIT' ||
+      ratingUpper === 'ADULT' ||
+      ratingUpper === 'ADULTS ONLY' ||
+      ratingUpper === 'AO' ||
+      ratingUpper === 'AGE18' ||
+      ratingUpper === 'TV-MA' ||
+      ratingUpper === 'MATURE' ||
+      ratingUpper === 'CERO Z' ||
+      ratingUpper.includes('18+') ||
+      ratingUpper.includes('R18') ||
+      ratingUpper.includes('ADULT') ||
+      ratingUpper.includes('NC-17')
+    ) {
+      isAdult = true;
+      if (!warnings.includes('18+ Age Rating')) {
+        warnings.push('18+ Age Rating');
       }
     }
 
-    // Check genres
-    let genresStr = '';
+    // 3. Audio / Music explicitness check (iTunes / Spotify / MusicBrainz)
+    if (
+      item.collectionExplicitness === 'explicit' ||
+      item.trackExplicitness === 'explicit' ||
+      ratingUpper === 'EXPLICIT'
+    ) {
+      isAdult = true;
+      containsExplicitLanguage = true;
+      warnings.push('Explicit Lyrics / Audio');
+    }
+
+    // 4. Genres and Tags analysis
+    const genresList: string[] = [];
     if (Array.isArray(item.genres)) {
-      genresStr = item.genres.join(' ').toUpperCase();
+      genresList.push(...item.genres.map((g) => (typeof g === 'string' ? g : g?.name || '')).filter(Boolean));
     } else if (typeof item.genres === 'string') {
-      genresStr = item.genres.toUpperCase();
+      genresList.push(item.genres);
+    }
+
+    const tagsList: string[] = [];
+    if (Array.isArray(item.tags)) {
+      tagsList.push(...item.tags.map((t) => (typeof t === 'string' ? t : t?.name || '')).filter(Boolean));
+    } else if (typeof item.tags === 'string') {
+      tagsList.push(item.tags);
+    }
+
+    const combinedText = `${genresList.join(' ')} ${tagsList.join(' ')} ${item.format || ''} ${item.description || ''}`.toUpperCase();
+
+    // Sexual Content / Nudity / Hentai / Ecchi
+    if (
+      combinedText.includes('HENTAI') ||
+      combinedText.includes('EROTICA') ||
+      combinedText.includes('ЭРОТИКА') ||
+      combinedText.includes('PORN') ||
+      combinedText.includes('SEXUAL CONTENT') ||
+      combinedText.includes('SEXUAL THEMES') ||
+      combinedText.includes('ECCHI') ||
+      combinedText.includes('ADULT FICTION') ||
+      combinedText.includes('NSFW')
+    ) {
+      isAdult = true;
+      containsSexualContent = true;
+      warnings.push('Sexual Content');
     }
 
     if (
-      genresStr.includes('HENTAI') ||
-      genresStr.includes('EROTICA') ||
-      genresStr.includes('ADULT') ||
-      genresStr.includes('18+') ||
-      genresStr.includes('ЭРОТИКА')
+      combinedText.includes('NUDITY') ||
+      combinedText.includes('НАГОТА') ||
+      combinedText.includes('ОБНАЖЕНИЕ') ||
+      combinedText.includes('NUDE')
     ) {
-      return true;
+      containsNudity = true;
+      isAdult = true;
+      warnings.push('Nudity');
     }
 
-    return false;
+    // Violence / Gore
+    if (
+      combinedText.includes('GORE') ||
+      combinedText.includes('EXTREME VIOLENCE') ||
+      combinedText.includes('BLOOD AND GORE') ||
+      combinedText.includes('ЖЕСТОКОСТЬ') ||
+      combinedText.includes('РАСЧЛЕНЕНИЕ')
+    ) {
+      containsViolence = true;
+      warnings.push('Violence & Gore');
+    }
+
+    // Explicit Language
+    if (
+      combinedText.includes('STRONG LANGUAGE') ||
+      combinedText.includes('EXPLICIT LANGUAGE') ||
+      combinedText.includes('EXPLICIT LYRICS') ||
+      combinedText.includes('EXPLICIT') ||
+      combinedText.includes('НЕНОРМАТИВНАЯ ЛЕКСИКА') ||
+      combinedText.includes('ПРОФАНАЦИЯ') ||
+      combinedText.includes('МАТ')
+    ) {
+      containsExplicitLanguage = true;
+      isAdult = true;
+      warnings.push('Explicit Language');
+    }
+
+    const source = item.provider || (item.rawgId ? 'RAWG' : item.tmdbId ? 'TMDB' : item.kinopoiskId ? 'KINOPOISK' : 'DATABASE');
+
+    return {
+      isAdult,
+      containsNudity,
+      containsSexualContent,
+      containsViolence,
+      containsExplicitLanguage,
+      ageRating: rawRating,
+      source,
+      warningLabels: Array.from(new Set(warnings)),
+    };
+  }
+
+  /**
+   * Normalizes and detects whether an item is adult 18+ content across all categories.
+   */
+  public static isAdultContent(item?: ContentItemLike | null): boolean {
+    if (!item) return false;
+    return this.evaluateContentSafety(item).isAdult;
   }
 
   /**
    * Central decision function for viewing content.
-   * Returns { allowed: boolean, reason?: 'HIDDEN' | 'ADULT_RESTRICTED' }
+   * Checks both user permissions and optional fine-grained ContentSafetyFilters.
+   * Returns { allowed: boolean, reason?: 'HIDDEN' | 'ADULT_RESTRICTED' | 'SAFETY_RESTRICTED' }
    */
   public static canViewContent(
     user: UserLike | null | undefined,
-    item: ContentItemLike | null | undefined
-  ): { allowed: boolean; reason?: 'HIDDEN' | 'ADULT_RESTRICTED' } {
+    item: ContentItemLike | null | undefined,
+    filters?: ContentSafetyFilters
+  ): { allowed: boolean; reason?: 'HIDDEN' | 'ADULT_RESTRICTED' | 'SAFETY_RESTRICTED'; safety?: ContentSafety } {
     if (!item) return { allowed: true };
 
     const isStaff = this.isStaffOrAdmin(user);
@@ -123,29 +271,59 @@ export class ContentVisibilityService {
       }
     }
 
+    const safety = this.evaluateContentSafety(item);
+
     // 2. Adult 18+ content check
-    if (this.isAdultContent(item)) {
-      if (isStaff) {
-        return { allowed: true };
-      }
-      const canShowAdult = Boolean(user && user.showAdultContent === true);
-      if (!canShowAdult) {
-        return { allowed: false, reason: 'ADULT_RESTRICTED' };
+    if (safety.isAdult) {
+      if (!isStaff) {
+        const canShowAdult = Boolean(user && user.showAdultContent === true);
+        if (!canShowAdult) {
+          return { allowed: false, reason: 'ADULT_RESTRICTED', safety };
+        }
       }
     }
 
-    return { allowed: true };
+    // 3. Fine-grained Safety Filter checks (if passed in query / search filters)
+    if (filters) {
+      const hideAdult = filters.hideAdult === true || filters.hideAdult === 'true' || filters.hide_adult === true || filters.hide_adult === 'true';
+      if (hideAdult && safety.isAdult) {
+        return { allowed: false, reason: 'SAFETY_RESTRICTED', safety };
+      }
+
+      const hideNudity = filters.hideNudity === true || filters.hideNudity === 'true' || filters.hide_nudity === true || filters.hide_nudity === 'true';
+      if (hideNudity && safety.containsNudity) {
+        return { allowed: false, reason: 'SAFETY_RESTRICTED', safety };
+      }
+
+      const hideSexual = filters.hideSexualContent === true || filters.hideSexualContent === 'true' || filters.hide_sexual_content === true || filters.hide_sexual_content === 'true';
+      if (hideSexual && safety.containsSexualContent) {
+        return { allowed: false, reason: 'SAFETY_RESTRICTED', safety };
+      }
+
+      const hideViolence = filters.hideViolence === true || filters.hideViolence === 'true' || filters.hide_violence === true || filters.hide_violence === 'true';
+      if (hideViolence && safety.containsViolence) {
+        return { allowed: false, reason: 'SAFETY_RESTRICTED', safety };
+      }
+
+      const hideExplicitLang = filters.hideExplicitLanguage === true || filters.hideExplicitLanguage === 'true' || filters.hide_explicit_language === true || filters.hide_explicit_language === 'true';
+      if (hideExplicitLang && safety.containsExplicitLanguage) {
+        return { allowed: false, reason: 'SAFETY_RESTRICTED', safety };
+      }
+    }
+
+    return { allowed: true, safety };
   }
 
   /**
-   * Filters an array of content items keeping only accessible ones for the given user.
+   * Filters an array of content items keeping only accessible ones for the given user and filters.
    */
   public static filterAccessibleContent<T extends ContentItemLike>(
     user: UserLike | null | undefined,
-    items: T[]
+    items: T[],
+    filters?: ContentSafetyFilters
   ): T[] {
     if (!Array.isArray(items)) return [];
-    return items.filter((item) => this.canViewContent(user, item).allowed);
+    return items.filter((item) => this.canViewContent(user, item, filters).allowed);
   }
 
   /**
@@ -165,4 +343,23 @@ export class ContentVisibilityService {
       return true;
     });
   }
+
+  /**
+   * Sanitizes a media item preview for safe transport when adult viewing is restricted.
+   */
+  public static sanitizeMediaSummary(item: ContentItemLike): Partial<ContentItemLike> {
+    return {
+      id: item.id || item.mediaId,
+      mediaId: item.mediaId || (typeof item.id === 'number' ? item.id : undefined),
+      type: item.type,
+      title: item.title,
+      originalTitle: item.originalTitle,
+      year: item.year,
+      ageRating: item.ageRating || '18+',
+      isAdult: true,
+      adult: true,
+      description: 'Данный контент содержит возрастное ограничение 18+.',
+    };
+  }
 }
+

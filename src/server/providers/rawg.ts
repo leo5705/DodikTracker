@@ -83,7 +83,8 @@ export class RAWGProvider implements MediaProvider {
     credentials?: Record<string, any>,
     page: number = 1,
     limit: number = 20,
-    filters?: import('./types.ts').UnifiedSearchFilters
+    filters?: import('./types.ts').UnifiedSearchFilters,
+    datesOverride?: string
   ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
     const apiKey = credentials?.apiKey;
     if (!apiKey) return { results: [], hasMore: false, page };
@@ -121,7 +122,14 @@ export class RAWGProvider implements MediaProvider {
       }
 
       // Dates
-      if (filters?.year) {
+      if (datesOverride) {
+        params.set('dates', datesOverride);
+      } else if (filters?.sortBy === 'trending') {
+        const today = new Date();
+        const oneYearAgoStr = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const sixMonthsAheadStr = new Date(today.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        params.set('dates', `${oneYearAgoStr},${sixMonthsAheadStr}`);
+      } else if (filters?.year) {
         params.set('dates', `${filters.year}-01-01,${filters.year}-12-31`);
       } else if (filters?.yearFrom || filters?.yearTo) {
         const from = filters.yearFrom ? `${filters.yearFrom}-01-01` : '1970-01-01';
@@ -137,7 +145,9 @@ export class RAWGProvider implements MediaProvider {
       }
 
       // Ordering
-      if (filters?.sortBy === 'rating') {
+      if (filters?.sortBy === 'trending') {
+        params.set('ordering', '-added');
+      } else if (filters?.sortBy === 'rating') {
         params.set('ordering', filters.sortOrder === 'asc' ? 'rating' : '-rating');
       } else if (filters?.sortBy === 'release_date') {
         params.set('ordering', filters.sortOrder === 'asc' ? 'released' : '-released');
@@ -200,7 +210,16 @@ export class RAWGProvider implements MediaProvider {
     limit: number = 20,
     filters?: import('./types.ts').UnifiedSearchFilters
   ): Promise<import('./types.ts').PaginatedResult<MediaSearchResult>> {
-    return this.search('', credentials, page, limit, filters);
+    const today = new Date();
+    const oneYearAgoStr = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const sixMonthsAheadStr = new Date(today.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const trendingFilters: import('./types.ts').UnifiedSearchFilters = {
+      ...filters,
+      sortBy: 'trending',
+    };
+
+    return this.search('', credentials, page, limit, trendingFilters, `${oneYearAgoStr},${sixMonthsAheadStr}`);
   }
 
   async getDetails(
@@ -335,6 +354,7 @@ export class RAWGProvider implements MediaProvider {
         videos: videos.length > 0 ? videos : undefined,
         trailerUrl,
         criticScore,
+        ageRating: data.esrb_rating?.name || undefined,
         website: data.website || undefined,
         similar,
         statusText: year ? `Вышла в ${year}` : 'Выпущена',

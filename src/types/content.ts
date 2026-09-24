@@ -64,11 +64,16 @@ export interface ContentRelation {
 export interface ContentVideo {
   id?: string | number;
   name: string;
+  title?: string;
   url?: string;
+  embedUrl?: string;
   key?: string;
   site?: string;
   type?: string;
   thumbnailUrl?: string;
+  language?: string;
+  official?: boolean;
+  publishedAt?: string;
 }
 
 export interface ContentImage {
@@ -112,7 +117,14 @@ export interface ContentCriticScore {
 export interface ContentDodikRating {
   averageRating: number | null;
   ratingCount: number;
-  distribution?: Record<number, number>;
+  distribution?: Record<string, number> | Record<number, number>;
+  userRating?: number | null;
+}
+
+export interface ContentExternalRating {
+  source: string;
+  score: number;
+  max?: number;
 }
 
 export interface ContentUserTracking {
@@ -159,6 +171,8 @@ export interface UnifiedContentItem {
   ratingCount?: number;
   criticScore?: ContentCriticScore;
   dodikRating?: ContentDodikRating;
+  externalRatings?: ContentExternalRating[];
+  trailerUrl?: string;
 
   // Metadata specific to categories
   directors?: ContentPerson[];
@@ -173,6 +187,13 @@ export interface UnifiedContentItem {
   cast?: ContentPerson[];
   studios?: Array<{ id?: string | number; name: string; url?: string; image?: string }>;
   publishers?: Array<{ id?: string | number; name: string; url?: string; image?: string }>;
+  developers?: Array<{ id?: string | number; name: string; url?: string; image?: string }>;
+  platforms?: string[];
+  requirements?: {
+    minimum?: string;
+    recommended?: string;
+  };
+  achievements?: Array<{ id?: string | number; name: string; description?: string; icon?: string; percent?: number }>;
   networks?: Array<{ id?: string | number; name: string }>;
   labels?: Array<{ id?: string | number; name: string }>;
 

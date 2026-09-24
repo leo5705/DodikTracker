@@ -235,7 +235,12 @@ export class RAWGGameProvider implements IGameProvider {
         if (pId) params.set('platforms', String(pId));
       }
 
-      if (filters?.year) {
+      if (filters?.sortBy === 'trending') {
+        const today = new Date();
+        const oneYearAgoStr = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const sixMonthsAheadStr = new Date(today.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        params.set('dates', `${oneYearAgoStr},${sixMonthsAheadStr}`);
+      } else if (filters?.year) {
         params.set('dates', `${filters.year}-01-01,${filters.year}-12-31`);
       } else if (filters?.yearFrom || filters?.yearTo) {
         const from = filters.yearFrom ? `${filters.yearFrom}-01-01` : '1970-01-01';
@@ -249,7 +254,13 @@ export class RAWGGameProvider implements IGameProvider {
         params.set('metacritic', `${from},${to}`);
       }
 
-      if (filters?.sortBy === 'rating') {
+      if (filters?.sortBy === 'trending') {
+        const today = new Date();
+        const oneYearAgoStr = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const sixMonthsAheadStr = new Date(today.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        params.set('dates', `${oneYearAgoStr},${sixMonthsAheadStr}`);
+        params.set('ordering', '-added');
+      } else if (filters?.sortBy === 'rating') {
         params.set('ordering', filters.sortOrder === 'asc' ? 'rating' : '-rating');
       } else if (filters?.sortBy === 'release_date') {
         params.set('ordering', filters.sortOrder === 'asc' ? 'released' : '-released');

@@ -344,18 +344,18 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
   const selectedList = userLists.find((l) => l.id === selectedListId);
 
   return (
-    <div className="space-y-8 pb-16 animate-fadeIn max-w-6xl mx-auto">
+    <div className="space-y-6 pb-16 animate-fadeIn max-w-6xl mx-auto">
       {/* Top Title & Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#252233] pb-5">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#1E2442] pb-5">
         <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-[#AC82FF] uppercase tracking-wider font-mono">
-            <Dice5 className="w-4 h-4" />
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#A78BFA] uppercase tracking-wider font-mono">
+            <Dice5 className="w-4 h-4 text-[#8B5CF6]" />
             <span>Рандомайзер контента</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-black text-[#F3F1F8] font-mono tracking-tight mt-1">
+          <h1 className="text-2xl sm:text-3xl font-black text-[#F8FAFC] tracking-tight mt-1">
             Рулетка выбора
           </h1>
-          <p className="text-xs text-[#9A94AA] mt-0.5">
+          <p className="text-xs text-[#94A3B8] mt-0.5">
             Случайный выбор фильма, сериала, игры, книги или аниме из вашей библиотеки или личных списков.
           </p>
         </div>
@@ -364,24 +364,24 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
         <div className="flex items-center gap-2 self-end sm:self-center">
           <button
             onClick={() => setSoundEnabled(!soundEnabled)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-colors ${
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-colors cursor-pointer ${
               soundEnabled
-                ? 'bg-[#191724] border-[#252233] text-[#AC82FF]'
-                : 'bg-[#191724] border-[#252233] text-zinc-600'
+                ? 'bg-[#151932] border-[#8B5CF6]/40 text-[#A78BFA]'
+                : 'bg-[#11152A] border-[#1E2442] text-[#64748B]'
             }`}
             title={soundEnabled ? 'Звук включен' : 'Звук выключен'}
           >
-            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            {soundEnabled ? <Volume2 className="w-4 h-4 text-[#8B5CF6]" /> : <VolumeX className="w-4 h-4" />}
             <span>{soundEnabled ? 'Звук включен' : 'Без звука'}</span>
           </button>
         </div>
       </div>
 
       {/* Filter Controls Bar */}
-      <div className="p-5 sm:p-6 rounded-3xl bg-[#14131A] border border-[#252233] space-y-6 shadow-xl">
+      <div className="p-5 sm:p-6 rounded-3xl bg-[#11152A] border border-[#1E2442] space-y-5 shadow-xl">
         {/* 1. Source Pool */}
         <div>
-          <label className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider block mb-2.5 font-mono">
+          <label className="text-xs font-bold text-[#94A3B8] uppercase tracking-wider block mb-2 font-mono">
             1. Источник выбора
           </label>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -390,10 +390,10 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                 key={s.id}
                 disabled={isSpinning}
                 onClick={() => setSource(s.id as any)}
-                className={`py-2.5 px-3 rounded-xl text-xs font-medium border transition-all text-center truncate ${
+                className={`py-2.5 px-3 rounded-xl text-xs font-medium border transition-all text-center truncate cursor-pointer ${
                   source === s.id
-                    ? 'bg-[#1F1C2E] text-[#AC82FF] border-[#9B6BFF] shadow-sm font-semibold'
-                    : 'bg-[#191724] text-[#9A94AA] border-[#252233] hover:text-white hover:border-[#3A344E]'
+                    ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white border-transparent shadow-md shadow-[#7C3AED]/25 font-bold'
+                    : 'bg-[#0B0D20] text-[#94A3B8] border-[#1E2442] hover:text-[#F8FAFC] hover:bg-[#151932]'
                 }`}
               >
                 {s.label}
@@ -404,15 +404,15 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
 
         {/* 1b. User List Selector (Visible when USER_LIST is selected) */}
         {source === 'USER_LIST' && (
-          <div className="p-4 rounded-2xl bg-[#191724] border border-[#252233] space-y-3 animate-fadeIn">
+          <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-3 animate-fadeIn">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-[#AC82FF] uppercase tracking-wider font-mono flex items-center gap-1.5">
-                <FolderOpen className="w-4 h-4" />
+              <label className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono flex items-center gap-1.5">
+                <FolderOpen className="w-4 h-4 text-[#8B5CF6]" />
                 Выберите ваш список
               </label>
               <button
                 onClick={() => navigate('/lists')}
-                className="text-[11px] text-[#9A94AA] hover:text-white flex items-center gap-1 transition-colors"
+                className="text-[11px] text-[#94A3B8] hover:text-[#F8FAFC] flex items-center gap-1 transition-colors cursor-pointer"
               >
                 <ListPlus className="w-3.5 h-3.5" />
                 <span>Управление списками</span>
@@ -420,13 +420,13 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
             </div>
 
             {loadingLists ? (
-              <p className="text-xs text-[#9A94AA] py-2">Загрузка ваших списков...</p>
+              <p className="text-xs text-[#94A3B8] py-2">Загрузка ваших списков...</p>
             ) : userLists.length === 0 ? (
               <div className="py-4 text-center space-y-2">
-                <p className="text-xs text-[#9A94AA]">У вас пока нет созданных списков.</p>
+                <p className="text-xs text-[#94A3B8]">У вас пока нет созданных списков.</p>
                 <button
                   onClick={() => navigate('/lists')}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#9B6BFF] text-white text-xs font-semibold"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#7C3AED] text-white text-xs font-semibold"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Создать первый список</span>
@@ -442,7 +442,6 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                       disabled={isSpinning}
                       onClick={() => {
                         setSelectedListId(list.id);
-                        // If list has specific category, automatically adapt
                         if (list.category && list.category !== 'ALL') {
                           if (list.category === 'MOVIES_TV') {
                             setCategory('ALL');
@@ -451,21 +450,18 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                           }
                         }
                       }}
-                      className={`p-3 rounded-xl border text-left transition-all relative ${
+                      className={`p-3 rounded-xl border text-left transition-all relative cursor-pointer ${
                         isSelected
-                          ? 'bg-[#252233] border-[#9B6BFF] text-white shadow-md'
-                          : 'bg-[#14131A] border-[#252233] text-[#9A94AA] hover:text-white hover:border-[#3A344E]'
+                          ? 'bg-[#151932] border-[#8B5CF6] text-white shadow-md'
+                          : 'bg-[#11152A] border-[#1E2442] text-[#94A3B8] hover:text-white hover:bg-[#151932]'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <span className="text-xs font-bold truncate block">{list.title}</span>
-                        {isSelected && <Check className="w-3.5 h-3.5 text-[#AC82FF] shrink-0" />}
+                        <span className="font-bold text-xs truncate flex-1">{list.title}</span>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-[#8B5CF6] shrink-0" />}
                       </div>
-                      <div className="flex items-center gap-2 mt-1.5 text-[10px] text-zinc-400">
-                        <span className="px-1.5 py-0.5 rounded bg-black/40 border border-white/5 font-mono">
-                          {getCategoryLabel(list.category)}
-                        </span>
-                        {list.itemCount !== undefined && <span>{list.itemCount} тайтлов</span>}
+                      <div className="flex items-center gap-1.5 text-[10px] text-[#64748B] mt-1 font-mono">
+                        <span>{list.itemCount || 0} тайтлов</span>
                       </div>
                     </button>
                   );
@@ -477,7 +473,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
 
         {/* 2. Category Pills */}
         <div>
-          <label className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider block mb-2 font-mono">
+          <label className="text-xs font-bold text-[#94A3B8] uppercase tracking-wider block mb-2 font-mono">
             2. Категория медиа
           </label>
           <div className="flex flex-wrap gap-2">
@@ -489,10 +485,10 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                   key={c.id}
                   disabled={isSpinning}
                   onClick={() => setCategory(c.id)}
-                  className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium border transition-all ${
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium border transition-all cursor-pointer ${
                     isSelected
-                      ? 'bg-[#9B6BFF] text-white border-[#9B6BFF] shadow-md shadow-[#9B6BFF]/25 font-semibold'
-                      : 'bg-[#191724] text-[#9A94AA] border-[#252233] hover:text-white hover:border-[#3A344E]'
+                      ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white border-transparent shadow-md shadow-[#7C3AED]/25 font-bold'
+                      : 'bg-[#0B0D20] text-[#94A3B8] border-[#1E2442] hover:text-white hover:bg-[#151932]'
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
@@ -504,9 +500,9 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
         </div>
 
         {/* 3. Rating & Pool count info */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#252233]/60">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#1E2442]">
           <div>
-            <label className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider block mb-2 font-mono">
+            <label className="text-xs font-bold text-[#94A3B8] uppercase tracking-wider block mb-2 font-mono">
               3. Минимальный рейтинг: {parseFloat(minRating) > 0 ? `${minRating}★+` : 'Любой'}
             </label>
             <div className="flex gap-2">
@@ -520,10 +516,10 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                   key={r.val}
                   disabled={isSpinning}
                   onClick={() => setMinRating(r.val)}
-                  className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all text-center ${
+                  className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all text-center cursor-pointer ${
                     minRating === r.val
-                      ? 'bg-[#1F1C2E] text-amber-400 border-amber-500/60 font-semibold'
-                      : 'bg-[#191724] text-[#9A94AA] border-[#252233] hover:text-white'
+                      ? 'bg-[#151932] text-amber-300 border-amber-500/60 font-semibold'
+                      : 'bg-[#0B0D20] text-[#94A3B8] border-[#1E2442] hover:text-white hover:bg-[#151932]'
                   }`}
                 >
                   {r.label}
@@ -533,16 +529,16 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
           </div>
 
           <div className="flex flex-col justify-end">
-            <div className="p-3 rounded-2xl bg-[#191724] border border-[#252233] flex items-center justify-between text-xs text-[#9A94AA]">
+            <div className="p-3 rounded-2xl bg-[#0B0D20] border border-[#1E2442] flex items-center justify-between text-xs text-[#94A3B8]">
               <span className="flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-[#AC82FF]" />
+                <Layers className="w-3.5 h-3.5 text-[#8B5CF6]" />
                 В текущей выборке:
                 <strong className="text-white font-mono ml-1">
                   {poolLoading ? 'подсчет...' : poolSize !== null ? `${poolSize} тайтлов` : 'доступно'}
                 </strong>
               </span>
               {selectedList && source === 'USER_LIST' && (
-                <span className="text-[11px] text-[#AC82FF] font-medium truncate max-w-[140px]">
+                <span className="text-[11px] text-[#A78BFA] font-medium truncate max-w-[140px]">
                   Список: {selectedList.title}
                 </span>
               )}
@@ -566,17 +562,17 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
       )}
 
       {/* Visual Spin Reel Area */}
-      <div className="relative p-6 sm:p-8 rounded-3xl bg-[#14131A] border border-[#252233] shadow-2xl overflow-hidden">
+      <div className="relative p-6 sm:p-8 rounded-3xl bg-[#11152A] border border-[#1E2442] shadow-2xl overflow-hidden">
         {/* Target Center Indicator Needle */}
         <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-1 z-20 pointer-events-none flex flex-col items-center justify-between py-2">
-          <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-t-[10px] border-t-[#AC82FF] drop-shadow-[0_0_8px_rgba(172,130,255,0.8)]" />
-          <div className="w-0.5 h-full bg-[#AC82FF]/80 shadow-[0_0_8px_rgba(172,130,255,0.7)]" />
-          <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-b-[10px] border-b-[#AC82FF] drop-shadow-[0_0_8px_rgba(172,130,255,0.8)]" />
+          <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-t-[10px] border-t-[#8B5CF6] drop-shadow-[0_0_8px_rgba(139,92,246,0.9)]" />
+          <div className="w-0.5 h-full bg-[#8B5CF6]/90 shadow-[0_0_10px_rgba(139,92,246,0.8)]" />
+          <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-b-[10px] border-b-[#8B5CF6] drop-shadow-[0_0_8px_rgba(139,92,246,0.9)]" />
         </div>
 
         {/* Vignette shadows at left and right */}
-        <div className="absolute inset-y-0 left-0 w-28 bg-gradient-to-r from-[#14131A] to-transparent z-10 pointer-events-none" />
-        <div className="absolute inset-y-0 right-0 w-28 bg-gradient-to-l from-[#14131A] to-transparent z-10 pointer-events-none" />
+        <div className="absolute inset-y-0 left-0 w-28 bg-gradient-to-r from-[#11152A] to-transparent z-10 pointer-events-none" />
+        <div className="absolute inset-y-0 right-0 w-28 bg-gradient-to-l from-[#11152A] to-transparent z-10 pointer-events-none" />
 
         {/* Scrolling Reel Container */}
         <div ref={reelContainerRef} className="overflow-hidden py-4">
@@ -594,7 +590,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                 <div
                   key={`${item.id || idx}-${idx}`}
                   style={{ width: `${ITEM_WIDTH}px` }}
-                  className="shrink-0 aspect-[2/3] rounded-2xl overflow-hidden bg-[#191724] border border-[#252233] relative flex flex-col justify-between shadow-lg group select-none"
+                  className="shrink-0 aspect-[2/3] rounded-2xl overflow-hidden bg-[#151932] border border-[#1E2442] relative flex flex-col justify-between shadow-lg group select-none"
                 >
                   {/* Real poster or neutral dark placeholder */}
                   {item.posterUrl ? (
@@ -605,9 +601,9 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-[#191724]">
+                    <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-[#151932]">
                       {getTypeIcon(item.type)}
-                      <span className="text-xs text-[#9A94AA] line-clamp-2 mt-2 font-medium">
+                      <span className="text-xs text-[#94A3B8] line-clamp-2 mt-2 font-medium">
                         {item.title}
                       </span>
                     </div>
@@ -634,9 +630,9 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
             </div>
           ) : (
             <div className="h-64 flex flex-col items-center justify-center text-center p-6 space-y-2">
-              <Dice5 className="w-10 h-10 text-zinc-600 mb-1" />
-              <p className="text-sm font-semibold text-zinc-300">В этом источнике пока нет тайтлов.</p>
-              <p className="text-xs text-[#9A94AA] max-w-sm">
+              <Dice5 className="w-10 h-10 text-[#64748B] mb-1" />
+              <p className="text-sm font-semibold text-[#F8FAFC]">В этом источнике пока нет тайтлов.</p>
+              <p className="text-xs text-[#94A3B8] max-w-sm">
                 Добавьте тайтлы в «В планах», библиотеку, избранное или выберите другой список.
               </p>
             </div>
@@ -649,7 +645,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
         <button
           onClick={handleSpin}
           disabled={isSpinning || poolSize === 0 || poolLoading}
-          className="px-8 sm:px-12 py-3.5 rounded-2xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-sm sm:text-base font-black uppercase tracking-wider flex items-center gap-2.5 shadow-xl shadow-[#9B6BFF]/30 hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+          className="px-8 sm:px-12 py-3.5 rounded-2xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-sm sm:text-base font-black uppercase tracking-wider flex items-center gap-2.5 shadow-xl shadow-[#7C3AED]/30 hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
         >
           {isSpinning ? (
             <>
@@ -667,18 +663,18 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
 
       {/* Result Card (Once chosen) */}
       {chosenItem && (
-        <div className="p-6 sm:p-8 rounded-3xl bg-[#14131A] border-2 border-[#AC82FF] shadow-2xl shadow-[#9B6BFF]/20 space-y-6 animate-fadeIn">
-          <div className="flex items-center justify-between border-b border-[#252233] pb-3">
-            <span className="text-xs font-bold text-[#AC82FF] uppercase tracking-wider font-mono flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4" />
+        <div className="p-6 sm:p-8 rounded-3xl bg-[#11152A] border-2 border-[#8B5CF6] shadow-2xl shadow-[#7C3AED]/25 space-y-6 animate-fadeIn">
+          <div className="flex items-center justify-between border-b border-[#1E2442] pb-3">
+            <span className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-[#8B5CF6]" />
               Рулетка выбрала для вас:
             </span>
-            <span className="text-xs text-zinc-400">Нажмите «Открыть страницу», чтобы перейти к деталям</span>
+            <span className="text-xs text-[#94A3B8]">Нажмите «Открыть страницу», чтобы перейти к деталям</span>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-6 items-start">
             {/* Poster */}
-            <div className="w-36 sm:w-44 aspect-[2/3] rounded-2xl bg-[#191724] border border-[#252233] overflow-hidden shrink-0 shadow-xl">
+            <div className="w-36 sm:w-44 aspect-[2/3] rounded-2xl bg-[#080A18] border border-[#1E2442] overflow-hidden shrink-0 shadow-xl">
               {chosenItem.posterUrl ? (
                 <img
                   src={chosenItem.posterUrl}
@@ -687,7 +683,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-[#9A94AA] text-xs">
+                <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-[#64748B] text-xs">
                   {getTypeIcon(chosenItem.type)}
                   <span className="mt-2 line-clamp-2">{chosenItem.title}</span>
                 </div>
@@ -697,37 +693,37 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
             {/* Info and Actions */}
             <div className="flex-1 space-y-3 min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[#1F1C2E] border border-[#3A344E] text-xs font-medium text-[#AC82FF]">
+                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-md bg-[#151932] border border-[#1E2442] text-xs font-medium text-[#A78BFA]">
                   {getTypeIcon(chosenItem.type)}
                   {getCategoryLabel(chosenItem.type) || 'МЕДИА'}
                 </span>
 
                 {chosenItem.year && (
-                  <span className="px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 font-mono">
+                  <span className="px-2.5 py-1 rounded-md bg-[#0B0D20] border border-[#1E2442] text-xs text-[#94A3B8] font-mono">
                     {chosenItem.year}
                   </span>
                 )}
 
                 {chosenItem.rating && (
-                  <span className="px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-xs font-bold font-mono flex items-center gap-1">
-                    <Star className="w-3.5 h-3.5 fill-amber-400" />
+                  <span className="px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold font-mono flex items-center gap-1">
+                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                     {typeof chosenItem.rating === 'number' ? chosenItem.rating.toFixed(1) : chosenItem.rating}
                   </span>
                 )}
               </div>
 
-              <h2 className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight">
+              <h2 className="text-2xl sm:text-3xl font-black text-[#F8FAFC] tracking-tight">
                 {chosenItem.title}
               </h2>
 
               {chosenItem.originalTitle && chosenItem.originalTitle !== chosenItem.title && (
-                <p className="text-xs sm:text-sm text-[#9A94AA] italic">
+                <p className="text-xs sm:text-sm text-[#94A3B8] italic">
                   {chosenItem.originalTitle}
                 </p>
               )}
 
               {chosenItem.description && (
-                <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed line-clamp-3">
+                <p className="text-xs sm:text-sm text-[#94A3B8] leading-relaxed line-clamp-3">
                   {chosenItem.description}
                 </p>
               )}
@@ -740,7 +736,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
                       `/media/${formatMediaTypePath(chosenItem.type)}/${chosenItem.id}`
                     )
                   }
-                  className="px-5 py-2.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-[#9B6BFF]/25 transition-all"
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-[#7C3AED]/25 transition-all cursor-pointer"
                 >
                   <span>Открыть страницу</span>
                   <ArrowRight className="w-4 h-4" />
@@ -748,7 +744,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
 
                 <button
                   onClick={handleSpin}
-                  className="px-4 py-2.5 rounded-xl bg-[#191724] hover:bg-[#1F1C2E] border border-[#252233] text-xs font-semibold text-zinc-200 flex items-center gap-2 transition-colors"
+                  className="px-4 py-2.5 rounded-xl bg-[#151932] hover:bg-[#191D38] border border-[#1E2442] text-xs font-semibold text-[#F8FAFC] flex items-center gap-2 transition-colors cursor-pointer"
                 >
                   <RotateCcw className="w-4 h-4" />
                   <span>Крутить еще раз</span>
@@ -756,7 +752,7 @@ export const RouletteView: React.FC<RouletteViewProps> = () => {
 
                 <button
                   onClick={() => setShowAddToList(true)}
-                  className="px-4 py-2.5 rounded-xl bg-[#191724] hover:bg-[#1F1C2E] border border-[#252233] text-xs font-semibold text-[#AC82FF] flex items-center gap-2 transition-colors"
+                  className="px-4 py-2.5 rounded-xl bg-[#151932] hover:bg-[#191D38] border border-[#1E2442] text-xs font-semibold text-[#A78BFA] flex items-center gap-2 transition-colors cursor-pointer"
                 >
                   <Bookmark className="w-4 h-4" />
                   <span>В список</span>

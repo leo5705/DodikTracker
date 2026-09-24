@@ -318,7 +318,7 @@ usersRouter.put('/users/:id/role', requireAuth, requireStaff('MANAGE_USERS'), as
     const { role } = req.body;
     const actor = req.dbUser!;
 
-    const allowedRoles = ['USER', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR', 'ADMIN', 'SUPER_ADMIN'];
+    const allowedRoles = ['USER', 'musician', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR', 'ADMIN', 'SUPER_ADMIN'];
     if (!allowedRoles.includes(role)) {
       return res.status(400).json({ error: 'Недопустимая роль' });
     }
@@ -329,6 +329,9 @@ usersRouter.put('/users/:id/role', requireAuth, requireStaff('MANAGE_USERS'), as
     }
 
     // Role hierarchy rules
+    if ((role === 'musician' || targetUser.role === 'musician') && actor.role !== 'SUPER_ADMIN' && actor.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Только администратор может назначать или изменять роль музыканта' });
+    }
     if (targetUser.role === 'SUPER_ADMIN' && actor.role !== 'SUPER_ADMIN') {
       return res.status(403).json({ error: 'Только Главный Администратор может изменять роль другого Главного Администратора' });
     }

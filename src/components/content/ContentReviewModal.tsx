@@ -33,7 +33,8 @@ export const ContentReviewModal: React.FC<ContentReviewModalProps> = ({
     if (existingReview) {
       setTitle(existingReview.title || '');
       setContent(existingReview.content || '');
-      setScore(existingReview.score || existingReview.rating || null);
+      const rawScore = existingReview.score || existingReview.rating || null;
+      setScore(rawScore !== null && rawScore <= 10 && rawScore > 0 ? rawScore * 10 : rawScore);
       setContainsSpoilers(Boolean(existingReview.containsSpoilers));
     } else {
       setTitle('');
@@ -95,27 +96,66 @@ export const ContentReviewModal: React.FC<ContentReviewModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Score Selector (1 to 10) */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-zinc-300">Ваша оценка (необязательно)</label>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((s) => (
+          {/* Score Selector (0 to 100) */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-zinc-300">Ваша оценка Dodik Tracker (0–100, необязательно)</label>
+              {score !== null && (
                 <button
-                  key={s}
                   type="button"
-                  onClick={() => setScore(score === s ? null : s)}
-                  className={`w-8 h-8 rounded-lg border text-xs font-mono font-bold transition-all ${
-                    score === s
-                      ? 'bg-amber-500 border-amber-400 text-zinc-950 shadow-md scale-105'
-                      : score && s <= score
-                      ? 'bg-amber-950/50 border-amber-800/50 text-amber-400'
-                      : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'
-                  }`}
+                  onClick={() => setScore(null)}
+                  className="text-[11px] text-zinc-400 hover:text-rose-400 transition-colors"
                 >
-                  {s}
+                  Сбросить
                 </button>
-              ))}
+              )}
             </div>
+
+            {score !== null ? (
+              <div className="space-y-2 p-3 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs font-black text-amber-300">★ {score} / 100</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={score}
+                    onChange={(e) => setScore(Number(e.target.value))}
+                    className="w-3/5 h-2 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                  />
+                </div>
+                <div className="flex gap-1 justify-between">
+                  {[25, 50, 60, 70, 80, 90, 100].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setScore(preset)}
+                      className={`flex-1 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer font-mono ${
+                        score === preset
+                          ? 'bg-purple-600 text-white border-purple-400'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-1 justify-between">
+                {[25, 50, 60, 70, 80, 90, 100].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setScore(preset)}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer font-mono bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-purple-500/50 hover:text-zinc-100"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Title input */}

@@ -9,17 +9,17 @@ interface ContentRatingModalProps {
   onSaveRating: (rating: number | null) => Promise<void>;
 }
 
-const RATING_LABELS: Record<number, string> = {
-  1: 'Ужасно (1/10)',
-  2: 'Очень плохо (2/10)',
-  3: 'Плохо (3/10)',
-  4: 'Ниже среднего (4/10)',
-  5: 'Средне / Нормально (5/10)',
-  6: 'Неплохо (6/10)',
-  7: 'Хорошо (7/10)',
-  8: 'Отлично (8/10)',
-  9: 'Великолепно (9/10)',
-  10: 'Шедевр (10/10)',
+const SCORE_LABELS: Record<number, string> = {
+  10: 'Шедевр (10)',
+  9: 'Великолепно (9)',
+  8: 'Отлично (8)',
+  7: 'Хорошо (7)',
+  6: 'Неплохо (6)',
+  5: 'Средне (5)',
+  4: 'Посредственно (4)',
+  3: 'Слабо (3)',
+  2: 'Плохо (2)',
+  1: 'Ужасно (1)',
 };
 
 export const ContentRatingModal: React.FC<ContentRatingModalProps> = ({
@@ -29,13 +29,18 @@ export const ContentRatingModal: React.FC<ContentRatingModalProps> = ({
   onClose,
   onSaveRating,
 }) => {
-  const [hoveredScore, setHoveredScore] = useState<number | null>(null);
-  const [selectedScore, setSelectedScore] = useState<number | null>(currentRating || null);
+  // Normalize if legacy was passed
+  const initial = currentRating
+    ? currentRating > 10
+      ? Math.min(10, Math.max(1, Math.round(currentRating / 10)))
+      : Math.min(10, Math.max(1, Math.round(currentRating)))
+    : 8;
+
+  const [selectedScore, setSelectedScore] = useState<number>(initial);
+  const [hoverScore, setHoverScore] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
-
-  const activeScore = hoveredScore !== null ? hoveredScore : selectedScore;
 
   const handleSave = async (scoreToSave: number | null) => {
     setLoading(true);
@@ -47,70 +52,77 @@ export const ContentRatingModal: React.FC<ContentRatingModalProps> = ({
     }
   };
 
+  const activeScore = hoverScore || selectedScore;
+
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-6">
+      <div className="w-full max-w-md bg-[#0B0D20] border border-[#1E2442] rounded-3xl p-6 shadow-2xl space-y-5 animate-fadeIn">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-          <div>
-            <h3 className="text-base font-bold text-zinc-100">Оценить тайтл</h3>
-            <p className="text-xs text-zinc-400 truncate max-w-[280px]">{itemTitle}</p>
+        <div className="flex items-center justify-between border-b border-[#1E2442] pb-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-2xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-300">
+              <Star className="w-5 h-5 text-amber-400 fill-amber-400" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-[#F8FAFC]">Оценка Dodik Tracker</h3>
+              <p className="text-xs text-[#94A3B8] truncate max-w-[280px]">{itemTitle}</p>
+            </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-2 rounded-full bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+            className="p-2 rounded-full bg-[#151932] text-[#94A3B8] hover:text-white transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* 10 Stars Grid */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-center gap-1.5 flex-wrap">
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => {
-              const isFilled = activeScore !== null && score <= activeScore;
-              const isSelected = selectedScore === score;
-
-              return (
-                <button
-                  key={score}
-                  type="button"
-                  onMouseEnter={() => setHoveredScore(score)}
-                  onMouseLeave={() => setHoveredScore(null)}
-                  onClick={() => setSelectedScore(score)}
-                  className={`w-9 h-9 rounded-xl border flex flex-col items-center justify-center transition-all ${
-                    isSelected
-                      ? 'bg-amber-500 border-amber-400 text-zinc-950 font-black shadow-lg shadow-amber-500/25 scale-105'
-                      : isFilled
-                      ? 'bg-amber-950/60 border-amber-700/60 text-amber-400'
-                      : 'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700'
-                  }`}
-                >
-                  <span className="text-xs font-mono font-bold">{score}</span>
-                </button>
-              );
-            })}
+        {/* Big Score Display */}
+        <div className="flex flex-col items-center justify-center py-2 space-y-1">
+          <div className="flex items-baseline gap-1 font-mono">
+            <span className="text-5xl font-black text-amber-300">{activeScore}</span>
+            <span className="text-sm font-semibold text-[#64748B]">/ 10</span>
           </div>
-
-          {/* Label indicator */}
-          <div className="text-center h-5">
-            {activeScore ? (
-              <span className="text-xs font-bold text-amber-400">
-                {RATING_LABELS[activeScore]}
-              </span>
-            ) : (
-              <span className="text-xs text-zinc-500">Выберите балл от 1 до 10</span>
-            )}
+          <div className="text-xs font-bold text-amber-400 font-mono">
+            {SCORE_LABELS[activeScore] || ''}
           </div>
         </div>
 
-        {/* Action buttons */}
-        <div className="flex items-center justify-between gap-3 pt-2 border-t border-zinc-800">
+        {/* 10 Score Selector Buttons */}
+        <div className="grid grid-cols-5 gap-2 py-1">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => {
+            const isSelected = selectedScore === score;
+            const isHovered = hoverScore !== null && score <= hoverScore;
+
+            return (
+              <button
+                key={score}
+                type="button"
+                onClick={() => setSelectedScore(score)}
+                onMouseEnter={() => setHoverScore(score)}
+                onMouseLeave={() => setHoverScore(null)}
+                className={`py-2.5 rounded-xl border font-mono font-bold text-sm transition-all cursor-pointer ${
+                  isSelected
+                    ? 'bg-amber-500 text-black border-amber-300 shadow-lg shadow-amber-500/30 scale-105'
+                    : isHovered
+                    ? 'bg-purple-600/60 text-white border-purple-400 scale-105'
+                    : 'bg-[#151932] border-[#1E2442] text-[#CBD5E1] hover:text-white hover:border-purple-500/40'
+                }`}
+              >
+                {score}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Actions Footer */}
+        <div className="flex items-center justify-between pt-3 border-t border-[#1E2442]">
           {currentRating ? (
             <button
-              onClick={() => handleSave(null)}
+              type="button"
               disabled={loading}
-              className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-rose-950/60 hover:text-rose-400 text-zinc-400 text-xs font-medium flex items-center gap-1.5 transition-colors"
+              onClick={() => handleSave(null)}
+              className="px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Удалить оценку</span>
@@ -121,17 +133,19 @@ export const ContentRatingModal: React.FC<ContentRatingModalProps> = ({
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold transition-colors"
+              className="px-4 py-2 rounded-xl bg-[#151932] hover:bg-[#1E2442] text-xs font-bold text-[#94A3B8] hover:text-white transition-colors cursor-pointer"
             >
               Отмена
             </button>
             <button
+              type="button"
+              disabled={loading}
               onClick={() => handleSave(selectedScore)}
-              disabled={loading || selectedScore === null}
-              className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 shadow-lg shadow-purple-600/25 transition-all"
+              className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-bold text-white shadow-lg shadow-purple-500/25 flex items-center gap-1.5 transition-all cursor-pointer"
             >
-              <Check className="w-4 h-4" />
+              <Check className="w-3.5 h-3.5" />
               <span>Сохранить</span>
             </button>
           </div>

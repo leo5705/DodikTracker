@@ -214,6 +214,24 @@ export function isStaffRole(role?: string): boolean {
   return ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR'].includes(role);
 }
 
+export function isAdminRole(role?: string): boolean {
+  if (!role) return false;
+  const r = String(role).toUpperCase();
+  return r === 'SUPER_ADMIN' || r === 'ADMIN';
+}
+
+export const requireAdminOnly = (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.dbUser) {
+    return res.status(401).json({ error: 'Требуется авторизация' });
+  }
+  if (!isAdminRole(req.dbUser.role)) {
+    return res.status(403).json({
+      error: 'Доступ запрещён: выдать или изменить роль музыканта может только администратор',
+    });
+  }
+  next();
+};
+
 export function hasStaffPermission(role: string | undefined, permission: AdminPermission): boolean {
   if (!role) return false;
   if (role === 'SUPER_ADMIN') return true;

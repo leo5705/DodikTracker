@@ -364,21 +364,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
   if (!dbUser) return null;
 
   return (
-    <div className="w-full max-w-4xl mx-auto space-y-6 animate-fade-in">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-black text-[#F3F1F8] tracking-tight">Настройки</h1>
-        <p className="text-[#9A94AA] text-sm">Управление профилем, приватностью и уведомлениями</p>
+    <div className="w-full max-w-4xl mx-auto space-y-6">
+      <div className="flex flex-col gap-1 border-b border-[#1E2442] pb-5">
+        <div className="flex items-center gap-2 text-xs font-semibold text-[#A78BFA] uppercase tracking-wider font-mono">
+          <Sliders className="w-4 h-4 text-[#8B5CF6]" />
+          <span>Конфигурация</span>
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-black text-[#F8FAFC] tracking-tight mt-1">
+          Настройки аккаунта
+        </h1>
+        <p className="text-[#94A3B8] text-xs">
+          Управление профилем, приватностью, доставкой уведомлений и приглашениями
+        </p>
       </div>
 
-      <div className="flex overflow-x-auto hide-scrollbar gap-2 pb-2 border-b border-[#252233]">
+      <div className="flex overflow-x-auto no-scrollbar gap-2 pb-2 border-b border-[#1E2442]">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all whitespace-nowrap ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
               activeTab === tab.id
-                ? 'bg-[#191724] text-white border border-[#3A344E]'
-                : 'text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#191724]/50 border border-transparent'
+                ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md shadow-[#7C3AED]/25'
+                : 'text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#11152A] border border-transparent'
             }`}
           >
             <tab.icon className="w-4 h-4" />
@@ -388,54 +396,54 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
       </div>
 
       {saveSuccess && (
-        <div className="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-800/40 text-emerald-200 text-sm flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
-          <Check className="w-4 h-4" />
+        <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
+          <Check className="w-4 h-4 text-emerald-400" />
           <span>Настройки успешно сохранены</span>
         </div>
       )}
 
       {errorMessage && (
-        <div className="p-3.5 rounded-xl bg-red-950/40 border border-red-900/40 text-red-200 text-sm">
+        <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs">
           {errorMessage}
         </div>
       )}
 
       {activeTab === 'profile' && (
         <form onSubmit={handleSaveSettings} className="space-y-6">
-          <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-5">
-            <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono pb-2 border-b border-[#252233]">
+          <div className="p-6 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-5">
+            <h3 className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono pb-2 border-b border-[#1E2442]">
               Основная информация
             </h3>
             
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#D5D0E3]">Имя пользователя</label>
+                <label className="text-xs font-semibold text-[#CBD5E1]">Имя пользователя</label>
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-sm text-[#F3F1F8] focus:outline-none focus:border-[#9B6BFF] transition-colors"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#D5D0E3]">Аватар (URL)</label>
+                <label className="text-xs font-semibold text-[#CBD5E1]">Аватар (URL)</label>
                 <input
                   type="text"
                   value={avatar}
                   onChange={(e) => setAvatar(e.target.value)}
                   placeholder="https://example.com/avatar.jpg"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-sm text-[#F3F1F8] focus:outline-none focus:border-[#9B6BFF] transition-colors"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#D5D0E3]">О себе</label>
+                <label className="text-xs font-semibold text-[#CBD5E1]">О себе</label>
                 <textarea
                   value={bio}
                   onChange={(e) => setBio(e.target.value)}
                   rows={4}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-sm text-[#F3F1F8] focus:outline-none focus:border-[#9B6BFF] transition-colors resize-none"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors resize-none"
                   placeholder="Расскажите немного о себе..."
                 />
               </div>
@@ -446,7 +454,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
             <button
               type="submit"
               disabled={saving}
-              className="px-6 py-2.5 rounded-xl bg-[#F3F1F8] hover:bg-white text-[#0F0E12] font-bold text-sm shadow-[0_0_20px_rgba(243,241,248,0.15)] transition-all disabled:opacity-50"
+              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white font-bold text-xs shadow-lg shadow-[#7C3AED]/25 transition-all disabled:opacity-50 cursor-pointer"
             >
               {saving ? 'Сохранение...' : 'Сохранить изменения'}
             </button>
@@ -456,8 +464,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
       {activeTab === 'privacy' && (
         <form onSubmit={handleSaveSettings} className="space-y-6">
-          <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-5">
-            <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono pb-2 border-b border-[#252233]">
+          <div className="p-6 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-5">
+            <h3 className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono pb-2 border-b border-[#1E2442]">
               Настройки видимости
             </h3>
 
@@ -471,11 +479,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                 { id: 'statisticsVisibility', label: 'Статистика', value: statisticsVisibility, setter: setStatisticsVisibility },
               ].map((setting) => (
                 <div key={setting.id} className="space-y-2">
-                  <label className="text-xs font-semibold text-[#D5D0E3]">{setting.label}</label>
+                  <label className="text-xs font-semibold text-[#CBD5E1]">{setting.label}</label>
                   <select
                     value={setting.value}
                     onChange={(e) => setting.setter(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] text-sm text-[#F3F1F8] focus:outline-none focus:border-[#9B6BFF] transition-colors appearance-none cursor-pointer"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#F8FAFC] focus:outline-none focus:border-[#8B5CF6] transition-colors cursor-pointer"
                   >
                     <option value="PUBLIC">Видно всем</option>
                     <option value="FRIENDS">Только друзьям</option>
@@ -486,17 +494,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
             </div>
           </div>
 
-          <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-4">
-            <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono pb-2 border-b border-[#252233]">
+          <div className="p-6 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-4">
+            <h3 className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono pb-2 border-b border-[#1E2442]">
               Фильтрация контента
             </h3>
             <div className="flex items-center justify-between gap-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-black px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">18+</span>
-                  <span className="text-sm font-bold text-[#F3F1F8]">Показывать контент 18+</span>
+                  <span className="text-xs font-black px-2 py-0.5 rounded bg-rose-500/20 text-rose-400 border border-rose-500/30 font-mono">18+</span>
+                  <span className="text-xs font-bold text-[#F8FAFC]">Показывать контент 18+</span>
                 </div>
-                <p className="text-xs text-[#9A94AA]">
+                <p className="text-xs text-[#94A3B8]">
                   Разрешить отображение игр, фильмов, аниме и манги с возрастным рейтингом 18+ в каталогах, поиске и рекомендациях.
                 </p>
               </div>
@@ -507,7 +515,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                   onChange={(e) => setShowAdultContent(e.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-[#252233] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#9B6BFF]"></div>
+                <div className="w-11 h-6 bg-[#0B0D20] border border-[#1E2442] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[3px] after:left-[3px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4.5 after:w-4.5 after:transition-all peer-checked:bg-[#7C3AED]"></div>
               </label>
             </div>
           </div>
@@ -516,7 +524,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
             <button
               type="submit"
               disabled={saving}
-              className="px-6 py-2.5 rounded-xl bg-[#F3F1F8] hover:bg-white text-[#0F0E12] font-bold text-sm shadow-[0_0_20px_rgba(243,241,248,0.15)] transition-all disabled:opacity-50"
+              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white font-bold text-xs shadow-lg shadow-[#7C3AED]/25 transition-all disabled:opacity-50 cursor-pointer"
             >
               {saving ? 'Сохранение...' : 'Применить настройки'}
             </button>
@@ -527,15 +535,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
       {activeTab === 'notifications' && (
         <div className="space-y-6">
           {/* 1. Global Master Channels Card */}
-          <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#252233]">
+          <div className="p-6 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#1E2442]">
               <div className="flex items-center gap-2">
-                <Radio className="w-4 h-4 text-[#9B6BFF]" />
-                <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono">
+                <Radio className="w-4 h-4 text-[#8B5CF6]" />
+                <h3 className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono">
                   Глобальные каналы доставки
                 </h3>
               </div>
-              <span className="text-xs text-[#7A748E]">
+              <span className="text-xs text-[#64748B]">
                 Включение или отключение каналов для всех уведомлений
               </span>
             </div>
@@ -546,20 +554,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                 onClick={() => toggleGlobalChannel('inApp')}
                 className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
                   globalChannels.inApp
-                    ? 'bg-[#191724] border-[#9B6BFF]/40 text-white shadow-md shadow-purple-950/20'
-                    : 'bg-[#14131A] border-[#252233] text-[#656075]'
+                    ? 'bg-[#151932] border-[#8B5CF6]/50 text-white shadow-md shadow-[#7C3AED]/15'
+                    : 'bg-[#0B0D20] border-[#1E2442] text-[#64748B]'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-2.5 rounded-xl border ${globalChannels.inApp ? 'bg-purple-500/20 text-[#AC82FF] border-purple-500/30' : 'bg-[#191724] text-[#656075] border-[#252233]'}`}>
+                  <div className={`p-2.5 rounded-xl border ${globalChannels.inApp ? 'bg-[#8B5CF6]/20 text-[#A78BFA] border-[#8B5CF6]/40' : 'bg-[#11152A] text-[#64748B] border-[#1E2442]'}`}>
                     <Bell className="w-5 h-5" />
                   </div>
                   <div>
                     <h4 className="text-xs font-bold">In-App (Сайт)</h4>
-                    <p className="text-[11px] text-[#7A748E]">Колокольчик и списки</p>
+                    <p className="text-[11px] text-[#94A3B8]">Колокольчик и списки</p>
                   </div>
                 </div>
-                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.inApp ? 'bg-[#9B6BFF] border-[#9B6BFF] text-white' : 'border-[#3A344E]'}`}>
+                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.inApp ? 'bg-[#7C3AED] border-[#7C3AED] text-white' : 'border-[#1E2442]'}`}>
                   {globalChannels.inApp && <Check className="w-3 h-3 stroke-[3]" />}
                 </div>
               </div>
@@ -569,20 +577,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                 onClick={() => toggleGlobalChannel('toast')}
                 className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
                   globalChannels.toast
-                    ? 'bg-[#191724] border-sky-500/40 text-white shadow-md shadow-sky-950/20'
-                    : 'bg-[#14131A] border-[#252233] text-[#656075]'
+                    ? 'bg-[#151932] border-sky-500/40 text-white shadow-md shadow-sky-950/20'
+                    : 'bg-[#0B0D20] border-[#1E2442] text-[#64748B]'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-2.5 rounded-xl border ${globalChannels.toast ? 'bg-sky-500/20 text-sky-300 border-sky-500/30' : 'bg-[#191724] text-[#656075] border-[#252233]'}`}>
+                  <div className={`p-2.5 rounded-xl border ${globalChannels.toast ? 'bg-sky-500/20 text-sky-300 border-sky-500/30' : 'bg-[#11152A] text-[#64748B] border-[#1E2442]'}`}>
                     <Monitor className="w-5 h-5" />
                   </div>
                   <div>
                     <h4 className="text-xs font-bold">Toast (Всплывающие)</h4>
-                    <p className="text-[11px] text-[#7A748E]">Окно в углу экрана</p>
+                    <p className="text-[11px] text-[#94A3B8]">Окно в углу экрана</p>
                   </div>
                 </div>
-                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.toast ? 'bg-sky-500 border-sky-500 text-white' : 'border-[#3A344E]'}`}>
+                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.toast ? 'bg-sky-500 border-sky-500 text-white' : 'border-[#1E2442]'}`}>
                   {globalChannels.toast && <Check className="w-3 h-3 stroke-[3]" />}
                 </div>
               </div>
@@ -592,35 +600,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                 onClick={() => toggleGlobalChannel('telegram')}
                 className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
                   globalChannels.telegram
-                    ? 'bg-[#191724] border-emerald-500/40 text-white shadow-md shadow-emerald-950/20'
-                    : 'bg-[#14131A] border-[#252233] text-[#656075]'
+                    ? 'bg-[#151932] border-emerald-500/40 text-white shadow-md shadow-emerald-950/20'
+                    : 'bg-[#0B0D20] border-[#1E2442] text-[#64748B]'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-2.5 rounded-xl border ${globalChannels.telegram ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-[#191724] text-[#656075] border-[#252233]'}`}>
+                  <div className={`p-2.5 rounded-xl border ${globalChannels.telegram ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-[#11152A] text-[#64748B] border-[#1E2442]'}`}>
                     <Smartphone className="w-5 h-5" />
                   </div>
                   <div>
                     <h4 className="text-xs font-bold">Telegram Бот</h4>
-                    <p className="text-[11px] text-[#7A748E]">Мгновенно в мессенджер</p>
+                    <p className="text-[11px] text-[#94A3B8]">Мгновенно в мессенджер</p>
                   </div>
                 </div>
-                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.telegram ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-[#3A344E]'}`}>
+                <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${globalChannels.telegram ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-[#1E2442]'}`}>
                   {globalChannels.telegram && <Check className="w-3 h-3 stroke-[3]" />}
                 </div>
               </div>
             </div>
 
             {/* Quick sound & Live test options */}
-            <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#252233]">
+            <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#1E2442]">
               <div className="flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => setSoundEnabled(!soundEnabled)}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-all ${
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-all cursor-pointer ${
                     soundEnabled
-                      ? 'bg-[#191724] border-[#9B6BFF]/40 text-[#AC82FF]'
-                      : 'bg-[#14131A] border-[#252233] text-[#7A748E]'
+                      ? 'bg-[#151932] border-[#8B5CF6]/50 text-[#A78BFA]'
+                      : 'bg-[#0B0D20] border-[#1E2442] text-[#64748B]'
                   }`}
                 >
                   {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
@@ -630,25 +638,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                 <button
                   type="button"
                   onClick={triggerTestToast}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#191724] hover:bg-[#252233] border border-[#2E2A40] text-xs font-semibold text-[#D5D0E3] hover:text-white transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#0B0D20] hover:bg-[#151932] border border-[#1E2442] text-xs font-semibold text-[#CBD5E1] hover:text-white transition-colors cursor-pointer"
                 >
                   <Sparkles className="w-3 h-3 text-amber-400" />
                   <span>Проверить Toast</span>
                 </button>
               </div>
 
-              <span className="text-[11px] text-[#7A748E]">
+              <span className="text-[11px] text-[#64748B]">
                 Для Telegram требуется привязка аккаунта ниже
               </span>
             </div>
           </div>
 
           {/* 2. Granular Notification Types Matrix */}
-          <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#252233]">
+          <div className="p-6 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#1E2442]">
               <div className="flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-[#9B6BFF]" />
-                <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono">
+                <Sliders className="w-4 h-4 text-[#8B5CF6]" />
+                <h3 className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono">
                   Типы уведомлений
                 </h3>
               </div>
@@ -661,25 +669,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                   { id: 'content', label: 'Контент и релизы' },
                   { id: 'achievements', label: 'Достижения' },
                   { id: 'system', label: 'Системные' },
-                ].map((tab) => (
+                ].map((categoryTab) => (
                   <button
-                    key={tab.id}
+                    key={categoryTab.id}
                     type="button"
-                    onClick={() => setNotifCategoryFilter(tab.id as any)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
-                      notifCategoryFilter === tab.id
-                        ? 'bg-[#9B6BFF] text-white'
-                        : 'bg-[#191724] text-[#7A748E] hover:text-[#F3F1F8]'
+                    onClick={() => setNotifCategoryFilter(categoryTab.id as any)}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      notifCategoryFilter === categoryTab.id
+                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-sm'
+                        : 'bg-[#0B0D20] text-[#64748B] hover:text-[#F8FAFC] border border-[#1E2442]'
                     }`}
                   >
-                    {tab.label}
+                    {categoryTab.label}
                   </button>
                 ))}
               </div>
             </div>
 
             {/* Table / List Header */}
-            <div className="hidden sm:grid sm:grid-cols-12 gap-3 text-[11px] font-mono font-semibold text-[#656075] uppercase px-3">
+            <div className="hidden sm:grid sm:grid-cols-12 gap-3 text-[11px] font-mono font-semibold text-[#64748B] uppercase px-3">
               <div className="sm:col-span-6">Событие / Описание</div>
               <div className="sm:col-span-2 text-center">In-App</div>
               <div className="sm:col-span-2 text-center">Toast</div>
@@ -696,33 +704,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                 return (
                   <div
                     key={def.type}
-                    className="p-3.5 rounded-xl bg-[#191724]/60 border border-[#252233] hover:border-[#3A344E] transition-colors flex flex-col sm:grid sm:grid-cols-12 gap-3 sm:items-center"
+                    className="p-3.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#8B5CF6]/40 transition-colors flex flex-col sm:grid sm:grid-cols-12 gap-3 sm:items-center"
                   >
                     <div className="sm:col-span-6 space-y-0.5">
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-[#F3F1F8]">{def.label}</span>
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-[#252233] text-[#7A748E]">
+                        <span className="text-xs font-bold text-[#F8FAFC]">{def.label}</span>
+                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-[#11152A] text-[#94A3B8] border border-[#1E2442]">
                           {def.category}
                         </span>
                       </div>
-                      <p className="text-[11px] text-[#7A748E] leading-relaxed">
+                      <p className="text-[11px] text-[#94A3B8] leading-relaxed">
                         {def.description}
                       </p>
                     </div>
 
                     {/* In-App Toggle */}
-                    <div className="sm:col-span-2 flex sm:justify-center items-center justify-between pt-1 sm:pt-0 border-t sm:border-t-0 border-[#252233]">
-                      <span className="sm:hidden text-xs text-[#9A94AA]">In-App</span>
+                    <div className="sm:col-span-2 flex sm:justify-center items-center justify-between pt-1 sm:pt-0 border-t sm:border-t-0 border-[#1E2442]">
+                      <span className="sm:hidden text-xs text-[#94A3B8]">In-App</span>
                       <button
                         type="button"
                         onClick={() => toggleTypeChannel(def.type, 'inApp')}
-                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors ${
-                          prefs.inApp ? 'bg-[#9B6BFF]' : 'bg-[#252233]'
+                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors cursor-pointer ${
+                          prefs.inApp ? 'bg-[#7C3AED]' : 'bg-[#1E2442]'
                         }`}
                       >
                         <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            prefs.inApp ? 'translate-x-4' : 'translate-x-0.5'
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                            prefs.inApp ? 'translate-x-4.5' : 'translate-x-1'
                           }`}
                         />
                       </button>
@@ -730,17 +738,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
                     {/* Toast Toggle */}
                     <div className="sm:col-span-2 flex sm:justify-center items-center justify-between pt-1 sm:pt-0">
-                      <span className="sm:hidden text-xs text-[#9A94AA]">Toast (Пуш)</span>
+                      <span className="sm:hidden text-xs text-[#94A3B8]">Toast (Пуш)</span>
                       <button
                         type="button"
                         onClick={() => toggleTypeChannel(def.type, 'toast')}
-                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors ${
-                          prefs.toast ? 'bg-sky-500' : 'bg-[#252233]'
+                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors cursor-pointer ${
+                          prefs.toast ? 'bg-sky-500' : 'bg-[#1E2442]'
                         }`}
                       >
                         <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            prefs.toast ? 'translate-x-4' : 'translate-x-0.5'
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                            prefs.toast ? 'translate-x-4.5' : 'translate-x-1'
                           }`}
                         />
                       </button>
@@ -748,17 +756,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
                     {/* Telegram Toggle */}
                     <div className="sm:col-span-2 flex sm:justify-center items-center justify-between pt-1 sm:pt-0">
-                      <span className="sm:hidden text-xs text-[#9A94AA]">Telegram</span>
+                      <span className="sm:hidden text-xs text-[#94A3B8]">Telegram</span>
                       <button
                         type="button"
                         onClick={() => toggleTypeChannel(def.type, 'telegram')}
-                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors ${
-                          prefs.telegram ? 'bg-emerald-500' : 'bg-[#252233]'
+                        className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors cursor-pointer ${
+                          prefs.telegram ? 'bg-emerald-500' : 'bg-[#1E2442]'
                         }`}
                       >
                         <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            prefs.telegram ? 'translate-x-4' : 'translate-x-0.5'
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                            prefs.telegram ? 'translate-x-4.5' : 'translate-x-1'
                           }`}
                         />
                       </button>
@@ -773,7 +781,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                 type="button"
                 onClick={handleSaveNotificationPreferences}
                 disabled={saving}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#F3F1F8] hover:bg-white text-[#0F0E12] font-bold text-sm shadow-[0_0_20px_rgba(243,241,248,0.15)] transition-all disabled:opacity-50"
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white font-bold text-xs shadow-lg shadow-[#7C3AED]/25 transition-all disabled:opacity-50 cursor-pointer"
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 <span>{saving ? 'Сохранение...' : 'Сохранить настройки уведомлений'}</span>
@@ -782,23 +790,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
           </div>
 
           {/* Telegram Integration Card */}
-          <div className="p-6 rounded-2xl bg-[#14131A] border border-[#252233] space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#252233]">
+          <div className="p-6 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#1E2442]">
               <div className="flex items-center gap-2">
                 <Send className="w-4 h-4 text-sky-400" />
-                <h3 className="text-sm font-bold text-[#F3F1F8] uppercase tracking-wider font-mono">
+                <h3 className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono">
                   Telegram-уведомления
                 </h3>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-[#9A94AA]">Telegram:</span>
+                <span className="text-xs text-[#64748B]">Telegram:</span>
                 {dbUser?.telegramId || dbUser?.telegramChatId ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
-                    <Check className="w-3 h-3" />
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold">
+                    <Check className="w-3 h-3 text-emerald-400" />
                     [Привязан]
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs font-mono">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-[#0B0D20] border border-[#1E2442] text-[#64748B] text-xs font-mono">
                     [Не привязан]
                   </span>
                 )}
@@ -807,10 +815,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
             {/* Error banner (e.g. ALREADY_LINKED) */}
             {telegramLinkError && (
-              <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs flex items-start gap-2.5">
+              <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2.5">
                 <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                 <div className="space-y-1">
-                  <div className="font-bold text-rose-300">{telegramLinkError}</div>
+                  <div className="font-bold text-rose-200">{telegramLinkError}</div>
                   <div className="text-[11px] text-rose-300/80">
                     Никаких молчаливых перепривязок. Если этот Telegram принадлежит вам, войдите под тем аккаунтом или отвяжите его в настройках.
                   </div>
@@ -820,7 +828,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
             {/* Success banner */}
             {telegramTestSuccess && (
-              <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-800/40 text-emerald-200 text-xs flex items-center gap-2">
+              <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
                 <Check className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span className="font-medium">{telegramTestSuccess}</span>
               </div>
@@ -828,16 +836,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
             {/* Case 1: ALREADY LINKED */}
             {dbUser?.telegramId || dbUser?.telegramChatId ? (
-              <div className="p-4 rounded-xl bg-[#191724] border border-[#2E2A40] space-y-4">
+              <div className="p-4 rounded-xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-1">
-                    <div className="text-xs font-medium text-[#A29DB5]">Привязанный профиль Telegram:</div>
+                    <div className="text-xs font-medium text-[#94A3B8]">Привязанный профиль Telegram:</div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-bold text-sky-300 font-mono">
                         {dbUser.telegramUsername ? `@${dbUser.telegramUsername}` : `ID: ${dbUser.telegramId || dbUser.telegramChatId}`}
                       </span>
                       {dbUser.telegramId && (
-                        <span className="text-[10px] text-[#7A748E] font-mono">
+                        <span className="text-[10px] text-[#64748B] font-mono">
                           (ID: {dbUser.telegramId})
                         </span>
                       )}
@@ -849,7 +857,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                       type="button"
                       onClick={handleTestTelegramNotification}
                       disabled={testingTelegram}
-                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#252233] hover:bg-[#2E2A40] text-sky-300 text-xs font-semibold border border-sky-500/20 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#151932] hover:bg-[#1E2442] text-sky-300 text-xs font-semibold border border-sky-500/30 transition-colors disabled:opacity-50 cursor-pointer"
                     >
                       {testingTelegram ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -863,7 +871,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                       type="button"
                       onClick={handleUnlinkTelegram}
                       disabled={unlinkingTelegram}
-                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-950/30 hover:bg-rose-900/40 text-rose-300 text-xs font-semibold border border-rose-800/40 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-semibold border border-rose-500/30 transition-colors disabled:opacity-50 cursor-pointer"
                     >
                       {unlinkingTelegram ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -875,7 +883,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                   </div>
                 </div>
 
-                <p className="text-[11px] text-[#7A748E]">
+                <p className="text-[11px] text-[#64748B]">
                   Ваш Telegram успешно подключен. Вы будете получать важные уведомления и сможете легко восстанавливать доступ.
                 </p>
               </div>
@@ -883,12 +891,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
               /* Case 2: NOT LINKED */
               <div className="space-y-4">
                 {!linkCodeInfo ? (
-                  <div className="p-4 rounded-xl bg-[#191724] border border-[#2E2A40] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="p-4 rounded-xl bg-[#0B0D20] border border-[#1E2442] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div className="space-y-1">
-                      <div className="text-sm font-semibold text-[#F3F1F8]">
+                      <div className="text-xs font-bold text-[#F8FAFC]">
                         Привязка Telegram к вашему аккаунту
                       </div>
-                      <p className="text-xs text-[#A29DB5] max-w-md">
+                      <p className="text-xs text-[#94A3B8] max-w-md">
                         Подключите Telegram, чтобы получать мгновенные уведомления о релизах, комментариях и активности друзей.
                       </p>
                     </div>
@@ -897,7 +905,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                       type="button"
                       onClick={handleGenerateLinkCode}
                       disabled={generatingCode}
-                      className="shrink-0 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow-lg shadow-sky-950/40 transition-colors disabled:opacity-50"
+                      className="shrink-0 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow-lg shadow-sky-950/40 transition-colors disabled:opacity-50 cursor-pointer"
                     >
                       {generatingCode ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -909,10 +917,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                   </div>
                 ) : (
                   /* Active Link Code Flow */
-                  <div className="p-5 rounded-2xl bg-purple-950/20 border border-purple-800/40 space-y-4">
-                    <div className="flex items-center justify-between pb-2 border-b border-purple-800/30">
-                      <div className="text-xs font-bold text-purple-200 uppercase tracking-wide flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  <div className="p-5 rounded-2xl bg-[#151932] border border-[#8B5CF6]/40 space-y-4">
+                    <div className="flex items-center justify-between pb-2 border-b border-[#1E2442]">
+                      <div className="text-xs font-bold text-[#A78BFA] uppercase tracking-wide flex items-center gap-1.5 font-mono">
+                        <Sparkles className="w-3.5 h-3.5 text-[#8B5CF6]" />
                         Одноразовый код привязки
                       </div>
                       <button
@@ -921,16 +929,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                           setLinkCodeInfo(null);
                           setTelegramLinkError(null);
                         }}
-                        className="text-[11px] text-zinc-400 hover:text-white transition-colors"
+                        className="text-xs text-[#64748B] hover:text-[#F8FAFC] transition-colors cursor-pointer"
                       >
                         Отмена
                       </button>
                     </div>
 
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-black/40 border border-purple-900/40">
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-[#080A18] border border-[#1E2442]">
                       <div>
-                        <div className="text-[11px] text-zinc-400">Ваш код:</div>
-                        <div className="text-3xl font-black font-mono tracking-widest text-purple-300">
+                        <div className="text-[11px] text-[#64748B]">Ваш код:</div>
+                        <div className="text-3xl font-black font-mono tracking-widest text-[#A78BFA]">
                           {linkCodeInfo.code}
                         </div>
                       </div>
@@ -939,7 +947,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                         <button
                           type="button"
                           onClick={() => handleCopyCode(`/link ${linkCodeInfo.code}`)}
-                          className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-mono text-zinc-200 border border-zinc-700 transition-colors"
+                          className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[#11152A] hover:bg-[#1E2442] text-xs font-mono text-[#CBD5E1] border border-[#1E2442] transition-colors cursor-pointer"
                         >
                           {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                           <span>/link {linkCodeInfo.code}</span>
@@ -957,17 +965,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                       </div>
                     </div>
 
-                    <div className="text-xs text-zinc-300 space-y-1.5">
-                      <div className="font-semibold text-zinc-200">Инструкция:</div>
-                      <div className="text-[11px] text-zinc-400 space-y-1">
-                        <div>1. Откройте бота <a href={`https://t.me/${linkCodeInfo.botUsername}`} target="_blank" rel="noopener noreferrer" className="text-sky-300 underline font-mono">@{linkCodeInfo.botUsername}</a> в Telegram.</div>
-                        <div>2. Отправьте команду <span className="text-purple-300 font-mono font-bold">/link {linkCodeInfo.code}</span> (или нажмите «Начать / Start» по ссылке выше).</div>
+                    <div className="text-xs text-[#CBD5E1] space-y-1.5">
+                      <div className="font-semibold text-[#F8FAFC]">Инструкция:</div>
+                      <div className="text-[11px] text-[#94A3B8] space-y-1">
+                        <div>1. Откройте бота <a href={`https://t.me/${linkCodeInfo.botUsername}`} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline font-mono">@{linkCodeInfo.botUsername}</a> в Telegram.</div>
+                        <div>2. Отправьте команду <span className="text-[#A78BFA] font-mono font-bold">/link {linkCodeInfo.code}</span> (или нажмите «Начать / Start» по ссылке выше).</div>
                         <div>3. Привязка подтвердится автоматически или нажмите кнопку ниже.</div>
                       </div>
                     </div>
 
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
-                      <div className="flex items-center gap-2 text-xs text-purple-300">
+                      <div className="flex items-center gap-2 text-xs text-[#A78BFA]">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         <span>Ожидаем подтверждения в Telegram-боте...</span>
                       </div>
@@ -976,7 +984,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                         type="button"
                         onClick={handleConfirmLink}
                         disabled={verifyingLink}
-                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-bold transition-all disabled:opacity-50 cursor-pointer shadow-md shadow-[#7C3AED]/25"
                       >
                         {verifyingLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                         <span>Проверить привязку</span>

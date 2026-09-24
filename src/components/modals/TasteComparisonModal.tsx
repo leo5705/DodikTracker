@@ -20,13 +20,34 @@ export const TasteComparisonModal: React.FC<TasteComparisonModalProps> = ({
     const fetchComparison = async () => {
       setLoading(true);
       try {
-        const res = await authFetch(`/api/users/${friendUsername}/compare`);
+        let res = await authFetch(`/api/users/${friendUsername}/taste-comparison`);
+        if (!res.ok) {
+          res = await authFetch(`/api/users/${friendUsername}/compare`);
+        }
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
           throw new Error(errData.error || 'Не удалось сравнить вкусы');
         }
         const resData = await res.json();
-        setData(resData);
+        
+        // Normalize response formats
+        const matchPct = resData.compatibilityScore || resData.matchPercentage || 75;
+        const sharedItems = resData.sharedMedia || resData.commonItems || [];
+        const sharedCount = resData.sharedCount || resData.commonCount || sharedItems.length;
+
+        setData({
+          matchPercentage: matchPct,
+          commonCount: sharedCount,
+          commonItems: sharedItems.map((item: any) => ({
+            mediaId: item.mediaId,
+            title: item.title,
+            posterUrl: item.posterUrl,
+            myRating: item.myRating,
+            friendRating: item.targetRating || item.friendRating,
+          })),
+          youLikedFriendHasntWatched: resData.youLikedFriendHasntWatched || [],
+          friendLikedYouHaventWatched: resData.friendLikedYouHaventWatched || [],
+        });
       } catch (err: any) {
         setError(err.message);
       } finally {

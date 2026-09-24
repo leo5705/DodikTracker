@@ -106,12 +106,12 @@ export const AdminAnnouncementsTab: React.FC = () => {
   const handleOpenEdit = (ann: AnnouncementItem) => {
     setEditingId(ann.id);
     setFormData({
-      title: ann.title,
+      title: ann.title || '',
       content: ann.content || ann.message || '',
       priority: ann.priority || 'NORMAL',
-      status: ann.status || (ann.isActive ? 'PUBLISHED' : 'DRAFT'),
+      status: ann.status || 'PUBLISHED',
       targetAudience: ann.targetAudience || 'ALL',
-      showBanner: ann.showBanner !== undefined ? ann.showBanner : true,
+      showBanner: ann.showBanner !== false,
       sendTelegram: false,
       startAt: ann.startAt ? new Date(ann.startAt).toISOString().slice(0, 16) : '',
       endAt: ann.endAt ? new Date(ann.endAt).toISOString().slice(0, 16) : '',
@@ -121,31 +121,47 @@ export const AdminAnnouncementsTab: React.FC = () => {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.title.trim() || !formData.content.trim()) {
+      alert('Заполните заголовок и текст объявления.');
+      return;
+    }
+
     setSaving(true);
     try {
-      const url = editingId
-        ? `/api/admin/announcements/${editingId}`
-        : '/api/admin/announcements';
-      const method = editingId ? 'PUT' : 'POST';
-
-      const payload = {
-        ...formData,
-        isActive: formData.status === 'PUBLISHED',
+      const payload: any = {
+        title: formData.title.trim(),
+        content: formData.content.trim(),
+        priority: formData.priority,
+        status: formData.status,
+        targetAudience: formData.targetAudience,
+        showBanner: formData.showBanner,
+        sendTelegram: formData.sendTelegram,
+        startAt: formData.startAt ? new Date(formData.startAt).toISOString() : null,
+        endAt: formData.endAt ? new Date(formData.endAt).toISOString() : null,
       };
 
-      const res = await authFetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      let res;
+      if (editingId) {
+        res = await authFetch(`/api/admin/announcements/${editingId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        res = await authFetch('/api/admin/announcements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Ошибка сохранения объявления');
+      if (!res.ok) throw new Error(data.error || 'Ошибка при сохранении объявления');
 
       setIsModalOpen(false);
-      fetchAnnouncements();
+      await fetchAnnouncements();
     } catch (err: any) {
-      alert(err.message);
+      alert(err.message || 'Ошибка сохранения');
     } finally {
       setSaving(false);
     }
@@ -157,7 +173,7 @@ export const AdminAnnouncementsTab: React.FC = () => {
       const res = await authFetch(`/api/admin/announcements/${id}/publish`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Ошибка публикации');
-      fetchAnnouncements();
+      await fetchAnnouncements();
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -171,7 +187,7 @@ export const AdminAnnouncementsTab: React.FC = () => {
       const res = await authFetch(`/api/admin/announcements/${id}/unpublish`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Ошибка снятия с публикации');
-      fetchAnnouncements();
+      await fetchAnnouncements();
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -180,12 +196,13 @@ export const AdminAnnouncementsTab: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Вы уверены, что хотите удалить это объявление?')) return;
+    if (!confirm('Вы действительно хотите безвозвратно удалить это объявление?')) return;
     setActionLoadingId(id);
     try {
       const res = await authFetch(`/api/admin/announcements/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Ошибка удаления');
-      fetchAnnouncements();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Ошибка удаления');
+      await fetchAnnouncements();
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -197,22 +214,22 @@ export const AdminAnnouncementsTab: React.FC = () => {
     switch (priority) {
       case 'CRITICAL':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
-            Критическое
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+            Критический
           </span>
         );
       case 'IMPORTANT':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-            <AlertTriangle className="w-3 h-3 text-amber-400" />
-            Важное
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+            Важно
           </span>
         );
       default:
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-            <Megaphone className="w-3 h-3 text-purple-400" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
+            <Megaphone className="w-3.5 h-3.5 text-sky-400" />
             Обычное
           </span>
         );
@@ -222,69 +239,71 @@ export const AdminAnnouncementsTab: React.FC = () => {
   const getStatusBadge = (status: string, isActive: boolean) => {
     if (status === 'PUBLISHED' && isActive) {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           Опубликовано
         </span>
       );
     }
-    if (status === 'ARCHIVED') {
+    if (status === 'ARCHIVED' || !isActive) {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-zinc-800 text-zinc-400 border border-zinc-700">
-          <Archive className="w-3 h-3 text-zinc-400" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#11152A] text-[#94A3B8] border border-[#1E2442]">
+          <Archive className="w-3.5 h-3.5 text-[#94A3B8]" />
           В архиве
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-zinc-800/80 text-zinc-400 border border-zinc-700">
-        <Clock className="w-3 h-3 text-zinc-400" />
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#11152A] text-zinc-400 border border-[#1E2442]">
+        <Clock className="w-3.5 h-3.5 text-zinc-400" />
         Черновик
       </span>
     );
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full animate-in fade-in duration-200">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-3xl bg-gradient-to-r from-[#171520] to-[#121118] border border-[#252233]">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] shadow-xl">
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Megaphone className="w-5 h-5 text-[#9B6BFF]" />
-            <h3 className="text-base font-bold text-[#F3F1F8]">Системные объявления</h3>
+          <div className="flex items-center gap-2.5">
+            <Megaphone className="w-6 h-6 text-[#8B5CF6]" />
+            <h3 className="text-lg font-bold text-[#F8FAFC]">Системные объявления</h3>
           </div>
-          <p className="text-xs text-[#9A94AA] max-w-2xl leading-relaxed">
+          <p className="text-xs sm:text-sm text-[#94A3B8] max-w-2xl leading-relaxed">
             Короткие системные сообщения от администрации (технические работы, важные обновления, предупреждения). Отделены от новостных статей.
           </p>
         </div>
 
         <button
           onClick={handleOpenCreate}
-          className="px-4 py-2.5 rounded-2xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-bold transition-all flex items-center gap-2 shrink-0 shadow-lg shadow-purple-950/40 hover:scale-[1.02] active:scale-[0.98]"
+          className="h-11 px-5 rounded-2xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-sm font-bold transition-all flex items-center gap-2 shrink-0 shadow-lg shadow-purple-950/40 cursor-pointer"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-4.5 h-4.5" />
           Создать объявление
         </button>
       </div>
 
       {/* List */}
       {loading ? (
-        <div className="flex flex-col items-center justify-center py-24 space-y-3 bg-[#14131A] rounded-3xl border border-[#252233]">
-          <RotateCw className="w-7 h-7 text-[#9B6BFF] animate-spin" />
-          <span className="text-xs text-[#9A94AA]">Загрузка объявлений из базы данных...</span>
+        <div className="flex flex-col items-center justify-center py-24 space-y-3 bg-[#0B0D20] rounded-3xl border border-[#1E2442]">
+          <RotateCw className="w-8 h-8 text-[#8B5CF6] animate-spin" />
+          <span className="text-sm text-[#94A3B8]">Загрузка объявлений из базы данных...</span>
         </div>
       ) : error ? (
-        <div className="p-8 text-center text-red-400 text-xs bg-red-500/10 rounded-2xl border border-red-500/20">{error}</div>
+        <div className="p-8 text-center text-red-400 text-sm bg-red-500/10 rounded-2xl border border-red-500/20">
+          {error}
+        </div>
       ) : items.length === 0 ? (
-        <div className="p-16 text-center rounded-3xl bg-[#14131A] border border-[#252233] text-zinc-500 text-xs space-y-3">
+        <div className="p-16 text-center rounded-3xl bg-[#0B0D20] border border-[#1E2442] text-zinc-500 text-sm space-y-3">
           <Radio className="w-12 h-12 mx-auto text-zinc-600" />
-          <p className="font-bold text-sm text-zinc-300">Нет объявлений в базе данных</p>
-          <p className="text-xs text-zinc-500 max-w-md mx-auto">
+          <p className="font-bold text-base text-zinc-300">Нет объявлений в базе данных</p>
+          <p className="text-xs sm:text-sm text-zinc-500 max-w-md mx-auto">
             Создайте первое объявление, чтобы уведомить пользователей о технических работах, важных изменениях или нововведениях.
           </p>
           <button
             onClick={handleOpenCreate}
-            className="px-4 py-2 rounded-xl bg-[#252233] text-white text-xs font-semibold hover:bg-[#322E45] transition-colors"
+            className="h-11 px-5 rounded-xl bg-[#1E2442] text-white text-sm font-bold hover:bg-[#322E45] transition-colors cursor-pointer"
           >
             Создать объявление
           </button>
@@ -296,14 +315,14 @@ export const AdminAnnouncementsTab: React.FC = () => {
             return (
               <div
                 key={ann.id}
-                className={`p-5 rounded-3xl bg-[#14131A] border transition-all duration-200 space-y-4 ${
+                className={`p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border transition-all duration-200 space-y-4 shadow-lg ${
                   ann.priority === 'CRITICAL' && isCurrentlyPublished
-                    ? 'border-rose-500/40 bg-gradient-to-br from-rose-950/10 via-[#14131A] to-[#14131A]'
+                    ? 'border-rose-500/40 bg-gradient-to-br from-rose-950/10 via-[#0B0D20] to-[#0B0D20]'
                     : ann.priority === 'IMPORTANT' && isCurrentlyPublished
-                    ? 'border-amber-500/40 bg-gradient-to-br from-amber-950/10 via-[#14131A] to-[#14131A]'
+                    ? 'border-amber-500/40 bg-gradient-to-br from-amber-950/10 via-[#0B0D20] to-[#0B0D20]'
                     : isCurrentlyPublished
-                    ? 'border-[#9B6BFF]/30'
-                    : 'border-[#252233] opacity-85'
+                    ? 'border-[#8B5CF6]/30'
+                    : 'border-[#1E2442] opacity-85'
                 }`}
               >
                 {/* Header row */}
@@ -311,8 +330,8 @@ export const AdminAnnouncementsTab: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2.5 min-w-0">
                     {getPriorityBadge(ann.priority)}
                     {getStatusBadge(ann.status, ann.isActive)}
-                    <h4 className="font-bold text-sm sm:text-base text-[#F3F1F8]">{ann.title}</h4>
-                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-zinc-800/80 text-zinc-400 font-mono">
+                    <h4 className="font-bold text-base text-[#F8FAFC]">{ann.title}</h4>
+                    <span className="text-xs px-2.5 py-0.5 rounded-md bg-[#11152A] text-zinc-400 font-mono border border-[#1E2442]">
                       Аудитория: {ann.targetAudience === 'ALL' ? 'Все' : ann.targetAudience === 'USERS' ? 'Пользователи' : 'Администраторы'}
                     </span>
                   </div>
@@ -323,13 +342,13 @@ export const AdminAnnouncementsTab: React.FC = () => {
                       <button
                         onClick={() => handleUnpublish(ann.id)}
                         disabled={actionLoadingId === ann.id}
-                        className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors flex items-center gap-1.5"
+                        className="h-10 px-4 rounded-xl text-xs sm:text-sm font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-colors flex items-center gap-1.5 cursor-pointer"
                         title="Снять с публикации"
                       >
                         {actionLoadingId === ann.id ? (
-                          <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                          <RotateCw className="w-4 h-4 animate-spin" />
                         ) : (
-                          <XCircle className="w-3.5 h-3.5" />
+                          <XCircle className="w-4 h-4" />
                         )}
                         <span>Снять с публикации</span>
                       </button>
@@ -337,13 +356,13 @@ export const AdminAnnouncementsTab: React.FC = () => {
                       <button
                         onClick={() => handlePublish(ann.id)}
                         disabled={actionLoadingId === ann.id}
-                        className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 transition-colors flex items-center gap-1.5"
+                        className="h-10 px-4 rounded-xl text-xs sm:text-sm font-bold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 transition-colors flex items-center gap-1.5 cursor-pointer"
                         title="Опубликовать"
                       >
                         {actionLoadingId === ann.id ? (
-                          <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                          <RotateCw className="w-4 h-4 animate-spin" />
                         ) : (
-                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <CheckCircle2 className="w-4 h-4" />
                         )}
                         <span>Опубликовать</span>
                       </button>
@@ -351,39 +370,40 @@ export const AdminAnnouncementsTab: React.FC = () => {
 
                     <button
                       onClick={() => handleOpenEdit(ann)}
-                      className="p-2 rounded-xl bg-[#0F0E12] hover:bg-[#252233] text-[#9A94AA] hover:text-[#F3F1F8] border border-[#252233] transition-colors"
+                      className="p-2.5 rounded-xl bg-[#11152A] hover:bg-[#1E2442] text-[#94A3B8] hover:text-[#F8FAFC] border border-[#1E2442] transition-colors cursor-pointer"
                       title="Изменить"
                     >
-                      <Edit2 className="w-3.5 h-3.5" />
+                      <Edit2 className="w-4 h-4" />
                     </button>
 
+                    {/* Delete (DANGER ACTION) */}
                     <button
                       onClick={() => handleDelete(ann.id)}
                       disabled={actionLoadingId === ann.id}
-                      className="p-2 rounded-xl bg-[#0F0E12] hover:bg-rose-950/40 text-[#9A94AA] hover:text-rose-400 border border-[#252233] transition-colors"
-                      title="Удалить"
+                      className="p-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/35 transition-colors cursor-pointer"
+                      title="Удалить объявление"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
 
                 {/* Content body */}
-                <div className="text-xs text-[#C5C0D3] bg-[#0F0E12]/80 p-3.5 rounded-2xl border border-[#252233]/70 leading-relaxed whitespace-pre-wrap">
+                <div className="text-sm text-[#C5C0D3] bg-[#11152A] p-4 rounded-2xl border border-[#1E2442]/70 leading-relaxed whitespace-pre-wrap font-sans">
                   {ann.content || ann.message}
                 </div>
 
                 {/* Metadata footer */}
-                <div className="flex flex-wrap items-center justify-between text-[11px] text-[#7E7890] pt-1 gap-2 border-t border-[#252233]/50">
+                <div className="flex flex-wrap items-center justify-between text-xs sm:text-sm text-[#7E7890] pt-1.5 gap-2 border-t border-[#1E2442]/50">
                   <div className="flex flex-wrap items-center gap-3">
-                    <span className="flex items-center gap-1 text-[#9A94AA]">
-                      <User className="w-3 h-3 text-[#9B6BFF]" />
-                      Автор: <strong className="text-[#F3F1F8]">@{ann.author?.username || 'admin'}</strong>
+                    <span className="flex items-center gap-1 text-[#94A3B8]">
+                      <User className="w-3.5 h-3.5 text-[#8B5CF6]" />
+                      Автор: <strong className="text-[#F8FAFC]">@{ann.author?.username || 'admin'}</strong>
                     </span>
                     <span>•</span>
                     <span>Баннер в шапке: <strong className="text-[#D8D4E2]">{ann.showBanner ? 'Да' : 'Нет'}</strong></span>
                     <span>•</span>
-                    <span>Прочитано: <strong className="text-[#9B6BFF]">{ann.readCount || 0}</strong> польз.</span>
+                    <span>Прочитано: <strong className="text-[#8B5CF6]">{ann.readCount || 0}</strong> польз.</span>
                   </div>
 
                   <div className="flex items-center gap-3">
@@ -406,17 +426,17 @@ export const AdminAnnouncementsTab: React.FC = () => {
       {/* Create / Edit Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-xl bg-[#14131A] border border-[#252233] rounded-3xl p-6 sm:p-7 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-[#252233]">
-              <div className="flex items-center gap-2">
-                <Megaphone className="w-5 h-5 text-[#9B6BFF]" />
-                <h3 className="text-base font-bold text-[#F3F1F8]">
+          <div className="w-full max-w-2xl bg-[#0B0D20] border border-[#1E2442] rounded-3xl p-6 sm:p-7 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between pb-3.5 border-b border-[#1E2442]">
+              <div className="flex items-center gap-2.5">
+                <Megaphone className="w-6 h-6 text-[#8B5CF6]" />
+                <h3 className="text-lg font-bold text-[#F8FAFC]">
                   {editingId ? 'Редактировать объявление' : 'Создать объявление'}
                 </h3>
               </div>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="p-1.5 rounded-xl hover:bg-[#252233] text-[#9A94AA] hover:text-[#F3F1F8] transition-colors"
+                className="p-2 rounded-xl hover:bg-[#1E2442] text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -424,7 +444,7 @@ export const AdminAnnouncementsTab: React.FC = () => {
 
             <form onSubmit={handleSave} className="space-y-4">
               <div>
-                <label className="text-xs font-semibold text-[#9A94AA] block mb-1.5">
+                <label className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1.5">
                   Заголовок объявления <span className="text-rose-400">*</span>
                 </label>
                 <input
@@ -433,12 +453,12 @@ export const AdminAnnouncementsTab: React.FC = () => {
                   value={formData.title}
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   placeholder="Например: Плановые технические работы в 03:00"
-                  className="w-full px-3.5 py-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] placeholder-[#5A5568] outline-none focus:border-[#9B6BFF] transition-colors"
+                  className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] placeholder-[#5A5568] outline-none focus:border-[#8B5CF6] transition-colors"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-[#9A94AA] block mb-1.5">
+                <label className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1.5">
                   Текст сообщения (content) <span className="text-rose-400">*</span>
                 </label>
                 <textarea
@@ -447,19 +467,19 @@ export const AdminAnnouncementsTab: React.FC = () => {
                   value={formData.content}
                   onChange={(e) => setFormData({ ...formData, content: e.target.value })}
                   placeholder="Опишите суть системного сообщения, сроки и рекомендации для пользователей..."
-                  className="w-full px-3.5 py-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] placeholder-[#5A5568] outline-none focus:border-[#9B6BFF] transition-colors leading-relaxed"
+                  className="w-full p-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] placeholder-[#5A5568] outline-none focus:border-[#8B5CF6] transition-colors leading-relaxed"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-semibold text-[#9A94AA] block mb-1.5">
+                  <label className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1.5">
                     Приоритет (Priority)
                   </label>
                   <select
                     value={formData.priority}
                     onChange={(e) => setFormData({ ...formData, priority: e.target.value as any })}
-                    className="w-full px-3 py-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none focus:border-[#9B6BFF]"
+                    className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none focus:border-[#8B5CF6]"
                   >
                     <option value="NORMAL">Обычное (NORMAL / Информационное)</option>
                     <option value="IMPORTANT">Важное (IMPORTANT / Предупреждение)</option>
@@ -468,13 +488,13 @@ export const AdminAnnouncementsTab: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold text-[#9A94AA] block mb-1.5">
+                  <label className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1.5">
                     Статус публикации (Status)
                   </label>
                   <select
                     value={formData.status}
                     onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                    className="w-full px-3 py-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none focus:border-[#9B6BFF]"
+                    className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none focus:border-[#8B5CF6]"
                   >
                     <option value="PUBLISHED">Опубликовано (Активно для пользователей)</option>
                     <option value="DRAFT">Черновик (Не видно пользователям)</option>
@@ -485,11 +505,11 @@ export const AdminAnnouncementsTab: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-semibold text-[#9A94AA] block mb-1.5">Целевая аудитория</label>
+                  <label className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1.5">Целевая аудитория</label>
                   <select
                     value={formData.targetAudience}
                     onChange={(e) => setFormData({ ...formData, targetAudience: e.target.value as any })}
-                    className="w-full px-3 py-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none focus:border-[#9B6BFF]"
+                    className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none focus:border-[#8B5CF6]"
                   >
                     <option value="ALL">Все посетители сайта</option>
                     <option value="USERS">Только авторизованные пользователи</option>
@@ -498,64 +518,64 @@ export const AdminAnnouncementsTab: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold text-[#9A94AA] block mb-1.5">Период действия (опционально)</label>
+                  <label className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1.5">Период действия (опционально)</label>
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       type="datetime-local"
                       value={formData.startAt}
                       onChange={(e) => setFormData({ ...formData, startAt: e.target.value })}
                       placeholder="С"
-                      className="w-full px-2 py-2 bg-[#0F0E12] border border-[#252233] rounded-xl text-[11px] text-[#F3F1F8] outline-none"
+                      className="w-full h-11 px-2.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-xs text-[#F8FAFC] outline-none"
                     />
                     <input
                       type="datetime-local"
                       value={formData.endAt}
                       onChange={(e) => setFormData({ ...formData, endAt: e.target.value })}
                       placeholder="По"
-                      className="w-full px-2 py-2 bg-[#0F0E12] border border-[#252233] rounded-xl text-[11px] text-[#F3F1F8] outline-none"
+                      className="w-full h-11 px-2.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-xs text-[#F8FAFC] outline-none"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="space-y-2.5 pt-3 border-t border-[#252233]">
-                <label className="flex items-center gap-2.5 cursor-pointer text-xs text-[#F3F1F8]">
+              <div className="space-y-2.5 pt-3 border-t border-[#1E2442]">
+                <label className="flex items-center gap-2.5 cursor-pointer text-sm text-[#F8FAFC]">
                   <input
                     type="checkbox"
                     checked={formData.showBanner}
                     onChange={(e) => setFormData({ ...formData, showBanner: e.target.checked })}
-                    className="rounded border-[#252233] text-[#9B6BFF] focus:ring-[#9B6BFF]"
+                    className="w-4 h-4 rounded border-[#1E2442] text-[#8B5CF6] focus:ring-[#8B5CF6]"
                   />
                   <span>Показывать плавающий баннер в верхней части сайта</span>
                 </label>
 
                 {!editingId && (
-                  <label className="flex items-center gap-2.5 cursor-pointer text-xs text-sky-300 font-medium">
+                  <label className="flex items-center gap-2.5 cursor-pointer text-sm text-sky-300 font-medium">
                     <input
                       type="checkbox"
                       checked={formData.sendTelegram}
                       onChange={(e) => setFormData({ ...formData, sendTelegram: e.target.checked })}
-                      className="rounded border-[#252233] text-sky-500 focus:ring-sky-500"
+                      className="w-4 h-4 rounded border-[#1E2442] text-sky-500 focus:ring-sky-500"
                     />
                     <span>Отправить уведомление в Telegram (канал / бот) при публикации</span>
                   </label>
                 )}
               </div>
 
-              <div className="flex justify-end gap-2.5 pt-4 border-t border-[#252233]">
+              <div className="flex justify-end gap-2.5 pt-4 border-t border-[#1E2442]">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl bg-[#252233] hover:bg-[#322E45] text-xs font-semibold text-[#F3F1F8] transition-colors"
+                  className="h-11 px-5 rounded-xl bg-[#11152A] hover:bg-[#1E2442] text-sm font-semibold text-[#F8FAFC] border border-[#1E2442] transition-colors cursor-pointer"
                 >
                   Отмена
                 </button>
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-5 py-2.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-xs font-bold text-white flex items-center gap-2 shadow-lg shadow-purple-950/40 transition-all"
+                  className="h-11 px-6 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-sm font-bold text-white flex items-center gap-2 shadow-lg shadow-purple-950/40 transition-all cursor-pointer"
                 >
-                  {saving && <RotateCw className="w-3.5 h-3.5 animate-spin" />}
+                  {saving && <RotateCw className="w-4 h-4 animate-spin" />}
                   {editingId ? 'Сохранить изменения' : formData.status === 'PUBLISHED' ? 'Создать и опубликовать' : 'Сохранить как черновик'}
                 </button>
               </div>
@@ -566,4 +586,3 @@ export const AdminAnnouncementsTab: React.FC = () => {
     </div>
   );
 };
-

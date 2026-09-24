@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Search,
@@ -7,16 +7,16 @@ import {
   Loader2,
   Film,
   Gamepad2,
-  Tv,
   BookOpen,
   Sparkles,
   Layers,
   AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { PrimaryButton, SecondaryButton } from '../design-system/index.ts';
 
 interface AddMediaModalProps {
-  category: string; // 'MOVIES_TV' | 'GAME' | 'ANIME' | 'MANGA' | 'BOOK' | 'COMIC' | 'ALL'
+  category: string;
   existingMediaIds: number[];
   onClose: () => void;
   onAddMedia: (media: {
@@ -62,7 +62,6 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   const categoryLabel = CATEGORY_NAMES[category.toUpperCase()] || category;
 
-  // Cleanup abort controller on unmount
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) {
@@ -71,13 +70,11 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
     };
   }, []);
 
-  // Debounced search with AbortController
   useEffect(() => {
     if (activeTab !== 'search') return;
 
     const trimmed = searchQuery.trim();
 
-    // Abort previous in-flight request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -98,83 +95,42 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
       setErrorMessage(null);
 
       try {
-        const queryParams = new URLSearchParams({
-          q: trimmed,
-          category: category,
-          limit: '25',
-        });
-
-        const res = await authFetch(`/api/search?${queryParams.toString()}`, {
-          signal: controller.signal,
-        });
-
-        if (controller.signal.aborted) return;
-
+        const res = await authFetch(
+          `/api/search?q=${encodeURIComponent(trimmed)}&type=${encodeURIComponent(category)}`,
+          { signal: controller.signal }
+        );
         if (res.ok) {
           const data = await res.json();
-          if (!controller.signal.aborted) {
-            const list = Array.isArray(data) ? data : data.results || [];
-            setSearchResults(Array.isArray(list) ? list : []);
-          }
+          setSearchResults(data.results || data || []);
         } else {
-          if (!controller.signal.aborted) {
-            setSearchResults([]);
-          }
+          setErrorMessage('Ошибка при поиске');
         }
       } catch (err: any) {
-        if (err.name === 'AbortError' || controller.signal.aborted) {
-          // Expected on abort; do not show error
-          return;
+        if (err.name !== 'AbortError') {
+          setErrorMessage('Не удалось выполнить поиск');
         }
-        console.error('Search error in AddMediaModal:', err);
-        setErrorMessage('Ошибка при выполнении поиска');
-        setSearchResults([]);
       } finally {
-        if (!controller.signal.aborted) {
-          setSearching(false);
-        }
+        setSearching(false);
       }
-    }, 300);
+    }, 350);
 
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [searchQuery, category, activeTab, authFetch]);
+    return () => clearTimeout(timer);
+  }, [searchQuery, category, activeTab]);
 
-  // Load User Library for this category
   useEffect(() => {
     if (activeTab !== 'library') return;
 
     const loadLibrary = async () => {
       setLoadingLibrary(true);
-      setErrorMessage(null);
       try {
-        const res = await authFetch('/api/library');
+        const res = await authFetch(`/api/library?category=${encodeURIComponent(category)}`);
         if (res.ok) {
           const data = await res.json();
-          const list = Array.isArray(data) ? data : [];
-
-          // Filter library items by category
-          const filtered = list.filter((item: any) => {
-            const itemType = (item.type || '').toUpperCase();
-            const cat = category.toUpperCase();
-            if (cat === 'MOVIES_TV' || cat === 'MOVIE_TV' || cat === 'FILMS_SERIES') {
-              return itemType === 'MOVIE' || itemType === 'TV';
-            }
-            if (cat === 'GAME' || cat === 'GAMES') return itemType === 'GAME';
-            if (cat === 'ANIME') return itemType === 'ANIME';
-            if (cat === 'MANGA') return itemType === 'MANGA';
-            if (cat === 'BOOK' || cat === 'BOOKS') return itemType === 'BOOK';
-            if (cat === 'COMIC' || cat === 'COMICS') return itemType === 'COMIC';
-            return itemType === cat;
-          });
-
-          setLibraryItems(filtered);
+          const items = Array.isArray(data) ? data : data.items || [];
+          setLibraryItems(items);
         }
-      } catch (err: any) {
-        console.error('Failed to load library:', err);
-        setErrorMessage('Не удалось загрузить библиотеку');
+      } catch (err) {
+        console.error('Failed to load library items:', err);
       } finally {
         setLoadingLibrary(false);
       }
@@ -183,67 +139,27 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
     loadLibrary();
   }, [activeTab, category]);
 
-  // Handle adding an item to the tier list
-  const handleSelectMedia = async (item: any) => {
-    setErrorMessage(null);
-    const key = item.mediaId || item.id || item.externalId;
-    setAddingId(key);
+  const handleSelectMedia = async (mediaItem: any) => {
+    const targetId = mediaItem.mediaId || mediaItem.id;
+    setAddingId(targetId);
 
     try {
-      let resolvedId = item.mediaId || (typeof item.id === 'number' ? item.id : null);
-
-      // If item is from external provider, ensure it in DB
-      if (!resolvedId || resolvedId < 0 || item.provider !== 'DODIK_DB') {
-        const ensureRes = await authFetch('/api/media/ensure', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            mediaId: resolvedId || undefined,
-            mediaPayload: {
-              title: item.title,
-              originalTitle: item.originalTitle,
-              type: item.type,
-              posterUrl: item.posterUrl,
-              backdropUrl: item.backdropUrl,
-              year: item.year,
-              rating: item.rating,
-              provider: item.provider,
-              externalId: item.externalId,
-              description: item.description,
-            },
-          }),
-        });
-
-        if (ensureRes.ok) {
-          const data = await ensureRes.json();
-          if (data.media?.id) {
-            resolvedId = data.media.id;
-          }
-        }
-      }
-
-      if (!resolvedId) {
-        throw new Error('Не удалось подготовить запись медиа');
-      }
-
       onAddMedia({
-        id: resolvedId,
-        title: item.title,
-        type: item.type,
-        posterUrl: item.posterUrl,
-        year: item.year,
+        id: targetId,
+        title: mediaItem.title,
+        type: mediaItem.type,
+        posterUrl: mediaItem.posterUrl,
+        year: mediaItem.year,
       });
-
-      setAddedIds((prev) => new Set([...prev, resolvedId]));
-    } catch (err: any) {
-      console.error('Error selecting media:', err);
-      setErrorMessage(err.message || 'Ошибка при добавлении медиа');
+      setAddedIds((prev) => new Set([...prev, targetId]));
+    } catch (err) {
+      console.error('Add media error:', err);
     } finally {
       setAddingId(null);
     }
   };
 
-  const getMediaIcon = (type: string) => {
+  const getMediaIcon = (type?: string) => {
     switch (type?.toUpperCase()) {
       case 'MOVIE':
       case 'TV':
@@ -260,48 +176,48 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
-      <div className="w-full max-w-2xl rounded-3xl bg-[#14131A] border border-[#252233] p-6 shadow-2xl space-y-5 max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+      <div className="w-full max-w-2xl rounded-3xl bg-[#0B0D20] border border-[#1E2442] p-6 shadow-2xl space-y-5 max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-start justify-between gap-4 pb-3 border-b border-[#252233]">
+        <div className="flex items-start justify-between gap-4 pb-3 border-b border-[#1E2442]">
           <div>
             <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-fuchsia-950/80 border border-fuchsia-800/50 text-[11px] font-semibold text-fuchsia-300 font-mono">
-                <Layers className="w-3 h-3" />
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#151932] border border-[#1E2442] text-[11px] font-semibold text-[#A78BFA] font-mono">
+                <Layers className="w-3 h-3 text-[#8B5CF6]" />
                 {categoryLabel}
               </span>
-              <span className="text-[11px] text-[#9A94AA]">Категория заблокирована</span>
+              <span className="text-[11px] text-[#64748B]">Категория тир-листа</span>
             </div>
-            <h2 className="text-xl font-bold text-[#F3F1F8] font-mono mt-1">
+            <h2 className="text-xl font-bold text-[#F8FAFC] tracking-tight mt-1">
               Добавить медиа в тир-лист
             </h2>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#1E1C29] transition-colors"
+            className="p-1.5 rounded-xl text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex items-center gap-2 border-b border-[#252233] pb-3">
+        <div className="flex items-center gap-2 border-b border-[#1E2442] pb-3">
           <button
             onClick={() => setActiveTab('search')}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold font-mono transition-all ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               activeTab === 'search'
-                ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-950/40'
-                : 'bg-[#191724] text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#1F1C2E]'
+                ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md shadow-[#7C3AED]/25'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] border border-[#1E2442]'
             }`}
           >
             🔍 Поиск по базе
           </button>
           <button
             onClick={() => setActiveTab('library')}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold font-mono transition-all ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               activeTab === 'library'
-                ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-950/40'
-                : 'bg-[#191724] text-[#9A94AA] hover:text-[#F3F1F8] hover:bg-[#1F1C2E]'
+                ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md shadow-[#7C3AED]/25'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] border border-[#1E2442]'
             }`}
           >
             📚 Из моей библиотеки ({categoryLabel})
@@ -311,14 +227,14 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
         {/* Search Bar (if search tab) */}
         {activeTab === 'search' && (
           <div className="relative">
-            <Search className="w-4 h-4 text-[#9A94AA] absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-[#64748B] absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={`Поиск в категории "${categoryLabel}"...`}
               autoFocus
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#191724] border border-[#252233] text-sm text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-fuchsia-500 transition-colors"
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
             />
           </div>
         )}
@@ -332,23 +248,23 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
         )}
 
         {/* Content Container */}
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar min-h-[260px]">
+        <div className="flex-1 overflow-y-auto space-y-2 pr-1 no-scrollbar min-h-[260px]">
           {activeTab === 'search' ? (
             searching ? (
-              <div className="py-16 flex flex-col items-center justify-center space-y-2 text-[#9A94AA]">
-                <Loader2 className="w-7 h-7 text-fuchsia-400 animate-spin" />
+              <div className="py-16 flex flex-col items-center justify-center space-y-2 text-[#94A3B8]">
+                <Loader2 className="w-7 h-7 text-[#8B5CF6] animate-spin" />
                 <span className="text-xs font-mono">Поиск в категории {categoryLabel}...</span>
               </div>
             ) : searchQuery.trim() && searchResults.length === 0 ? (
-              <div className="py-16 text-center space-y-2 text-[#9A94AA]">
+              <div className="py-16 text-center space-y-2 text-[#94A3B8]">
                 <p className="text-xs font-mono">Ничего не найдено в категории «{categoryLabel}»</p>
-                <p className="text-[11px] text-[#6B667B]">
+                <p className="text-[11px] text-[#64748B]">
                   Убедитесь, что название написано правильно
                 </p>
               </div>
             ) : !searchQuery.trim() ? (
-              <div className="py-16 text-center space-y-2 text-[#6B667B]">
-                <Search className="w-8 h-8 mx-auto text-[#2E2A40]" />
+              <div className="py-16 text-center space-y-2 text-[#64748B]">
+                <Search className="w-8 h-8 mx-auto text-[#1E2442]" />
                 <p className="text-xs font-mono">
                   Введите название для поиска в категории «{categoryLabel}»
                 </p>
@@ -365,9 +281,9 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
                   return (
                     <div
                       key={itemKey}
-                      className="flex items-center gap-3 p-2.5 rounded-2xl bg-[#191724] border border-[#252233] hover:border-[#38334D] transition-colors group"
+                      className="flex items-center gap-3 p-2.5 rounded-2xl bg-[#11152A] border border-[#1E2442] hover:border-[#8B5CF6]/40 transition-colors group"
                     >
-                      <div className="w-12 h-16 rounded-lg overflow-hidden bg-[#201D2C] shrink-0 border border-[#2E2A40]">
+                      <div className="w-12 h-16 rounded-xl overflow-hidden bg-[#151932] shrink-0 border border-[#1E2442]">
                         {item.posterUrl ? (
                           <img
                             src={item.posterUrl}
@@ -376,20 +292,20 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
                             className="w-full h-full object-cover"
                           />
                         ) : (
-                          <div className="w-full h-full flex items-center justify-center text-[#6B667B]">
+                          <div className="w-full h-full flex items-center justify-center text-[#64748B]">
                             {getMediaIcon(item.type)}
                           </div>
                         )}
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <h4 className="text-xs font-bold text-[#F3F1F8] truncate group-hover:text-fuchsia-300 transition-colors">
+                        <h4 className="text-xs font-bold text-[#F8FAFC] truncate group-hover:text-[#A78BFA] transition-colors">
                           {item.title}
                         </h4>
-                        <div className="flex items-center gap-2 text-[11px] text-[#9A94AA] mt-0.5">
+                        <div className="flex items-center gap-2 text-[11px] text-[#94A3B8] mt-0.5">
                           <span>{item.year || '—'}</span>
                           <span>•</span>
-                          <span className="uppercase text-[10px] text-fuchsia-400 font-mono">
+                          <span className="uppercase text-[10px] text-[#A78BFA] font-mono">
                             {item.type}
                           </span>
                         </div>
@@ -398,10 +314,10 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
                       <button
                         onClick={() => handleSelectMedia(item)}
                         disabled={isAlreadyAdded || isCurrentlyAdding}
-                        className={`p-2 rounded-xl text-xs font-semibold transition-all shrink-0 ${
+                        className={`p-2 rounded-xl text-xs font-semibold transition-all shrink-0 cursor-pointer ${
                           isAlreadyAdded
                             ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40 cursor-default'
-                            : 'bg-fuchsia-600 hover:bg-fuchsia-500 text-white shadow-md'
+                            : 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white shadow-md'
                         } disabled:opacity-60`}
                       >
                         {isCurrentlyAdding ? (
@@ -418,14 +334,14 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
               </div>
             )
           ) : loadingLibrary ? (
-            <div className="py-16 flex flex-col items-center justify-center space-y-2 text-[#9A94AA]">
-              <Loader2 className="w-7 h-7 text-fuchsia-400 animate-spin" />
+            <div className="py-16 flex flex-col items-center justify-center space-y-2 text-[#94A3B8]">
+              <Loader2 className="w-7 h-7 text-[#8B5CF6] animate-spin" />
               <span className="text-xs font-mono">Загрузка библиотеки...</span>
             </div>
           ) : libraryItems.length === 0 ? (
-            <div className="py-16 text-center space-y-2 text-[#9A94AA]">
+            <div className="py-16 text-center space-y-2 text-[#94A3B8]">
               <p className="text-xs font-mono">В вашей библиотеке нет тайтлов категории «{categoryLabel}»</p>
-              <p className="text-[11px] text-[#6B667B]">
+              <p className="text-[11px] text-[#64748B]">
                 Воспользуйтесь вкладкой «Поиск по базе», чтобы найти нужный тайтл
               </p>
             </div>
@@ -438,9 +354,9 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
                 return (
                   <div
                     key={item.mediaId}
-                    className="flex items-center gap-3 p-2.5 rounded-2xl bg-[#191724] border border-[#252233] hover:border-[#38334D] transition-colors group"
+                    className="flex items-center gap-3 p-2.5 rounded-2xl bg-[#11152A] border border-[#1E2442] hover:border-[#8B5CF6]/40 transition-colors group"
                   >
-                    <div className="w-12 h-16 rounded-lg overflow-hidden bg-[#201D2C] shrink-0 border border-[#2E2A40]">
+                    <div className="w-12 h-16 rounded-xl overflow-hidden bg-[#151932] shrink-0 border border-[#1E2442]">
                       {item.posterUrl ? (
                         <img
                           src={item.posterUrl}
@@ -449,20 +365,20 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-[#6B667B]">
+                        <div className="w-full h-full flex items-center justify-center text-[#64748B]">
                           {getMediaIcon(item.type)}
                         </div>
                       )}
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-xs font-bold text-[#F3F1F8] truncate group-hover:text-fuchsia-300 transition-colors">
+                      <h4 className="text-xs font-bold text-[#F8FAFC] truncate group-hover:text-[#A78BFA] transition-colors">
                         {item.title}
                       </h4>
-                      <div className="flex items-center gap-2 text-[11px] text-[#9A94AA] mt-0.5">
+                      <div className="flex items-center gap-2 text-[11px] text-[#94A3B8] mt-0.5">
                         <span>{item.year || '—'}</span>
                         <span>•</span>
-                        <span className="uppercase text-[10px] text-fuchsia-400 font-mono">
+                        <span className="uppercase text-[10px] text-[#A78BFA] font-mono">
                           {item.type}
                         </span>
                       </div>
@@ -471,10 +387,10 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
                     <button
                       onClick={() => handleSelectMedia(item)}
                       disabled={isAlreadyAdded || isCurrentlyAdding}
-                      className={`p-2 rounded-xl text-xs font-semibold transition-all shrink-0 ${
+                      className={`p-2 rounded-xl text-xs font-semibold transition-all shrink-0 cursor-pointer ${
                         isAlreadyAdded
                           ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40 cursor-default'
-                          : 'bg-fuchsia-600 hover:bg-fuchsia-500 text-white shadow-md'
+                          : 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white shadow-md'
                       } disabled:opacity-60`}
                     >
                       {isCurrentlyAdding ? (
@@ -493,16 +409,13 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between pt-3 border-t border-[#252233]">
-          <span className="text-xs text-[#9A94AA] font-mono">
+        <div className="flex items-center justify-between pt-3 border-t border-[#1E2442]">
+          <span className="text-xs text-[#94A3B8] font-mono">
             Добавлено в тир-лист: {addedIds.size}
           </span>
-          <button
-            onClick={onClose}
-            className="px-5 py-2 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-semibold font-mono shadow-md transition-all"
-          >
+          <PrimaryButton onClick={onClose}>
             Готово
-          </button>
+          </PrimaryButton>
         </div>
       </div>
     </div>

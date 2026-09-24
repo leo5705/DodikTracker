@@ -15,8 +15,10 @@ import { GameDevelopmentTeam } from '../game/GameDevelopmentTeam.tsx';
 import { GameRelatedGames } from '../game/GameRelatedGames.tsx';
 import { GameAdminDiagnosticModal } from '../game/GameAdminDiagnosticModal.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { useRouter } from '../../context/RouterContext.tsx';
 import { useShare } from '../../context/ShareContext.tsx';
 import { AdultContentWarning } from '../common/AdultContentWarning.tsx';
+import { ContentRatingModal } from '../content/ContentRatingModal.tsx';
 
 interface GameDetailViewProps {
   idOrSlug: string;
@@ -24,6 +26,7 @@ interface GameDetailViewProps {
 
 export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
   const { dbUser } = useAuth();
+  const { navigate } = useRouter();
   const { openCompletionModal, openShareModal } = useShare();
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
@@ -133,9 +136,8 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
     }
   };
 
-  const handleSaveScore = async () => {
-    if (!dbUser) return;
-    if (!game) return;
+  const handleSaveScore = async (scoreToSave: number | null) => {
+    if (!dbUser || !game) return;
 
     try {
       const res = await fetch('/api/library', {
@@ -163,7 +165,7 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
             externalId: String(game.externalIds.rawg || game.externalIds.igdb || game.externalIds.gmdb || game.slug || game.id),
           },
           status: userTracking?.status || 'PLANNING',
-          score: selectedScore,
+          score: scoreToSave,
         }),
       });
 
@@ -171,7 +173,7 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
       const data = await res.json();
       setUserTracking(data);
       setShowScoreModal(false);
-      showToast(`Оценка сохранена: ${selectedScore}/10`, 'success');
+      showToast(scoreToSave !== null ? `Оценка сохранена: ${scoreToSave}/100` : 'Оценка удалена', 'success');
     } catch (err: any) {
       showToast(err.message || 'Ошибка сохранения оценки', 'error');
     }
@@ -186,24 +188,26 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
     );
   }
 
-  // 18+ Adult Restricted Check
-  const isGameAdult = Boolean(game?.isAdult || game?.ageRating === '18+' || game?.ageRating === '18');
-  if (isAdultRestricted || (isGameAdult && !dbUser?.showAdultContent)) {
+  // 18+ Adult Restricted / Confirmation Check
+  const isGameAdult = Boolean(game?.isAdult || game?.ageRating === '18+' || game?.ageRating === '18' || game?.ageRating === 'AO' || game?.ageRating === 'NC-17');
+  if ((isAdultRestricted || isGameAdult) && !adultConfirmed && !dbUser?.showAdultContent) {
     return (
       <AdultContentWarning
-        mode="restricted"
         title={game?.title}
-      />
-    );
-  }
-
-  // 18+ Adult Confirmation Check
-  if (isGameAdult && dbUser?.showAdultContent && !adultConfirmed) {
-    return (
-      <AdultContentWarning
-        mode="confirm"
-        title={game?.title}
-        onConfirm={() => setAdultConfirmed(true)}
+        ageRating={game?.ageRating || '18+'}
+        contentWarnings={(game as any)?.contentWarnings || []}
+        onConfirm={async () => {
+          setAdultConfirmed(true);
+          setIsAdultRestricted(false);
+          await fetchGameDetails();
+        }}
+        onBack={() => {
+          if (window.history.length > 1) {
+            window.history.back();
+          } else {
+            navigate('/search');
+          }
+        }}
       />
     );
   }
@@ -307,52 +311,24 @@ export const GameDetailView: React.FC<GameDetailViewProps> = ({ idOrSlug }) => {
 
       {/* Rating Modal */}
       {showScoreModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
-            <h3 className="text-base font-bold text-zinc-100 text-center">Оценить {game.title}</h3>
-            <div className="flex items-center justify-center gap-1.5 flex-wrap">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
-                <button
-                  key={num}
-                  onClick={() => setSelectedScore(num)}
-                  className={`w-9 h-9 rounded-xl font-bold text-sm border transition-all ${
-                    selectedScore === num
-                      ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-500/20'
-                      : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-white'
-                  }`}
-                >
-                  {num}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-3 pt-2">
-              <button
-                onClick={() => setShowScoreModal(false)}
-                className="flex-1 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold text-xs transition-colors"
-              >
-                Отмена
-              </button>
-              <button
-                onClick={handleSaveScore}
-                className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs transition-colors shadow-lg shadow-purple-600/20"
-              >
-                Сохранить
-              </button>
-            </div>
-          </div>
-        </div>
+        <ContentRatingModal
+          isOpen={showScoreModal}
+          currentRating={userTracking?.score || userTracking?.rating}
+          itemTitle={game.title}
+          onClose={() => setShowScoreModal(false)}
+          onSaveRating={handleSaveScore}
+        />
       )}
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px)+1rem)] md:bottom-6 right-4 sm:right-6 z-50 animate-bounce pointer-events-auto">
+        <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px)+1rem)] md:bottom-6 right-4 sm:right-6 z-50 pointer-events-auto animate-fade-in">
           <div
             className={`px-4 py-2.5 rounded-xl border text-xs font-semibold shadow-2xl flex items-center gap-2 ${
               toastMessage.type === 'success'
-                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
+                ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
                 : toastMessage.type === 'error'
-                ? 'bg-rose-950/90 border-rose-500/50 text-rose-200'
-                : 'bg-zinc-900/90 border-purple-500/50 text-zinc-100'
+                ? 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                : 'bg-[#11152A] border-[#8B5CF6]/40 text-[#F8FAFC]'
             }`}
           >
             <span>{toastMessage.text}</span>

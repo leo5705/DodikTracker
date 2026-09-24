@@ -56,11 +56,11 @@ export const AdminFeedbackTab: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Expanded threads cache: reportId -> replies[]
   const [expandedThreads, setExpandedThreads] = useState<Record<number, boolean>>({});
   const [threadsData, setThreadsData] = useState<Record<number, { loading: boolean; replies: ReportReply[] }>>({});
-  
+
   // Reply inputs: reportId -> text
   const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({});
   const [replyStatuses, setReplyStatuses] = useState<Record<number, string>>({});
@@ -104,11 +104,6 @@ export const AdminFeedbackTab: React.FC = () => {
           ...prev,
           [reportId]: { loading: false, replies: data.replies || [] },
         }));
-      } else {
-        setThreadsData((prev) => ({
-          ...prev,
-          [reportId]: { loading: false, replies: [] },
-        }));
       }
     } catch (err) {
       console.error('[AdminFeedback] Load replies error:', err);
@@ -121,65 +116,54 @@ export const AdminFeedbackTab: React.FC = () => {
 
   const toggleThread = (reportId: number) => {
     setExpandedThreads((prev) => {
-      const nextState = !prev[reportId];
-      if (nextState && !threadsData[reportId]?.replies) {
+      const next = !prev[reportId];
+      if (next && !threadsData[reportId]?.replies?.length) {
         loadThreadReplies(reportId);
       }
-      return { ...prev, [reportId]: nextState };
+      return { ...prev, [reportId]: next };
     });
   };
 
   const handleSendReply = async (reportId: number) => {
-    const text = (replyDrafts[reportId] || '').trim();
-    if (!text) return;
+    const draft = replyDrafts[reportId]?.trim();
+    if (!draft) return;
 
-    const nextStatus = replyStatuses[reportId] || 'IN_REVIEW';
+    const newStatus = replyStatuses[reportId] || 'IN_REVIEW';
     setIsSubmittingReply((prev) => ({ ...prev, [reportId]: true }));
 
     try {
-      const res = await authFetch(`/api/admin/reports/${reportId}/reply`, {
+      const res = await authFetch(`/api/feedback/${reportId}/reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: text,
-          status: nextStatus,
+          message: draft,
+          newStatus: newStatus,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        // Append new reply to thread
-        setThreadsData((prev) => {
-          const current = prev[reportId]?.replies || [];
-          return {
-            ...prev,
-            [reportId]: {
-              loading: false,
-              replies: [...current, data.reply],
-            },
-          };
-        });
-
-        // Clear draft
         setReplyDrafts((prev) => ({ ...prev, [reportId]: '' }));
 
-        // Update item status in list
+        // Refresh thread replies
+        await loadThreadReplies(reportId);
+
+        // Update main item status in state
         setItems((prev) =>
           prev.map((item) =>
             item.id === reportId
               ? {
                   ...item,
-                  status: nextStatus,
-                  moderatorComment: text,
+                  status: newStatus,
+                  resolvedAt: newStatus === 'RESOLVED' || newStatus === 'DISMISSED' ? new Date().toISOString() : null,
                   moderatorUsername: dbUser?.username || item.moderatorUsername,
-                  resolvedAt: nextStatus === 'RESOLVED' || nextStatus === 'DISMISSED' ? new Date().toISOString() : item.resolvedAt,
                 }
               : item
           )
         );
       }
     } catch (err) {
-      console.error('[AdminFeedback] Send reply error:', err);
+      console.error('[AdminFeedback] Reply error:', err);
     } finally {
       setIsSubmittingReply((prev) => ({ ...prev, [reportId]: false }));
     }
@@ -187,11 +171,15 @@ export const AdminFeedbackTab: React.FC = () => {
 
   const handleQuickStatus = async (reportId: number, newStatus: string) => {
     try {
-      const res = await authFetch(`/api/reports/${reportId}/status`, {
-        method: 'PUT',
+      const res = await authFetch(`/api/admin/reports/${reportId}/resolve`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify({
+          actionTaken: newStatus,
+          status: newStatus,
+        }),
       });
+
       if (res.ok) {
         setItems((prev) =>
           prev.map((item) =>
@@ -214,23 +202,23 @@ export const AdminFeedbackTab: React.FC = () => {
     switch (targetId) {
       case 'BUG':
         return (
-          <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 flex items-center gap-1.5">
-            <AlertTriangle className="w-3.5 h-3.5" />
+          <span className="px-3 py-1 rounded-xl text-xs font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4" />
             Баг / Ошибка
           </span>
         );
       case 'COMPLAINT':
         return (
-          <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/20 flex items-center gap-1.5">
-            <ShieldAlert className="w-3.5 h-3.5" />
+          <span className="px-3 py-1 rounded-xl text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/20 flex items-center gap-1.5">
+            <ShieldAlert className="w-4 h-4" />
             Жалоба
           </span>
         );
       case 'SUGGESTION':
       default:
         return (
-          <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20 flex items-center gap-1.5">
-            <Lightbulb className="w-3.5 h-3.5" />
+          <span className="px-3 py-1 rounded-xl text-xs font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20 flex items-center gap-1.5">
+            <Lightbulb className="w-4 h-4" />
             Идея / Предложение
           </span>
         );
@@ -241,32 +229,32 @@ export const AdminFeedbackTab: React.FC = () => {
     switch (status) {
       case 'PENDING':
         return (
-          <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+          <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
             Ожидает ответа
           </span>
         );
       case 'IN_REVIEW':
         return (
-          <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-blue-500/15 text-blue-300 border border-blue-500/30">
+          <span className="px-3 py-1 rounded-full text-xs font-bold bg-blue-500/15 text-blue-300 border border-blue-500/30">
             В процессе / Диалог
           </span>
         );
       case 'RESOLVED':
         return (
-          <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+          <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
             Решено
           </span>
         );
       case 'DISMISSED':
       case 'REJECTED':
         return (
-          <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-zinc-800 text-zinc-400 border border-zinc-700">
+          <span className="px-3 py-1 rounded-full text-xs font-bold bg-[#11152A] text-zinc-400 border border-[#1E2442]">
             Закрыто
           </span>
         );
       default:
         return (
-          <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-zinc-800 text-zinc-300">
+          <span className="px-3 py-1 rounded-full text-xs font-bold bg-[#11152A] text-zinc-300 border border-[#1E2442]">
             {status}
           </span>
         );
@@ -286,58 +274,58 @@ export const AdminFeedbackTab: React.FC = () => {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full animate-in fade-in duration-200">
       {/* Top Filter & Actions Bar */}
-      <div className="p-4 rounded-2xl bg-[#14131A] border border-[#252233] space-y-4">
+      <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4 shadow-xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           {/* Status Tabs */}
-          <div className="flex items-center gap-1.5 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => setStatusFilter('ALL')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+              className={`h-11 px-4 rounded-2xl text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
                 statusFilter === 'ALL'
-                  ? 'bg-[#252233] text-[#F3F1F8] border border-[#3A344E]'
-                  : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                  ? 'bg-[#1E2442] text-[#F8FAFC] border border-[#1E2442]'
+                  : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC]'
               }`}
             >
               Все
             </button>
             <button
               onClick={() => setStatusFilter('PENDING')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+              className={`h-11 px-4 rounded-2xl text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
                 statusFilter === 'PENDING'
-                  ? 'bg-amber-500 text-black'
-                  : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                  ? 'bg-amber-500 text-black shadow-md'
+                  : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC]'
               }`}
             >
               Новые
             </button>
             <button
               onClick={() => setStatusFilter('IN_REVIEW')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+              className={`h-11 px-4 rounded-2xl text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
                 statusFilter === 'IN_REVIEW'
-                  ? 'bg-blue-500 text-black'
-                  : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                  ? 'bg-blue-500 text-black shadow-md'
+                  : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC]'
               }`}
             >
               В работе / Ответы
             </button>
             <button
               onClick={() => setStatusFilter('RESOLVED')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+              className={`h-11 px-4 rounded-2xl text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
                 statusFilter === 'RESOLVED'
-                  ? 'bg-emerald-500 text-black'
-                  : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                  ? 'bg-emerald-500 text-black shadow-md'
+                  : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC]'
               }`}
             >
               Решено
             </button>
             <button
               onClick={() => setStatusFilter('DISMISSED')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+              className={`h-11 px-4 rounded-2xl text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
                 statusFilter === 'DISMISSED'
                   ? 'bg-zinc-700 text-white'
-                  : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                  : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC]'
               }`}
             >
               Закрытые
@@ -346,52 +334,52 @@ export const AdminFeedbackTab: React.FC = () => {
 
           <button
             onClick={fetchFeedback}
-            className="p-2 bg-[#0F0E12] hover:bg-[#252233] border border-[#252233] rounded-xl text-[#9A94AA] hover:text-[#F3F1F8] transition-colors self-start sm:self-auto"
+            className="h-11 w-11 flex items-center justify-center bg-[#11152A] hover:bg-[#1E2442] border border-[#1E2442] rounded-2xl text-[#94A3B8] hover:text-[#F8FAFC] transition-colors self-start sm:self-auto cursor-pointer"
             title="Обновить"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#AC82FF]' : ''}`} />
+            <RefreshCw className={`w-4.5 h-4.5 ${loading ? 'animate-spin text-[#A78BFA]' : ''}`} />
           </button>
         </div>
 
         {/* Category Filter & Search */}
-        <div className="flex flex-col sm:flex-row items-center gap-3 pt-2 border-t border-[#252233]">
-          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+        <div className="flex flex-col sm:flex-row items-center gap-3 pt-3 border-t border-[#1E2442]">
+          <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
             <button
               onClick={() => setCategoryFilter('ALL')}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold ${
+              className={`h-10 px-3.5 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer ${
                 categoryFilter === 'ALL'
                   ? 'bg-purple-500/20 text-purple-200 border border-purple-500/40'
-                  : 'bg-[#0F0E12] text-[#9A94AA]'
+                  : 'bg-[#11152A] text-[#94A3B8] border border-[#1E2442]'
               }`}
             >
               Все категории
             </button>
             <button
               onClick={() => setCategoryFilter('SUGGESTION')}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold ${
+              className={`h-10 px-3.5 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer ${
                 categoryFilter === 'SUGGESTION'
                   ? 'bg-purple-500/20 text-purple-200 border border-purple-500/40'
-                  : 'bg-[#0F0E12] text-[#9A94AA]'
+                  : 'bg-[#11152A] text-[#94A3B8] border border-[#1E2442]'
               }`}
             >
               Идеи
             </button>
             <button
               onClick={() => setCategoryFilter('BUG')}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold ${
+              className={`h-10 px-3.5 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer ${
                 categoryFilter === 'BUG'
                   ? 'bg-orange-500/20 text-orange-200 border border-orange-500/40'
-                  : 'bg-[#0F0E12] text-[#9A94AA]'
+                  : 'bg-[#11152A] text-[#94A3B8] border border-[#1E2442]'
               }`}
             >
               Ошибки
             </button>
             <button
               onClick={() => setCategoryFilter('COMPLAINT')}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold ${
+              className={`h-10 px-3.5 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer ${
                 categoryFilter === 'COMPLAINT'
                   ? 'bg-red-500/20 text-red-200 border border-red-500/40'
-                  : 'bg-[#0F0E12] text-[#9A94AA]'
+                  : 'bg-[#11152A] text-[#94A3B8] border border-[#1E2442]'
               }`}
             >
               Жалобы
@@ -399,13 +387,13 @@ export const AdminFeedbackTab: React.FC = () => {
           </div>
 
           <div className="relative flex-1 w-full">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#656075]" />
+            <Search className="w-4.5 h-4.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-[#64748B]" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Поиск по тексту или автору..."
-              className="w-full pl-9 pr-3 py-1.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] placeholder-[#656075] outline-none focus:border-[#9B6BFF] transition-colors"
+              className="w-full h-11 pl-10 pr-4 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] placeholder-[#64748B] outline-none focus:border-[#8B5CF6] transition-colors"
             />
           </div>
         </div>
@@ -413,15 +401,15 @@ export const AdminFeedbackTab: React.FC = () => {
 
       {/* List of Feedback Items */}
       {loading && items.length === 0 ? (
-        <div className="p-12 text-center text-[#9A94AA] bg-[#14131A] rounded-2xl border border-[#252233] space-y-2">
-          <RefreshCw className="w-6 h-6 animate-spin text-[#AC82FF] mx-auto" />
-          <p className="text-sm">Загрузка обратной связи...</p>
+        <div className="p-16 text-center text-[#94A3B8] bg-[#0B0D20] rounded-3xl border border-[#1E2442] space-y-3">
+          <RefreshCw className="w-8 h-8 animate-spin text-[#A78BFA] mx-auto" />
+          <p className="text-base font-semibold">Загрузка обратной связи...</p>
         </div>
       ) : filteredItems.length === 0 ? (
-        <div className="p-12 text-center text-[#9A94AA] bg-[#14131A] rounded-2xl border border-[#252233] space-y-2">
-          <MessageSquare className="w-8 h-8 text-[#656075] mx-auto opacity-50" />
-          <p className="text-sm font-semibold text-[#F3F1F8]">Обращений не найдено</p>
-          <p className="text-xs">Все отзывы и предложения в этой категории обработаны.</p>
+        <div className="p-16 text-center text-[#94A3B8] bg-[#0B0D20] rounded-3xl border border-[#1E2442] space-y-3">
+          <MessageSquare className="w-10 h-10 text-[#64748B] mx-auto opacity-50" />
+          <p className="text-base font-bold text-[#F8FAFC]">Обращений не найдено</p>
+          <p className="text-xs sm:text-sm">Все отзывы и предложения в этой категории обработаны.</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -435,46 +423,46 @@ export const AdminFeedbackTab: React.FC = () => {
             return (
               <div
                 key={item.id}
-                className="p-5 rounded-2xl bg-[#14131A] border border-[#252233] hover:border-[#3A344E] transition-all space-y-4 shadow-lg"
+                className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#8B5CF6]/40 transition-all space-y-4 shadow-lg"
               >
                 {/* Header info */}
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#252233]">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-[#1E2442]">
                   <div className="flex items-center gap-2.5 flex-wrap">
                     {getCategoryBadge(item.targetId)}
                     {getStatusBadge(item.status)}
-                    <span className="text-xs font-bold text-[#F3F1F8]">Обращение #{item.id}</span>
+                    <span className="text-sm font-bold text-[#F8FAFC]">Обращение #{item.id}</span>
                   </div>
 
-                  <div className="flex items-center gap-3 text-xs text-[#9A94AA]">
-                    <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-3 text-xs sm:text-sm text-[#94A3B8]">
+                    <div className="flex items-center gap-2">
                       {item.reporterAvatar ? (
                         <img
                           src={item.reporterAvatar}
                           alt={item.reporterUsername}
-                          className="w-5 h-5 rounded-full object-cover border border-[#252233]"
+                          className="w-6 h-6 rounded-full object-cover border border-[#1E2442]"
                           referrerPolicy="no-referrer"
                         />
                       ) : (
-                        <div className="w-5 h-5 rounded-full bg-[#191724] border border-[#252233] flex items-center justify-center text-[10px] text-[#AC82FF]">
-                          <User className="w-3 h-3" />
+                        <div className="w-6 h-6 rounded-full bg-[#11152A] border border-[#1E2442] flex items-center justify-center text-xs text-[#A78BFA]">
+                          <User className="w-3.5 h-3.5" />
                         </div>
                       )}
-                      <span className="font-semibold text-[#F3F1F8]">
+                      <span className="font-semibold text-[#F8FAFC]">
                         {item.reporterUsername ? `@${item.reporterUsername}` : 'Анонимный пользователь'}
                       </span>
                     </div>
                     <span>•</span>
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
+                    <span className="flex items-center gap-1 font-mono text-xs">
+                      <Clock className="w-3.5 h-3.5" />
                       {new Date(item.createdAt).toLocaleString('ru-RU')}
                     </span>
                   </div>
                 </div>
 
                 {/* Original Feedback Message */}
-                <div className="p-4 rounded-xl bg-[#0F0E12] border border-[#252233] text-sm text-[#F3F1F8] leading-relaxed whitespace-pre-wrap">
-                  <div className="text-[11px] font-bold text-[#AC82FF] uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                    <MessageSquare className="w-3.5 h-3.5" />
+                <div className="p-4 sm:p-5 rounded-2xl bg-[#11152A] border border-[#1E2442] text-sm text-[#F8FAFC] leading-relaxed whitespace-pre-wrap font-sans">
+                  <div className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <MessageSquare className="w-4 h-4" />
                     Сообщение пользователя:
                   </div>
                   {item.description}
@@ -482,56 +470,56 @@ export const AdminFeedbackTab: React.FC = () => {
 
                 {/* Latest Mod Status / Quick Actions */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2.5 flex-wrap">
                     <button
                       onClick={() => toggleThread(item.id)}
-                      className="px-3.5 py-1.5 rounded-xl bg-[#191724] hover:bg-[#252233] border border-[#2E2A40] text-xs font-bold text-[#F3F1F8] flex items-center gap-2 transition-colors"
+                      className="h-11 px-4 rounded-2xl bg-[#11152A] hover:bg-[#1E2442] border border-[#1E2442] text-xs sm:text-sm font-bold text-[#F8FAFC] flex items-center gap-2 transition-colors cursor-pointer"
                     >
-                      <MessageSquare className="w-3.5 h-3.5 text-[#AC82FF]" />
+                      <MessageSquare className="w-4 h-4 text-[#A78BFA]" />
                       {isExpanded ? 'Скрыть переписку' : 'Открыть переписку / Ответить'}
                       {replies.length > 0 && (
-                        <span className="px-1.5 py-0.2 rounded-md bg-[#9B6BFF]/20 text-[#AC82FF] text-[10px]">
+                        <span className="px-2 py-0.5 rounded-md bg-[#8B5CF6]/20 text-[#A78BFA] text-xs font-mono font-bold">
                           {replies.length}
                         </span>
                       )}
-                      {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                     </button>
 
                     {item.status !== 'RESOLVED' && (
                       <button
                         onClick={() => handleQuickStatus(item.id, 'RESOLVED')}
-                        className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition-colors flex items-center gap-1.5"
+                        className="h-11 px-4 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs sm:text-sm font-bold transition-colors flex items-center gap-2 cursor-pointer"
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <CheckCircle2 className="w-4 h-4" />
                         Пометить как Решено
                       </button>
                     )}
                   </div>
 
                   {item.moderatorUsername && (
-                    <div className="text-[11px] text-[#9A94AA] flex items-center gap-1.5">
-                      <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
-                      Модератор: <span className="font-semibold text-[#F3F1F8]">@{item.moderatorUsername}</span>
+                    <div className="text-xs sm:text-sm text-[#94A3B8] flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-purple-400" />
+                      Модератор: <span className="font-semibold text-[#F8FAFC]">@{item.moderatorUsername}</span>
                     </div>
                   )}
                 </div>
 
                 {/* Thread & Reply Box Section */}
                 {isExpanded && (
-                  <div className="pt-4 border-t border-[#252233] space-y-4 animate-fade-in-up">
-                    <div className="text-xs font-bold text-[#9A94AA] uppercase tracking-wider flex items-center gap-2">
-                      <Sparkles className="w-3.5 h-3.5 text-[#AC82FF]" />
+                  <div className="pt-4 border-t border-[#1E2442] space-y-4 animate-fade-in-up">
+                    <div className="text-xs font-bold text-[#94A3B8] uppercase tracking-wider flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-[#A78BFA]" />
                       История диалога
                     </div>
 
                     {/* Messages History */}
                     {thread?.loading ? (
-                      <div className="p-6 text-center text-xs text-[#9A94AA]">
-                        <RefreshCw className="w-4 h-4 animate-spin text-[#AC82FF] mx-auto mb-2" />
+                      <div className="p-8 text-center text-sm text-[#94A3B8]">
+                        <RefreshCw className="w-5 h-5 animate-spin text-[#A78BFA] mx-auto mb-2" />
                         Загрузка сообщений...
                       </div>
                     ) : replies.length === 0 ? (
-                      <div className="p-4 rounded-xl bg-[#0F0E12] border border-[#252233] text-xs text-[#9A94AA] text-center">
+                      <div className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442] text-xs sm:text-sm text-[#94A3B8] text-center">
                         Ответов пока нет. Вы можете быть первым, кто ответит пользователю.
                       </div>
                     ) : (
@@ -539,51 +527,51 @@ export const AdminFeedbackTab: React.FC = () => {
                         {replies.map((reply) => (
                           <div
                             key={reply.id}
-                            className={`p-3.5 rounded-xl border text-xs leading-relaxed space-y-1.5 ${
+                            className={`p-4 rounded-2xl border text-sm leading-relaxed space-y-2 ${
                               reply.isAdminResponse
-                                ? 'bg-purple-950/20 border-purple-500/30 text-[#F3F1F8] ml-4'
-                                : 'bg-[#0F0E12] border-[#252233] text-[#F3F1F8] mr-4'
+                                ? 'bg-purple-950/20 border-purple-500/30 text-[#F8FAFC] ml-4'
+                                : 'bg-[#11152A] border-[#1E2442] text-[#F8FAFC] mr-4'
                             }`}
                           >
-                            <div className="flex items-center justify-between text-[11px] text-[#9A94AA]">
-                              <div className="flex items-center gap-1.5">
+                            <div className="flex items-center justify-between text-xs text-[#94A3B8]">
+                              <div className="flex items-center gap-2">
                                 {reply.isAdminResponse ? (
-                                  <span className="px-1.5 py-0.5 rounded bg-purple-500/30 text-purple-200 font-bold text-[10px] flex items-center gap-1">
-                                    <ShieldCheck className="w-3 h-3 text-purple-300" />
+                                  <span className="px-2 py-0.5 rounded bg-purple-500/30 text-purple-200 font-bold text-xs flex items-center gap-1">
+                                    <ShieldCheck className="w-3.5 h-3.5 text-purple-300" />
                                     Администрация
                                   </span>
                                 ) : (
-                                  <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-bold text-[10px]">
+                                  <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-bold text-xs">
                                     Пользователь
                                   </span>
                                 )}
-                                <span className="font-semibold text-[#F3F1F8]">
+                                <span className="font-semibold text-[#F8FAFC]">
                                   {reply.authorUsername ? `@${reply.authorUsername}` : 'Участник'}
                                 </span>
                               </div>
-                              <span>{new Date(reply.createdAt).toLocaleString('ru-RU')}</span>
+                              <span className="font-mono text-xs">{new Date(reply.createdAt).toLocaleString('ru-RU')}</span>
                             </div>
-                            <div className="whitespace-pre-wrap text-sm text-[#F3F1F8]">{reply.message}</div>
+                            <div className="whitespace-pre-wrap text-sm text-[#F8FAFC]">{reply.message}</div>
                           </div>
                         ))}
                       </div>
                     )}
 
                     {/* Admin Reply Input Box */}
-                    <div className="p-4 rounded-xl bg-[#191724] border border-[#2E2A40] space-y-3">
-                      <div className="flex items-center justify-between text-xs font-bold text-[#F3F1F8]">
-                        <span className="flex items-center gap-1.5">
-                          <CornerDownRight className="w-4 h-4 text-[#AC82FF]" />
+                    <div className="p-5 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-3.5">
+                      <div className="flex items-center justify-between text-sm font-bold text-[#F8FAFC] flex-wrap gap-2">
+                        <span className="flex items-center gap-2">
+                          <CornerDownRight className="w-4 h-4 text-[#A78BFA]" />
                           Ответить пользователю
                         </span>
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-[#9A94AA]">Установить статус:</span>
+                          <span className="text-xs text-[#94A3B8] font-semibold">Установить статус:</span>
                           <select
                             value={replyStatuses[item.id] || (item.status === 'PENDING' ? 'IN_REVIEW' : item.status)}
                             onChange={(e) =>
                               setReplyStatuses((prev) => ({ ...prev, [item.id]: e.target.value }))
                             }
-                            className="bg-[#0F0E12] border border-[#252233] rounded-lg px-2.5 py-1 text-xs text-[#F3F1F8] outline-none"
+                            className="bg-[#0B0D20] border border-[#1E2442] rounded-xl px-3 py-1.5 text-xs text-[#F8FAFC] outline-none font-medium"
                           >
                             <option value="IN_REVIEW">В процессе / В работе</option>
                             <option value="RESOLVED">Решено (Завершить)</option>
@@ -602,20 +590,20 @@ export const AdminFeedbackTab: React.FC = () => {
                           }
                         }}
                         placeholder="Введите ваш официальный ответ. Пользователь получит уведомление на сайте и в Telegram (если подключен)... (Ctrl+Enter для отправки)"
-                        className="w-full h-24 p-3 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] placeholder-[#656075] outline-none focus:border-[#9B6BFF] transition-colors resize-none custom-scrollbar"
+                        className="w-full h-28 p-3.5 bg-[#0B0D20] border border-[#1E2442] rounded-2xl text-sm text-[#F8FAFC] placeholder-[#64748B] outline-none focus:border-[#8B5CF6] transition-colors resize-none custom-scrollbar"
                       />
 
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-[#656075]">
-                          Пользователь получит уведомление <code className="text-[#AC82FF]">FEEDBACK_REPLIED</code>
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <span className="text-xs text-[#64748B]">
+                          Пользователь получит уведомление <code className="text-[#A78BFA] font-mono">FEEDBACK_REPLIED</code>
                         </span>
                         <button
                           type="button"
                           disabled={!draft.trim() || isSubmitting}
                           onClick={() => handleSendReply(item.id)}
-                          className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-purple-900/20"
+                          className="h-11 px-6 rounded-2xl bg-[#8B5CF6] hover:bg-[#7C3AED] disabled:opacity-50 text-white text-sm font-bold transition-all flex items-center gap-2 shadow-lg shadow-purple-900/20 cursor-pointer"
                         >
-                          <Send className="w-3.5 h-3.5" />
+                          <Send className="w-4 h-4" />
                           {isSubmitting ? 'Отправка...' : 'Отправить ответ'}
                         </button>
                       </div>

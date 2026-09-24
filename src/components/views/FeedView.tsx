@@ -35,6 +35,8 @@ import { useRouter } from '../../context/RouterContext.tsx';
 import { formatMediaTypePath } from '../../utils/formatters.ts';
 import { usePresence } from '../../hooks/usePresence.ts';
 import { PresenceIndicator } from '../ui/PresenceIndicator.tsx';
+import { formatActivity } from '../../utils/activityFormatter.ts';
+import { resolveAchievementIcon } from '../../utils/iconResolver.tsx';
 
 interface ActivityItem {
   id: number;
@@ -378,43 +380,40 @@ export const FeedView: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-16 max-w-3xl mx-auto px-2 sm:px-4">
-      {/* Header Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-purple-950/40 via-zinc-900 to-zinc-900 border border-purple-800/30 shadow-lg">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1E2442] pb-5">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-purple-600/20 border border-purple-500/30 text-purple-400">
-              <Radio className="w-5 h-5 animate-pulse" />
-            </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-black text-zinc-100 tracking-tight flex items-center gap-2">
-                СОЦИАЛЬНАЯ ЛЕНТА
-              </h1>
-              <p className="text-xs text-zinc-400">
-                Реальные действия, просмотры, оценки и списки сообщества Dodik Tracker
-              </p>
-            </div>
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#A78BFA] uppercase tracking-wider font-mono">
+            <Radio className="w-4 h-4 text-[#8B5CF6] animate-pulse" />
+            <span>Социальная лента</span>
           </div>
+          <h1 className="text-2xl sm:text-3xl font-black text-[#F8FAFC] tracking-tight mt-1">
+            Пульс сообщества
+          </h1>
+          <p className="text-xs text-[#94A3B8] mt-0.5">
+            Реальные действия, просмотры, оценки и списки сообщества Dodik Tracker
+          </p>
         </div>
 
         <button
           onClick={() => fetchFeed(true)}
           disabled={loading || refreshing}
-          className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-zinc-700 text-xs font-medium transition-colors shadow-sm disabled:opacity-50"
+          className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#11152A] hover:bg-[#151932] text-[#94A3B8] hover:text-[#F8FAFC] border border-[#1E2442] text-xs font-medium transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
           title="Обновить ленту"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-purple-400' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-[#8B5CF6]' : ''}`} />
           <span>Обновить</span>
         </button>
       </div>
 
       {/* Primary Navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-3 overflow-x-auto no-scrollbar">
+      <div className="flex items-center gap-2 border-b border-[#1E2442] pb-3 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setTab('all')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
             tab === 'all'
-              ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
-              : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 border border-zinc-800/80'
+              ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md shadow-[#7C3AED]/25'
+              : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] border border-[#1E2442]'
           }`}
         >
           <Compass className="w-4 h-4" />
@@ -423,16 +422,16 @@ export const FeedView: React.FC = () => {
 
         <button
           onClick={() => setTab('friends')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap relative ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap relative cursor-pointer ${
             tab === 'friends'
-              ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
-              : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 border border-zinc-800/80'
+              ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md shadow-[#7C3AED]/25'
+              : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] border border-[#1E2442]'
           }`}
         >
           <Users className="w-4 h-4" />
           <span>Друзья</span>
           {friendCount > 0 && (
-            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-purple-950 text-purple-300 border border-purple-800/50">
+            <span className="px-1.5 py-0.2 text-[10px] rounded-md bg-[#151932] text-[#A78BFA] border border-[#1E2442] font-mono">
               {friendCount}
             </span>
           )}
@@ -441,10 +440,10 @@ export const FeedView: React.FC = () => {
         {dbUser && (
           <button
             onClick={() => setTab('my')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
               tab === 'my'
-                ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
-                : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 border border-zinc-800/80'
+                ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-md shadow-[#7C3AED]/25'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] border border-[#1E2442]'
             }`}
           >
             <User className="w-4 h-4" />
@@ -468,10 +467,10 @@ export const FeedView: React.FC = () => {
             <button
               key={item.id}
               onClick={() => setTypeFilter(item.id as any)}
-              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 typeFilter === item.id
-                  ? 'bg-purple-950 text-purple-200 border border-purple-700/60 shadow-sm'
-                  : 'bg-zinc-900/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 border border-zinc-800/60'
+                  ? 'bg-[#151932] text-[#F8FAFC] border border-[#8B5CF6]/50 shadow-sm'
+                  : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] border border-[#1E2442]'
               }`}
             >
               {item.label}
@@ -492,10 +491,10 @@ export const FeedView: React.FC = () => {
             <button
               key={cat.id}
               onClick={() => setCategoryFilter(cat.id)}
-              className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-colors whitespace-nowrap ${
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 categoryFilter === cat.id
-                  ? 'bg-zinc-100 text-zinc-900 font-bold'
-                  : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 border border-zinc-800/60'
+                  ? 'bg-[#8B5CF6]/20 text-[#A78BFA] border border-[#8B5CF6]/40'
+                  : 'bg-[#0B0D20] text-[#64748B] hover:text-[#94A3B8] border border-[#1E2442]'
               }`}
             >
               {cat.label}
@@ -513,6 +512,7 @@ export const FeedView: React.FC = () => {
       ) : feed.length > 0 ? (
         <div className="space-y-4">
           {feed.map((act) => {
+            const formatted = formatActivity(act);
             const badge = getEventBadge(act.type, act.parsedDetails || act.details, act.media?.type);
             const isCommentsOpen = !!expandedComments[act.id];
             const commentsList = commentsData[act.id] || act.recentComments || [];
@@ -521,32 +521,32 @@ export const FeedView: React.FC = () => {
               <div
                 key={act.id}
                 id={`activity-${act.id}`}
-                className="p-4 sm:p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800/80 hover:border-zinc-700/80 transition-all shadow-md space-y-3.5 group"
+                className="p-4 sm:p-5 rounded-2xl bg-[#11152A] border border-[#1E2442] hover:border-[#8B5CF6]/40 transition-all shadow-lg space-y-3.5 group"
               >
                 {/* Event Header */}
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
                     {/* User Avatar with Presence */}
                     <div className="relative shrink-0">
-                      {act.user.avatar ? (
+                      {formatted.actor.avatar ? (
                         <img
-                          src={act.user.avatar}
-                          alt={act.user.username}
+                          src={formatted.actor.avatar}
+                          alt={formatted.actor.username}
                           referrerPolicy="no-referrer"
-                          onClick={() => navigate(`/u/${act.user.username}`)}
-                          className="w-10 h-10 rounded-full object-cover ring-2 ring-purple-500/20 cursor-pointer hover:opacity-85 transition-opacity"
+                          onClick={() => navigate(`/u/${formatted.actor.username}`)}
+                          className="w-10 h-10 rounded-xl object-cover ring-2 ring-[#8B5CF6]/40 cursor-pointer hover:opacity-85 transition-opacity"
                         />
                       ) : (
                         <div
-                          onClick={() => navigate(`/u/${act.user.username}`)}
-                          className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-800 to-indigo-900 flex items-center justify-center text-xs font-bold text-white cursor-pointer hover:opacity-85 transition-opacity shadow-sm"
+                          onClick={() => navigate(`/u/${formatted.actor.username}`)}
+                          className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center text-xs font-bold text-white cursor-pointer hover:opacity-85 transition-opacity shadow-sm"
                         >
-                          {act.user.username.charAt(0).toUpperCase()}
+                          {formatted.actor.username.charAt(0).toUpperCase()}
                         </div>
                       )}
-                      {act.user.id && (
+                      {formatted.actor.id && (
                         <PresenceIndicator
-                          presence={presenceMap[act.user.id]}
+                          presence={presenceMap[formatted.actor.id]}
                           className="absolute -bottom-0.5 -right-0.5"
                           size="sm"
                         />
@@ -556,43 +556,46 @@ export const FeedView: React.FC = () => {
                     <div>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <button
-                          onClick={() => navigate(`/u/${act.user.username}`)}
-                          className="text-xs font-bold text-zinc-100 hover:text-purple-300 transition-colors"
+                          onClick={() => navigate(`/u/${formatted.actor.username}`)}
+                          className="text-xs font-bold text-[#F8FAFC] hover:text-[#A78BFA] transition-colors cursor-pointer"
                         >
-                          @{act.user.username}
+                          @{formatted.actor.username}
                         </button>
 
                         {/* Event Action Badge */}
                         <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${badge.color}`}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${badge.color}`}
                         >
                           {badge.icon}
                           <span>{badge.label}</span>
                         </span>
                       </div>
 
-                      <span className="text-[11px] text-zinc-400 font-mono flex items-center gap-1 mt-0.5">
-                        <Clock className="w-3 h-3 text-zinc-400" />
-                        {formatRelativeTime(act.createdAt)}
+                      <span
+                        title={formatted.fullDateTime}
+                        className="text-[11px] text-[#94A3B8] font-mono flex items-center gap-1 mt-0.5 cursor-default"
+                      >
+                        <Clock className="w-3 h-3 text-[#64748B]" />
+                        {formatted.relativeTime}
                       </span>
                     </div>
                   </div>
 
                   {/* Direct Message button for other users */}
-                  {dbUser && act.user.id !== dbUser.id && (
+                  {dbUser && formatted.actor.id && formatted.actor.id !== dbUser.id && (
                     <button
                       onClick={() =>
                         window.dispatchEvent(
                           new CustomEvent('open_chat', {
                             detail: {
-                              id: act.user.id,
-                              username: act.user.username,
-                              avatar: act.user.avatar,
+                              id: formatted.actor.id,
+                              username: formatted.actor.username,
+                              avatar: formatted.actor.avatar,
                             },
                           })
                         )
                       }
-                      className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-purple-900/40 text-zinc-400 hover:text-purple-300 border border-zinc-700/60 transition-colors shrink-0"
+                      className="p-1.5 rounded-lg bg-[#0B0D20] hover:bg-[#151932] text-[#94A3B8] hover:text-[#A78BFA] border border-[#1E2442] transition-colors shrink-0 cursor-pointer"
                       title="Написать сообщение"
                     >
                       <MessageCircle className="w-3.5 h-3.5" />
@@ -603,216 +606,219 @@ export const FeedView: React.FC = () => {
                 {/* Event Details Content */}
 
                 {/* 1. Media Event Card */}
-                {act.media && (
+                {formatted.media && (
                   <div
                     onClick={() =>
-                      navigate(`/media/${formatMediaTypePath(act.media!.type || 'MOVIE')}/${act.media!.id}`)
+                      navigate(`/media/${formatMediaTypePath(formatted.media!.type || 'MOVIE')}/${formatted.media!.id}`)
                     }
-                    className="p-3 rounded-xl bg-zinc-950/70 border border-zinc-800/80 flex gap-3.5 items-center cursor-pointer hover:border-purple-500/50 hover:bg-zinc-950 transition-all group/media"
+                    className="p-3 rounded-xl bg-[#0B0D20] border border-[#1E2442] flex gap-3.5 items-center cursor-pointer hover:border-[#8B5CF6]/50 hover:bg-[#151932]/50 transition-all group/media"
                   >
-                    {act.media.posterUrl ? (
+                    {formatted.media.posterUrl ? (
                       <img
-                        src={act.media.posterUrl}
-                        alt={act.media.title}
+                        src={formatted.media.posterUrl}
+                        alt={formatted.media.title}
                         referrerPolicy="no-referrer"
-                        className="w-12 h-16 object-cover rounded-lg shrink-0 shadow-md ring-1 ring-zinc-800 group-hover/media:scale-105 transition-transform"
+                        className="w-12 h-16 object-cover rounded-lg shrink-0 shadow-md ring-1 ring-[#1E2442] group-hover/media:scale-105 transition-transform"
                       />
                     ) : (
-                      <div className="w-12 h-16 bg-zinc-900 rounded-lg flex items-center justify-center text-zinc-400 shrink-0 border border-zinc-800">
-                        {getMediaIcon(act.media.type)}
+                      <div className="w-12 h-16 bg-[#11152A] rounded-lg flex items-center justify-center text-[#64748B] shrink-0 border border-[#1E2442]">
+                        {getMediaIcon(formatted.media.type)}
                       </div>
                     )}
 
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-center gap-2">
-                        <h4 className="text-xs font-bold text-zinc-100 line-clamp-1 group-hover/media:text-purple-300 transition-colors">
-                          {act.media.title}
+                        <h4 className="text-xs font-bold text-[#F8FAFC] line-clamp-1 group-hover/media:text-[#A78BFA] transition-colors">
+                          {formatted.media.title}
                         </h4>
-                        {act.media.year && (
-                          <span className="text-[11px] text-zinc-400 font-mono">({act.media.year})</span>
+                        {formatted.media.year && (
+                          <span className="text-[11px] text-[#94A3B8] font-mono">({formatted.media.year})</span>
                         )}
                       </div>
 
-                      {act.media.originalTitle && act.media.originalTitle !== act.media.title && (
-                        <p className="text-[11px] text-zinc-400 line-clamp-1">
-                          {act.media.originalTitle}
+                      {formatted.media.originalTitle && formatted.media.originalTitle !== formatted.media.title && (
+                        <p className="text-[11px] text-[#94A3B8] line-clamp-1">
+                          {formatted.media.originalTitle}
                         </p>
                       )}
 
                       <div className="flex items-center gap-2 pt-0.5">
-                        <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded bg-zinc-900 text-zinc-300 border border-zinc-800">
-                          {act.media.type}
+                        <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded bg-[#11152A] text-[#94A3B8] border border-[#1E2442]">
+                          {formatted.media.type}
                         </span>
 
-                        {act.type === 'MEDIA_RATED' && act.details && (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-black px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40">
-                            <Star className="w-3 h-3 fill-amber-400" />
-                            {act.details}
+                        {formatted.userRating ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-black px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono">
+                            <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                            {formatted.userRating}/100
                           </span>
-                        )}
-
-                        {act.media.rating && act.type !== 'MEDIA_RATED' && (
+                        ) : formatted.media.rating ? (
                           <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-400">
                             <Star className="w-2.5 h-2.5 fill-amber-400" />
-                            {act.media.rating}
+                            {formatted.media.rating}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* 2. Review Content (if REVIEW_ADDED) */}
-                {act.type === 'REVIEW_ADDED' && act.parsedDetails && (
-                  <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-900/40 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      {act.parsedDetails.title && (
-                        <h5 className="text-xs font-bold text-purple-200">
-                          «{act.parsedDetails.title}»
-                        </h5>
-                      )}
-                      {act.parsedDetails.rating && (
-                        <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40 shrink-0">
-                          <Star className="w-3 h-3 fill-amber-400" />
-                          {act.parsedDetails.rating}/10
-                        </span>
-                      )}
-                    </div>
-                    {act.parsedDetails.snippet && (
-                      <p className="text-xs text-zinc-300 italic leading-relaxed line-clamp-3">
-                        "{act.parsedDetails.snippet}"
-                      </p>
-                    )}
+                {/* 2. Review Content */}
+                {formatted.reviewSnippet && (
+                  <div className="p-3.5 rounded-xl bg-[#151932] border border-[#8B5CF6]/30 space-y-2">
+                    <p className="text-xs text-[#CBD5E1] italic leading-relaxed line-clamp-3">
+                      «{formatted.reviewSnippet}»
+                    </p>
                   </div>
                 )}
 
                 {/* 3. List Event Card */}
-                {act.list && (
+                {formatted.list && (
                   <div
-                    onClick={() => navigate(`/lists/${act.list!.id}`)}
-                    className="p-3 rounded-xl bg-zinc-950/70 border border-zinc-800/80 flex gap-3.5 items-center cursor-pointer hover:border-cyan-500/50 hover:bg-zinc-950 transition-all"
+                    onClick={() => navigate(`/lists/${formatted.list!.id}`)}
+                    className="p-3 rounded-xl bg-[#0B0D20] border border-[#1E2442] flex gap-3.5 items-center cursor-pointer hover:border-cyan-500/50 hover:bg-[#151932]/50 transition-all"
                   >
                     <div className="w-12 h-14 bg-cyan-950/40 border border-cyan-800/40 rounded-lg flex items-center justify-center text-cyan-400 shrink-0">
                       <ListPlus className="w-6 h-6" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <h4 className="text-xs font-bold text-zinc-100 hover:text-cyan-300 transition-colors line-clamp-1">
-                        {act.list.title}
+                      <h4 className="text-xs font-bold text-[#F8FAFC] hover:text-cyan-300 transition-colors line-clamp-1">
+                        {formatted.list.title}
                       </h4>
-                      {act.list.category && (
+                      {formatted.list.category && (
                         <span className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded bg-cyan-950/60 text-cyan-300 border border-cyan-800/30">
-                          {act.list.category}
+                          {formatted.list.category}
                         </span>
                       )}
                     </div>
-                    <ExternalLink className="w-4 h-4 text-zinc-400 group-hover:text-cyan-400 transition-colors" />
+                    <ExternalLink className="w-4 h-4 text-[#64748B] group-hover:text-cyan-400 transition-colors" />
                   </div>
                 )}
 
                 {/* 4. Tier List Event Card */}
-                {act.tierList && (
+                {formatted.tierList && (
                   <div
-                    onClick={() => navigate(`/tier-lists/${act.tierList!.id}`)}
-                    className="p-3 rounded-xl bg-zinc-950/70 border border-zinc-800/80 flex gap-3.5 items-center cursor-pointer hover:border-indigo-500/50 hover:bg-zinc-950 transition-all"
+                    onClick={() => navigate(`/tier-lists/${formatted.tierList!.id}`)}
+                    className="p-3 rounded-xl bg-[#0B0D20] border border-[#1E2442] flex gap-3.5 items-center cursor-pointer hover:border-[#8B5CF6]/50 hover:bg-[#151932]/50 transition-all"
                   >
-                    <div className="w-12 h-14 bg-indigo-950/40 border border-indigo-800/40 rounded-lg flex items-center justify-center text-indigo-400 shrink-0">
+                    <div className="w-12 h-14 bg-violet-950/40 border border-violet-800/40 rounded-lg flex items-center justify-center text-[#A78BFA] shrink-0">
                       <Sparkles className="w-6 h-6" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <h4 className="text-xs font-bold text-zinc-100 hover:text-indigo-300 transition-colors line-clamp-1">
-                        {act.tierList.title}
+                      <h4 className="text-xs font-bold text-[#F8FAFC] hover:text-[#A78BFA] transition-colors line-clamp-1">
+                        {formatted.tierList.title}
                       </h4>
-                      {act.tierList.category && (
-                        <span className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-950/60 text-indigo-300 border border-indigo-800/30">
-                          {act.tierList.category}
+                      {formatted.tierList.category && (
+                        <span className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded bg-violet-950/60 text-[#A78BFA] border border-violet-800/30">
+                          {formatted.tierList.category}
                         </span>
                       )}
                     </div>
-                    <ExternalLink className="w-4 h-4 text-zinc-400 group-hover:text-indigo-400 transition-colors" />
+                    <ExternalLink className="w-4 h-4 text-[#64748B] group-hover:text-[#A78BFA] transition-colors" />
                   </div>
                 )}
 
                 {/* 5. Achievement Event Card */}
-                {act.type === 'ACHIEVEMENT_UNLOCKED' && act.parsedDetails && (
-                  <div
-                    onClick={() => navigate('/achievements')}
-                    className="p-3.5 rounded-xl bg-gradient-to-r from-yellow-950/30 via-zinc-950 to-zinc-950 border border-yellow-800/40 flex gap-3.5 items-center cursor-pointer hover:border-yellow-600 transition-all"
-                  >
-                    <div className="w-11 h-11 rounded-xl bg-yellow-900/40 border border-yellow-700/50 flex items-center justify-center text-yellow-400 shrink-0 shadow-inner">
-                      <Trophy className="w-5 h-5 fill-yellow-400/20" />
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-xs font-bold text-yellow-200">
-                          {act.parsedDetails.title}
-                        </h4>
-                        {act.parsedDetails.points && (
-                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-yellow-950 text-yellow-400 border border-yellow-800/40">
-                            +{act.parsedDetails.points} XP
-                          </span>
+                {formatted.achievement && (() => {
+                  const AchIcon = resolveAchievementIcon(formatted.achievement.icon);
+                  return (
+                    <div
+                      onClick={() => navigate('/achievements')}
+                      className="p-3.5 rounded-xl bg-[#0B0D20] border border-amber-500/30 flex gap-3.5 items-center cursor-pointer hover:border-amber-500/60 transition-all shadow-md group/ach"
+                    >
+                      <div className="w-11 h-11 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 shadow-inner">
+                        <AchIcon className="w-5 h-5 fill-amber-400/20" />
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="text-xs font-bold text-amber-300 group-hover/ach:text-amber-200 transition-colors truncate">
+                            🏆 {formatted.achievement.title}
+                          </h4>
+                          {formatted.achievement.points && (
+                            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              +{formatted.achievement.points} XP
+                            </span>
+                          )}
+                          {formatted.achievement.rarity && (
+                            <span className="text-[9px] uppercase font-mono px-1.5 py-0.2 rounded bg-[#11152A] text-amber-400/80 border border-amber-500/20">
+                              {formatted.achievement.rarity}
+                            </span>
+                          )}
+                        </div>
+                        {formatted.achievement.description && (
+                          <p className="text-[11px] text-[#94A3B8] line-clamp-2">
+                            {formatted.achievement.description}
+                          </p>
                         )}
                       </div>
-                      <p className="text-[11px] text-zinc-400 line-clamp-2">
-                        {act.parsedDetails.description}
-                      </p>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* 6. Friend Added Event */}
-                {act.type === 'FRIEND_ADDED' && act.parsedDetails && (
+                {formatted.friend && (
                   <div
-                    onClick={() =>
-                      act.parsedDetails.friendUsername &&
-                      navigate(`/u/${act.parsedDetails.friendUsername}`)
-                    }
-                    className="p-3 rounded-xl bg-zinc-950/70 border border-zinc-800/80 flex gap-3 items-center cursor-pointer hover:border-teal-500/40 transition-all"
+                    onClick={() => navigate(`/u/${formatted.friend!.username}`)}
+                    className="p-3 rounded-xl bg-[#0B0D20] border border-[#1E2442] flex gap-3 items-center cursor-pointer hover:border-emerald-500/40 transition-all"
                   >
-                    <div className="w-9 h-9 rounded-full bg-teal-950 border border-teal-800/40 flex items-center justify-center text-teal-300 font-bold text-xs">
-                      {act.parsedDetails.friendUsername?.charAt(0).toUpperCase() || 'U'}
+                    <div className="w-9 h-9 rounded-full bg-emerald-950 border border-emerald-800/40 flex items-center justify-center text-emerald-300 font-bold text-xs">
+                      {formatted.friend.username.charAt(0).toUpperCase()}
                     </div>
                     <div>
-                      <p className="text-xs text-zinc-200">
+                      <p className="text-xs text-[#F8FAFC]">
                         Подружились с{' '}
-                        <strong className="text-teal-300 hover:underline">
-                          @{act.parsedDetails.friendUsername}
+                        <strong className="text-emerald-300 hover:underline">
+                          @{formatted.friend.username}
                         </strong>
                       </p>
                     </div>
                   </div>
                 )}
 
+                {/* 7. Fallback Activity Details */}
+                {!formatted.media &&
+                  !formatted.reviewSnippet &&
+                  !formatted.list &&
+                  !formatted.tierList &&
+                  !formatted.achievement &&
+                  !formatted.friend &&
+                  formatted.detailsText && (
+                    <div className="p-3 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-[#CBD5E1]">
+                      {formatted.detailsText}
+                    </div>
+                )}
+
                 {/* Event Actions Bar */}
-                <div className="flex items-center justify-between pt-2 border-t border-zinc-800/60 text-xs text-zinc-400">
+                <div className="flex items-center justify-between pt-2 border-t border-[#1E2442] text-xs text-[#94A3B8]">
                   <div className="flex items-center gap-2">
                     {/* Like Button */}
                     <button
                       onClick={() => toggleLike(act.id, act.userLiked)}
-                      className={`flex items-center gap-1.5 py-1 px-2.5 rounded-lg border transition-all text-xs font-medium ${
+                      className={`flex items-center gap-1.5 py-1 px-2.5 rounded-lg border transition-all text-xs font-medium cursor-pointer ${
                         act.userLiked
-                          ? 'bg-red-950/50 text-red-400 border-red-800/50 shadow-sm'
-                          : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:bg-zinc-800/50'
+                          ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 shadow-sm'
+                          : 'bg-[#0B0D20] text-[#94A3B8] border-[#1E2442] hover:text-[#F8FAFC] hover:bg-[#151932]'
                       }`}
                     >
                       <Heart
                         className={`w-3.5 h-3.5 ${
-                          act.userLiked ? 'fill-red-400 text-red-400' : 'text-zinc-400'
+                          act.userLiked ? 'fill-rose-400 text-rose-400' : 'text-[#64748B]'
                         }`}
                       />
-                      <span>{act.likesCount || 0}</span>
+                      <span className="font-mono">{act.likesCount || 0}</span>
                     </button>
 
                     {/* Comments Toggle Button */}
                     <button
                       onClick={() => toggleCommentsSection(act.id)}
-                      className={`flex items-center gap-1.5 py-1 px-2.5 rounded-lg border transition-all text-xs font-medium ${
+                      className={`flex items-center gap-1.5 py-1 px-2.5 rounded-lg border transition-all text-xs font-medium cursor-pointer ${
                         isCommentsOpen
-                          ? 'bg-purple-950/50 text-purple-300 border-purple-800/50'
-                          : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:bg-zinc-800/50'
+                          ? 'bg-[#151932] text-[#A78BFA] border-[#8B5CF6]/50'
+                          : 'bg-[#0B0D20] text-[#94A3B8] border-[#1E2442] hover:text-[#F8FAFC] hover:bg-[#151932]'
                       }`}
                     >
-                      <MessageSquare className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>{act.commentsCount || 0}</span>
+                      <MessageSquare className="w-3.5 h-3.5 text-[#64748B]" />
+                      <span className="font-mono">{act.commentsCount || 0}</span>
                       {isCommentsOpen ? (
                         <ChevronUp className="w-3 h-3 ml-0.5 opacity-60" />
                       ) : (
@@ -826,7 +832,7 @@ export const FeedView: React.FC = () => {
                     onClick={() => {
                       navigator.clipboard?.writeText(window.location.href);
                     }}
-                    className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-300 transition-colors"
+                    className="p-1.5 rounded-lg hover:bg-[#151932] text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
                     title="Скопировать ссылку"
                   >
                     <Share2 className="w-3.5 h-3.5" />
@@ -835,10 +841,10 @@ export const FeedView: React.FC = () => {
 
                 {/* Inline Comments Section */}
                 {isCommentsOpen && (
-                  <div className="pt-3 border-t border-zinc-800/80 space-y-3">
+                  <div className="pt-3 border-t border-[#1E2442] space-y-3">
                     {/* List of comments */}
                     {commentsList.length > 0 ? (
-                      <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                      <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                         {commentsList.map((c) => {
                           const isOwnComment = dbUser?.id === c.userId;
                           const canDelete =
@@ -848,7 +854,7 @@ export const FeedView: React.FC = () => {
                           return (
                             <div
                               key={c.id}
-                              className="p-2.5 rounded-xl bg-zinc-950/80 border border-zinc-800/70 flex gap-2.5 items-start text-xs group/comment"
+                              className="p-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] flex gap-2.5 items-start text-xs group/comment"
                             >
                               <div
                                 onClick={() => navigate(`/u/${c.username}`)}
@@ -862,7 +868,7 @@ export const FeedView: React.FC = () => {
                                     className="w-6 h-6 rounded-full object-cover"
                                   />
                                 ) : (
-                                  <div className="w-6 h-6 rounded-full bg-purple-900/60 flex items-center justify-center text-[10px] font-bold text-purple-200">
+                                  <div className="w-6 h-6 rounded-full bg-[#7C3AED]/40 flex items-center justify-center text-[10px] font-bold text-[#A78BFA]">
                                     {c.username.charAt(0).toUpperCase()}
                                   </div>
                                 )}
@@ -872,15 +878,15 @@ export const FeedView: React.FC = () => {
                                 <div className="flex items-center justify-between gap-1">
                                   <span
                                     onClick={() => navigate(`/u/${c.username}`)}
-                                    className="font-bold text-zinc-200 hover:text-purple-300 cursor-pointer"
+                                    className="font-bold text-[#F8FAFC] hover:text-[#A78BFA] cursor-pointer"
                                   >
                                     @{c.username}
                                   </span>
-                                  <span className="text-[10px] text-zinc-400 font-mono">
+                                  <span className="text-[10px] text-[#64748B] font-mono">
                                     {formatRelativeTime(c.createdAt)}
                                   </span>
                                 </div>
-                                <p className="text-zinc-300 text-xs break-words leading-relaxed">
+                                <p className="text-[#CBD5E1] text-xs break-words leading-relaxed">
                                   {c.content}
                                 </p>
                               </div>
@@ -888,7 +894,7 @@ export const FeedView: React.FC = () => {
                               {canDelete && (
                                 <button
                                   onClick={() => handleDeleteComment(act.id, c.id)}
-                                  className="opacity-0 group-hover/comment:opacity-100 p-1 text-zinc-400 hover:text-red-400 transition-opacity"
+                                  className="opacity-0 group-hover/comment:opacity-100 p-1 text-[#64748B] hover:text-rose-400 transition-opacity cursor-pointer"
                                   title="Удалить"
                                 >
                                   <Trash2 className="w-3 h-3" />
@@ -899,7 +905,7 @@ export const FeedView: React.FC = () => {
                         })}
                       </div>
                     ) : (
-                      <p className="text-xs text-zinc-400 text-center py-2 italic">
+                      <p className="text-xs text-[#94A3B8] text-center py-2 italic">
                         Комментариев пока нет. Будьте первым!
                       </p>
                     )}
@@ -920,24 +926,24 @@ export const FeedView: React.FC = () => {
                             }
                           }}
                           placeholder="Написать комментарий..."
-                          className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200 placeholder-zinc-400 focus:outline-none focus:border-purple-500 transition-colors"
+                          className="flex-1 bg-[#0B0D20] border border-[#1E2442] rounded-xl px-3 py-2 text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6]/80 transition-colors"
                         />
                         <button
                           onClick={() => handleSendComment(act.id)}
                           disabled={
                             !(commentInputs[act.id] || '').trim() || submittingComment[act.id]
                           }
-                          className="p-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:hover:bg-purple-600 text-white transition-colors"
+                          className="p-2 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] disabled:opacity-40 text-white transition-colors cursor-pointer"
                           title="Отправить"
                         >
                           <Send className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     ) : (
-                      <p className="text-xs text-zinc-400 text-center pt-1">
+                      <p className="text-xs text-[#94A3B8] text-center pt-1">
                         <button
                           onClick={() => navigate('/login')}
-                          className="text-purple-400 hover:underline font-semibold"
+                          className="text-[#A78BFA] hover:underline font-semibold"
                         >
                           Войдите
                         </button>
@@ -952,8 +958,8 @@ export const FeedView: React.FC = () => {
         </div>
       ) : (
         /* Rich Contextual Empty State */
-        <div className="py-16 px-6 text-center space-y-4 bg-zinc-900/40 rounded-2xl border border-zinc-800/80 max-w-lg mx-auto">
-          <div className="w-14 h-14 rounded-2xl bg-purple-950/50 border border-purple-800/40 flex items-center justify-center mx-auto text-purple-400 shadow-inner">
+        <div className="py-16 px-6 text-center space-y-4 bg-[#11152A] rounded-2xl border border-[#1E2442] max-w-lg mx-auto">
+          <div className="w-14 h-14 rounded-2xl bg-[#151932] border border-[#8B5CF6]/30 flex items-center justify-center mx-auto text-[#A78BFA] shadow-inner">
             {tab === 'friends' ? (
               <Users className="w-7 h-7" />
             ) : tab === 'my' ? (
@@ -964,14 +970,14 @@ export const FeedView: React.FC = () => {
           </div>
 
           <div className="space-y-1">
-            <h3 className="text-base font-bold text-zinc-100">
+            <h3 className="text-base font-bold text-[#F8FAFC]">
               {tab === 'friends'
                 ? 'В ленте друзей пока пусто'
                 : tab === 'my'
                 ? 'Вы ещё не совершали действий'
                 : 'Событий пока не найдено'}
             </h3>
-            <p className="text-xs text-zinc-400 max-w-sm mx-auto leading-relaxed">
+            <p className="text-xs text-[#94A3B8] max-w-sm mx-auto leading-relaxed">
               {tab === 'friends'
                 ? 'Добавляйте друзей в Dodik Tracker, чтобы видеть их просмотры, оценки, рецензии и пользовательские списки!'
                 : tab === 'my'
@@ -984,7 +990,7 @@ export const FeedView: React.FC = () => {
             {tab === 'friends' && (
               <button
                 onClick={() => navigate('/users')}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-colors shadow-md shadow-purple-900/20"
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-bold transition-all shadow-md shadow-[#7C3AED]/25 cursor-pointer"
               >
                 <UserPlus className="w-4 h-4" />
                 <span>Найти пользователей</span>
@@ -993,15 +999,15 @@ export const FeedView: React.FC = () => {
 
             <button
               onClick={() => navigate('/movies')}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold border border-zinc-700 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0B0D20] hover:bg-[#151932] text-[#F8FAFC] text-xs font-semibold border border-[#1E2442] transition-colors cursor-pointer"
             >
-              <Film className="w-4 h-4 text-purple-400" />
+              <Film className="w-4 h-4 text-[#A78BFA]" />
               <span>Каталог медиа</span>
             </button>
 
             <button
               onClick={() => navigate('/lists')}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold border border-zinc-700 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0B0D20] hover:bg-[#151932] text-[#F8FAFC] text-xs font-semibold border border-[#1E2442] transition-colors cursor-pointer"
             >
               <ListPlus className="w-4 h-4 text-cyan-400" />
               <span>Списки и Тиры</span>

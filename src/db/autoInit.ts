@@ -559,6 +559,154 @@ export async function runAutoMigrations(pool: Pool) {
         CREATE INDEX IF NOT EXISTS "announcement_reads_user_id_idx" ON "announcement_reads"("user_id");
         CREATE INDEX IF NOT EXISTS "announcement_reads_ann_id_idx" ON "announcement_reads"("announcement_id");
 
+        -- 35c. Dodik Media Ratings Table
+        CREATE TABLE IF NOT EXISTS "media_ratings" (
+          "id" serial PRIMARY KEY,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "media_id" integer NOT NULL REFERENCES "media"("id") ON DELETE CASCADE,
+          "rating" double precision NOT NULL,
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now(),
+          CONSTRAINT "media_ratings_user_media_unq" UNIQUE ("user_id", "media_id")
+        );
+        CREATE INDEX IF NOT EXISTS "media_ratings_media_id_idx" ON "media_ratings"("media_id");
+        CREATE INDEX IF NOT EXISTS "media_ratings_user_id_idx" ON "media_ratings"("user_id");
+
+        -- 35d. News Comments Table
+        CREATE TABLE IF NOT EXISTS "news_comments" (
+          "id" serial PRIMARY KEY,
+          "news_id" integer NOT NULL REFERENCES "news"("id") ON DELETE CASCADE,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "parent_id" integer REFERENCES "news_comments"("id") ON DELETE CASCADE,
+          "content" text NOT NULL,
+          "is_hidden" boolean NOT NULL DEFAULT false,
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "news_comments_news_id_idx" ON "news_comments"("news_id");
+        CREATE INDEX IF NOT EXISTS "news_comments_user_id_idx" ON "news_comments"("user_id");
+
+        -- 35e. News Reactions Table
+        CREATE TABLE IF NOT EXISTS "news_reactions" (
+          "id" serial PRIMARY KEY,
+          "news_id" integer NOT NULL REFERENCES "news"("id") ON DELETE CASCADE,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "emoji" text NOT NULL,
+          "created_at" timestamp DEFAULT now(),
+          CONSTRAINT "news_reactions_news_user_emoji_unq" UNIQUE ("news_id", "user_id", "emoji")
+        );
+        CREATE INDEX IF NOT EXISTS "news_reactions_news_id_idx" ON "news_reactions"("news_id");
+        CREATE INDEX IF NOT EXISTS "news_reactions_user_id_idx" ON "news_reactions"("user_id");
+
+        -- 39. Artist / Musician Profiles
+        CREATE TABLE IF NOT EXISTS "artist_profiles" (
+          "id" serial PRIMARY KEY,
+          "user_id" integer NOT NULL UNIQUE REFERENCES "users"("id") ON DELETE CASCADE,
+          "stage_name" text NOT NULL,
+          "slug" text NOT NULL UNIQUE,
+          "avatar" text,
+          "description" text,
+          "status" text NOT NULL DEFAULT 'ACTIVE',
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "artist_profiles_user_id_idx" ON "artist_profiles"("user_id");
+        CREATE UNIQUE INDEX IF NOT EXISTS "artist_profiles_slug_idx" ON "artist_profiles"("slug");
+
+        -- 40. Music Genres
+        CREATE TABLE IF NOT EXISTS "music_genres" (
+          "id" serial PRIMARY KEY,
+          "name" text NOT NULL UNIQUE,
+          "slug" text NOT NULL UNIQUE,
+          "created_at" timestamp DEFAULT now()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "music_genres_slug_idx" ON "music_genres"("slug");
+
+        -- 41. Music Releases
+        CREATE TABLE IF NOT EXISTS "music_releases" (
+          "id" serial PRIMARY KEY,
+          "artist_id" integer NOT NULL REFERENCES "artist_profiles"("id") ON DELETE CASCADE,
+          "title" text NOT NULL,
+          "slug" text NOT NULL UNIQUE,
+          "type" text NOT NULL,
+          "description" text,
+          "cover" text,
+          "release_date" text,
+          "status" text NOT NULL DEFAULT 'DRAFT',
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "music_releases_artist_id_idx" ON "music_releases"("artist_id");
+        CREATE UNIQUE INDEX IF NOT EXISTS "music_releases_slug_idx" ON "music_releases"("slug");
+        CREATE INDEX IF NOT EXISTS "music_releases_status_idx" ON "music_releases"("status");
+        CREATE INDEX IF NOT EXISTS "music_releases_type_idx" ON "music_releases"("type");
+
+        -- 42. Music Release Genres
+        CREATE TABLE IF NOT EXISTS "music_release_genres" (
+          "id" serial PRIMARY KEY,
+          "release_id" integer NOT NULL REFERENCES "music_releases"("id") ON DELETE CASCADE,
+          "genre_id" integer NOT NULL REFERENCES "music_genres"("id") ON DELETE CASCADE,
+          CONSTRAINT "music_release_genres_unq" UNIQUE ("release_id", "genre_id")
+        );
+        CREATE INDEX IF NOT EXISTS "music_release_genres_release_id_idx" ON "music_release_genres"("release_id");
+        CREATE INDEX IF NOT EXISTS "music_release_genres_genre_id_idx" ON "music_release_genres"("genre_id");
+
+        -- 43. Music Tracks
+        CREATE TABLE IF NOT EXISTS "music_tracks" (
+          "id" serial PRIMARY KEY,
+          "release_id" integer NOT NULL REFERENCES "music_releases"("id") ON DELETE CASCADE,
+          "artist_id" integer NOT NULL REFERENCES "artist_profiles"("id") ON DELETE CASCADE,
+          "title" text NOT NULL,
+          "slug" text,
+          "track_number" integer NOT NULL DEFAULT 1,
+          "audio_file" text NOT NULL,
+          "duration" integer,
+          "lyrics" text,
+          "author_note" text,
+          "explicit" boolean NOT NULL DEFAULT false,
+          "status" text NOT NULL DEFAULT 'PUBLISHED',
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "music_tracks_release_id_idx" ON "music_tracks"("release_id");
+        CREATE INDEX IF NOT EXISTS "music_tracks_artist_id_idx" ON "music_tracks"("artist_id");
+        CREATE INDEX IF NOT EXISTS "music_tracks_release_track_no_idx" ON "music_tracks"("release_id", "track_number");
+
+        -- 44. Music Reviews
+        CREATE TABLE IF NOT EXISTS "music_reviews" (
+          "id" serial PRIMARY KEY,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "release_id" integer NOT NULL REFERENCES "music_releases"("id") ON DELETE CASCADE,
+          "music_score" integer NOT NULL,
+          "performance_score" integer NOT NULL,
+          "production_score" integer NOT NULL,
+          "lyrics_score" integer NOT NULL,
+          "atmosphere_score" integer NOT NULL,
+          "cohesion_score" integer NOT NULL,
+          "overall_score" double precision NOT NULL,
+          "text" text,
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now(),
+          CONSTRAINT "music_reviews_user_release_unq" UNIQUE ("user_id", "release_id")
+        );
+        CREATE INDEX IF NOT EXISTS "music_reviews_release_id_idx" ON "music_reviews"("release_id");
+        CREATE INDEX IF NOT EXISTS "music_reviews_user_id_idx" ON "music_reviews"("user_id");
+
+        -- 45. Musician Status Applications
+        CREATE TABLE IF NOT EXISTS "musician_applications" (
+          "id" serial PRIMARY KEY,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "status" text NOT NULL DEFAULT 'PENDING',
+          "message" text,
+          "reviewed_by" integer REFERENCES "users"("id") ON DELETE SET NULL,
+          "reviewed_at" timestamp,
+          "rejection_reason" text,
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "musician_applications_user_id_idx" ON "musician_applications"("user_id");
+        CREATE INDEX IF NOT EXISTS "musician_applications_status_idx" ON "musician_applications"("status");
+
         -- 36. Add Missing Columns to existing tables (Idempotent)
         ALTER TABLE "announcements" ADD COLUMN IF NOT EXISTS "content" text;
         ALTER TABLE "announcements" ADD COLUMN IF NOT EXISTS "priority" text NOT NULL DEFAULT 'NORMAL';
@@ -572,6 +720,8 @@ export async function runAutoMigrations(pool: Pool) {
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_adult" boolean NOT NULL DEFAULT false;
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "age_rating" text;
+        ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "dodik_rating" double precision;
+        ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "dodik_rating_count" integer NOT NULL DEFAULT 0;
         ALTER TABLE "comments" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "tier_lists" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
@@ -642,6 +792,37 @@ export async function runAutoMigrations(pool: Pool) {
           AND telegram_chat_id NOT IN (SELECT telegram_id FROM users WHERE telegram_id IS NOT NULL);
 
         CREATE UNIQUE INDEX IF NOT EXISTS "users_telegram_id_unique" ON "users"("telegram_id") WHERE "telegram_id" IS NOT NULL;
+
+        -- Dodik Tracker Ratings Indexes
+        CREATE INDEX IF NOT EXISTS "media_dodik_rating_idx" ON "media"("dodik_rating");
+        CREATE INDEX IF NOT EXISTS "media_dodik_rating_count_idx" ON "media"("dodik_rating_count");
+
+        -- Migrate legacy ratings (scale 1-10 -> 0-100)
+        UPDATE "user_media" SET rating = rating * 10 WHERE rating IS NOT NULL AND rating <= 10;
+        UPDATE "reviews" SET rating = rating * 10 WHERE rating IS NOT NULL AND rating <= 10;
+        UPDATE "media_ratings" SET rating = ROUND(rating * 10) WHERE rating <= 10;
+
+        -- Ensure user_media ratings are synced to media_ratings
+        INSERT INTO "media_ratings" ("user_id", "media_id", "rating", "created_at", "updated_at")
+        SELECT um.user_id, um.media_id, um.rating, COALESCE(um.created_at, now()), COALESCE(um.updated_at, now())
+        FROM "user_media" um
+        WHERE um.rating IS NOT NULL
+        ON CONFLICT ("user_id", "media_id") DO UPDATE
+        SET rating = EXCLUDED.rating;
+
+        -- Recalculate Dodik community score and vote count for all media
+        UPDATE "media" m
+        SET
+          "dodik_rating" = sub.avg_rating,
+          "dodik_rating_count" = sub.cnt
+        FROM (
+          SELECT media_id,
+                 ROUND(AVG(rating)::numeric, 1) as avg_rating,
+                 COUNT(*)::integer as cnt
+          FROM "media_ratings"
+          GROUP BY media_id
+        ) sub
+        WHERE m.id = sub.media_id;
       `);
       console.log('[AutoInit] Database tables and indexes verified successfully.');
     } finally {

@@ -18,6 +18,7 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 
@@ -100,44 +101,18 @@ export const AdminInvitesTab: React.FC = () => {
     fetchInvites();
   };
 
-  const handleGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setGenerating(true);
-    setActionError(null);
-    try {
-      const res = await authFetch('/api/admin/invites/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: genCount, prefix: genPrefix }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Ошибка генерации инвайтов');
-      
-      setGeneratedCodes(data.codes || []);
-      setActionSuccess(`Успешно создано ${data.count} инвайт-кодов!`);
-      fetchInvites();
-    } catch (err: any) {
-      setActionError(err.message || 'Не удалось сгенерировать');
-    } finally {
-      setGenerating(false);
-    }
-  };
-
   const handleToggle = async (id: number) => {
     try {
       const res = await authFetch(`/api/admin/invites/${id}/toggle`, {
         method: 'POST',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Ошибка переключения статуса');
-      
-      setItems((prev) =>
-        prev.map((item) => (item.id === id ? { ...item, isActive: data.isActive } : item))
-      );
-      setActionSuccess('Статус инвайта обновлен');
-      setTimeout(() => setActionSuccess(null), 3000);
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Ошибка изменения статуса');
+      }
+      fetchInvites();
     } catch (err: any) {
-      setActionError(err.message || 'Ошибка обновления статуса');
+      setActionError(err.message);
     }
   };
 
@@ -148,14 +123,39 @@ export const AdminInvitesTab: React.FC = () => {
         method: 'DELETE',
       });
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Ошибка удаления');
+        const d = await res.json();
+        throw new Error(d.error || 'Ошибка удаления инвайта');
       }
-      setItems((prev) => prev.filter((item) => item.id !== id));
-      setActionSuccess('Инвайт-код удален');
-      setTimeout(() => setActionSuccess(null), 3000);
+      setActionSuccess('Инвайт успешно удален');
+      fetchInvites();
     } catch (err: any) {
-      setActionError(err.message || 'Ошибка удаления');
+      setActionError(err.message);
+    }
+  };
+
+  const handleGenerate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGenerating(true);
+    setActionError(null);
+    try {
+      const res = await authFetch('/api/admin/invites/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          count: genCount,
+          prefix: genPrefix,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'Ошибка генерации инвайтов');
+
+      setGeneratedCodes(d.codes || []);
+      setActionSuccess(`Успешно создано ${d.count || genCount} инвайт-кодов`);
+      fetchInvites();
+    } catch (err: any) {
+      setActionError(err.message);
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -166,37 +166,34 @@ export const AdminInvitesTab: React.FC = () => {
   };
 
   const copyBatchAll = () => {
+    if (generatedCodes.length === 0) return;
     navigator.clipboard.writeText(generatedCodes.join('\n'));
     setCopiedBatch(true);
-    setTimeout(() => setCopiedBatch(false), 2000);
+    setTimeout(() => setCopiedBatch(false), 2500);
   };
 
-  const formatDate = (dateStr: string | null) => {
+  const formatDate = (dateStr?: string | null) => {
     if (!dateStr) return '—';
-    try {
-      return new Date(dateStr).toLocaleDateString('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } catch {
-      return dateStr;
-    }
+    return new Date(dateStr).toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl bg-[#14131A] border border-[#252233]">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-purple-500/15 border border-purple-500/30 text-[#AC82FF] flex items-center justify-center">
-            <Ticket className="w-5 h-5" />
+    <div className="space-y-6 w-full animate-in fade-in duration-200">
+      {/* Top Header Card */}
+      <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-2xl bg-purple-500/15 text-[#A78BFA] flex items-center justify-center">
+            <Ticket className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-[#F3F1F8]">Управление инвайт-кодами</h3>
-            <p className="text-xs text-[#9A94AA]">
+            <h3 className="text-base sm:text-lg font-bold text-[#F8FAFC]">Инвайт-система</h3>
+            <p className="text-xs sm:text-sm text-[#94A3B8]">
               Просмотр, генерация без ограничений и модерация всех инвайтов проекта
             </p>
           </div>
@@ -208,62 +205,62 @@ export const AdminInvitesTab: React.FC = () => {
               setGeneratedCodes([]);
               setShowGenModal(true);
             }}
-            className="px-3.5 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-bold transition-all shadow-md shadow-purple-950/40 flex items-center gap-1.5"
+            className="h-11 px-5 rounded-2xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-sm font-bold transition-all shadow-lg shadow-purple-950/40 flex items-center gap-2 cursor-pointer"
           >
-            <Plus className="w-4 h-4" />
-            Сгенерировать инвайты
+            <Plus className="w-4.5 h-4.5" />
+            <span>Сгенерировать инвайты</span>
           </button>
         </div>
       </div>
 
       {/* Notifications */}
       {actionError && (
-        <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+        <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm flex items-start gap-2.5">
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
           <span>{actionError}</span>
         </div>
       )}
 
       {actionSuccess && (
-        <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-start gap-2">
-          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+        <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm flex items-start gap-2.5">
+          <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
           <span>{actionSuccess}</span>
         </div>
       )}
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="p-4 rounded-xl bg-[#14131A] border border-[#252233]">
-          <span className="text-[11px] font-semibold text-[#9A94AA] block mb-1">Всего инвайтов</span>
-          <span className="text-xl font-bold text-[#F3F1F8]">{stats.total}</span>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] shadow-lg">
+          <span className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1">Всего инвайтов</span>
+          <span className="text-2xl sm:text-3xl font-bold text-[#F8FAFC]">{stats.total}</span>
         </div>
-        <div className="p-4 rounded-xl bg-[#14131A] border border-[#252233]">
-          <span className="text-[11px] font-semibold text-[#9A94AA] block mb-1">Активные</span>
-          <span className="text-xl font-bold text-emerald-400">{stats.active}</span>
+        <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] shadow-lg">
+          <span className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1">Активные</span>
+          <span className="text-2xl sm:text-3xl font-bold text-emerald-400">{stats.active}</span>
         </div>
-        <div className="p-4 rounded-xl bg-[#14131A] border border-[#252233]">
-          <span className="text-[11px] font-semibold text-[#9A94AA] block mb-1">Использованные</span>
-          <span className="text-xl font-bold text-[#AC82FF]">{stats.used}</span>
+        <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] shadow-lg">
+          <span className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1">Использованные</span>
+          <span className="text-2xl sm:text-3xl font-bold text-[#A78BFA]">{stats.used}</span>
         </div>
-        <div className="p-4 rounded-xl bg-[#14131A] border border-[#252233]">
-          <span className="text-[11px] font-semibold text-[#9A94AA] block mb-1">Отключенные</span>
-          <span className="text-xl font-bold text-red-400">{stats.disabled}</span>
+        <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] shadow-lg">
+          <span className="text-xs sm:text-sm font-semibold text-[#94A3B8] block mb-1">Отключенные</span>
+          <span className="text-2xl sm:text-3xl font-bold text-red-400">{stats.disabled}</span>
         </div>
       </div>
 
       {/* Filters & Search Bar */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
         {/* Status Tabs */}
-        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[#14131A] border border-[#252233] self-start">
+        <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] self-start flex-wrap">
           <button
             onClick={() => {
               setStatusFilter('ALL');
               setPage(1);
             }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`h-10 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
               statusFilter === 'ALL'
-                ? 'bg-[#9B6BFF] text-white'
-                : 'text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-[#8B5CF6] text-white shadow-md'
+                : 'text-[#94A3B8] hover:text-[#F8FAFC]'
             }`}
           >
             Все ({stats.total})
@@ -273,10 +270,10 @@ export const AdminInvitesTab: React.FC = () => {
               setStatusFilter('ACTIVE');
               setPage(1);
             }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`h-10 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
               statusFilter === 'ACTIVE'
-                ? 'bg-[#9B6BFF] text-white'
-                : 'text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-[#8B5CF6] text-white shadow-md'
+                : 'text-[#94A3B8] hover:text-[#F8FAFC]'
             }`}
           >
             Активные ({stats.active})
@@ -286,10 +283,10 @@ export const AdminInvitesTab: React.FC = () => {
               setStatusFilter('USED');
               setPage(1);
             }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`h-10 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
               statusFilter === 'USED'
-                ? 'bg-[#9B6BFF] text-white'
-                : 'text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-[#8B5CF6] text-white shadow-md'
+                : 'text-[#94A3B8] hover:text-[#F8FAFC]'
             }`}
           >
             Использованные ({stats.used})
@@ -299,10 +296,10 @@ export const AdminInvitesTab: React.FC = () => {
               setStatusFilter('DISABLED');
               setPage(1);
             }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`h-10 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
               statusFilter === 'DISABLED'
-                ? 'bg-[#9B6BFF] text-white'
-                : 'text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-[#8B5CF6] text-white shadow-md'
+                : 'text-[#94A3B8] hover:text-[#F8FAFC]'
             }`}
           >
             Отключенные ({stats.disabled})
@@ -310,20 +307,20 @@ export const AdminInvitesTab: React.FC = () => {
         </div>
 
         {/* Search */}
-        <form onSubmit={handleSearch} className="flex items-center gap-2">
-          <div className="relative flex-1 md:w-64">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#6B667B]" />
+        <form onSubmit={handleSearch} className="flex items-center gap-2.5">
+          <div className="relative flex-1 md:w-72">
+            <Search className="w-4.5 h-4.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-[#64748B]" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Поиск по коду или username..."
-              className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#14131A] border border-[#252233] text-xs text-[#F3F1F8] placeholder-[#6B667B] focus:outline-none focus:border-[#AC82FF]"
+              className="w-full h-11 pl-10 pr-4 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-sm text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#A78BFA]"
             />
           </div>
           <button
             type="submit"
-            className="px-3 py-2 rounded-xl bg-[#191724] hover:bg-[#252233] border border-[#2E2A40] text-xs font-semibold text-[#F3F1F8] transition-colors"
+            className="h-11 px-5 rounded-xl bg-[#11152A] hover:bg-[#1E2442] border border-[#1E2442] text-sm font-bold text-[#F8FAFC] transition-colors cursor-pointer"
           >
             Найти
           </button>
@@ -331,117 +328,117 @@ export const AdminInvitesTab: React.FC = () => {
       </div>
 
       {/* Invites Table */}
-      <div className="rounded-2xl bg-[#14131A] border border-[#252233] overflow-hidden">
+      <div className="rounded-3xl bg-[#0B0D20] border border-[#1E2442] overflow-hidden shadow-xl">
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 space-y-3">
-            <RefreshCw className="w-7 h-7 text-[#AC82FF] animate-spin" />
-            <span className="text-xs text-[#9A94AA]">Загрузка инвайтов...</span>
+          <div className="flex flex-col items-center justify-center py-24 space-y-3">
+            <RefreshCw className="w-8 h-8 text-[#A78BFA] animate-spin" />
+            <span className="text-sm text-[#94A3B8]">Загрузка инвайтов...</span>
           </div>
         ) : items.length === 0 ? (
-          <div className="p-12 text-center text-xs text-[#9A94AA]">
+          <div className="p-16 text-center text-sm text-[#94A3B8]">
             Инвайт-коды не найдены
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-[#252233] bg-[#191724]/60 text-[#9A94AA]">
-                  <th className="p-3.5 font-semibold">Инвайт-код</th>
-                  <th className="p-3.5 font-semibold">Статус</th>
-                  <th className="p-3.5 font-semibold">Создатель</th>
-                  <th className="p-3.5 font-semibold">Кем использован</th>
-                  <th className="p-3.5 font-semibold">Создан</th>
-                  <th className="p-3.5 font-semibold text-right">Действия</th>
+          <div className="overflow-x-auto max-h-[720px] overflow-y-auto no-scrollbar">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead className="sticky top-0 z-10 bg-[#0B0D20]/95 backdrop-blur-md shadow-sm">
+                <tr className="border-b border-[#1E2442] text-[#94A3B8] font-mono uppercase text-xs">
+                  <th className="py-4 px-5 font-semibold">Инвайт-код</th>
+                  <th className="py-4 px-5 font-semibold">Статус</th>
+                  <th className="py-4 px-5 font-semibold">Создатель</th>
+                  <th className="py-4 px-5 font-semibold">Кем использован</th>
+                  <th className="py-4 px-5 font-semibold">Создан</th>
+                  <th className="py-4 px-5 font-semibold text-right">Действия</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#252233]">
+              <tbody className="divide-y divide-[#1E2442]">
                 {items.map((item) => (
-                  <tr key={item.id} className="hover:bg-[#191724]/40 transition-colors">
+                  <tr key={item.id} className="hover:bg-[#11152A]/80 transition-colors">
                     {/* Code */}
-                    <td className="p-3.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-[#F3F1F8]">{item.code}</span>
+                    <td className="py-4 px-5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-mono font-bold text-base text-[#F8FAFC] tracking-wider">{item.code}</span>
                         <button
                           onClick={() => copyCode(item.code, item.id)}
                           title="Скопировать код"
-                          className="p-1 rounded hover:bg-[#2E2A40] text-[#9A94AA] hover:text-[#F3F1F8] transition-colors"
+                          className="p-1.5 rounded-lg hover:bg-[#1E2442] text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
                         >
                           {copiedCodeId === item.id ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <Check className="w-4 h-4 text-emerald-400" />
                           ) : (
-                            <Copy className="w-3.5 h-3.5" />
+                            <Copy className="w-4 h-4" />
                           )}
                         </button>
                       </div>
                     </td>
 
                     {/* Status */}
-                    <td className="p-3.5">
+                    <td className="py-4 px-5">
                       {item.isUsed ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 inline-flex items-center gap-1">
-                          <Check className="w-3 h-3" />
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 inline-flex items-center gap-1.5">
+                          <Check className="w-3.5 h-3.5" />
                           Использован
                         </span>
                       ) : !item.isActive ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-300 border border-red-500/30 inline-flex items-center gap-1">
-                          <PowerOff className="w-3 h-3" />
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-red-500/15 text-red-300 border border-red-500/30 inline-flex items-center gap-1.5">
+                          <PowerOff className="w-3.5 h-3.5" />
                           Отключен
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400" />
                           Активен
                         </span>
                       )}
                     </td>
 
                     {/* Creator */}
-                    <td className="p-3.5">
+                    <td className="py-4 px-5">
                       {item.creatorUsername ? (
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-[#F3F1F8]">@{item.creatorUsername}</span>
+                          <span className="font-semibold text-[#F8FAFC]">@{item.creatorUsername}</span>
                         </div>
                       ) : (
-                        <span className="text-[#6B667B]">Системный</span>
+                        <span className="text-[#64748B]">Системный</span>
                       )}
                     </td>
 
                     {/* Used By */}
-                    <td className="p-3.5">
+                    <td className="py-4 px-5">
                       {item.usedByUsername ? (
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-[#AC82FF]">@{item.usedByUsername}</span>
-                          <span className="text-[10px] text-[#6B667B]">({formatDate(item.usedAt)})</span>
+                          <span className="font-semibold text-[#A78BFA]">@{item.usedByUsername}</span>
+                          <span className="text-xs text-[#64748B] font-mono">({formatDate(item.usedAt)})</span>
                         </div>
                       ) : (
-                        <span className="text-[#6B667B]">—</span>
+                        <span className="text-[#64748B]">—</span>
                       )}
                     </td>
 
                     {/* Created */}
-                    <td className="p-3.5 text-[#9A94AA]">{formatDate(item.createdAt)}</td>
+                    <td className="py-4 px-5 text-xs sm:text-sm text-[#94A3B8] font-mono">{formatDate(item.createdAt)}</td>
 
                     {/* Actions */}
-                    <td className="p-3.5 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
+                    <td className="py-4 px-5 text-right">
+                      <div className="flex items-center justify-end gap-2">
                         <button
                           onClick={() => handleToggle(item.id)}
                           title={item.isActive ? 'Отключить инвайт' : 'Включить инвайт'}
-                          className={`p-1.5 rounded-lg border transition-colors ${
+                          className={`p-2 rounded-xl border transition-colors cursor-pointer ${
                             item.isActive
-                              ? 'bg-[#191724] hover:bg-red-500/20 text-[#9A94AA] hover:text-red-400 border-[#2E2A40]'
+                              ? 'bg-[#11152A] hover:bg-red-500/20 text-[#94A3B8] hover:text-red-400 border-[#1E2442]'
                               : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
                           }`}
                         >
-                          {item.isActive ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
+                          {item.isActive ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}
                         </button>
 
                         <button
                           onClick={() => handleDelete(item.id)}
                           title="Удалить инвайт"
-                          className="p-1.5 rounded-lg bg-[#191724] hover:bg-red-500/20 text-[#9A94AA] hover:text-red-400 border border-[#2E2A40] transition-colors"
+                          className="p-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/35 transition-colors cursor-pointer"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </td>
@@ -454,22 +451,22 @@ export const AdminInvitesTab: React.FC = () => {
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between p-3.5 border-t border-[#252233] bg-[#191724]/40">
-            <span className="text-xs text-[#9A94AA]">Страница {page} из {totalPages}</span>
-            <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between p-4 sm:p-5 border-t border-[#1E2442] bg-[#11152A]/40">
+            <span className="text-xs sm:text-sm text-[#94A3B8]">Страница {page} из {totalPages}</span>
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page <= 1}
-                className="p-1.5 rounded-lg bg-[#14131A] border border-[#2E2A40] disabled:opacity-40 text-[#F3F1F8]"
+                className="h-10 px-3 rounded-xl bg-[#0B0D20] border border-[#1E2442] disabled:opacity-40 text-[#F8FAFC] flex items-center justify-center cursor-pointer"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <ChevronLeft className="w-5 h-5" />
               </button>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page >= totalPages}
-                className="p-1.5 rounded-lg bg-[#14131A] border border-[#2E2A40] disabled:opacity-40 text-[#F3F1F8]"
+                className="h-10 px-3 rounded-xl bg-[#0B0D20] border border-[#1E2442] disabled:opacity-40 text-[#F8FAFC] flex items-center justify-center cursor-pointer"
               >
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="w-5 h-5" />
               </button>
             </div>
           </div>
@@ -478,66 +475,66 @@ export const AdminInvitesTab: React.FC = () => {
 
       {/* Generate Modal */}
       {showGenModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-[#14131A] border border-[#2E2A40] rounded-2xl p-5 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Ticket className="w-5 h-5 text-[#AC82FF]" />
-                <h4 className="text-sm font-bold text-[#F3F1F8]">Генерация инвайтов (Admin)</h4>
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-[#0B0D20] border border-[#1E2442] rounded-3xl p-6 sm:p-7 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1E2442]">
+              <div className="flex items-center gap-2.5">
+                <Ticket className="w-6 h-6 text-[#A78BFA]" />
+                <h4 className="text-base sm:text-lg font-bold text-[#F8FAFC]">Генерация инвайтов (Admin)</h4>
               </div>
               <button
                 onClick={() => setShowGenModal(false)}
-                className="text-[#9A94AA] hover:text-[#F3F1F8] text-xs font-bold"
+                className="p-2 rounded-xl hover:bg-[#151932] text-[#64748B] hover:text-[#F8FAFC] cursor-pointer"
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleGenerate} className="space-y-3.5">
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#9A94AA]">Количество кодов (1 — 100)</label>
+            <form onSubmit={handleGenerate} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs sm:text-sm font-semibold text-[#94A3B8]">Количество кодов (1 — 100)</label>
                 <input
                   type="number"
                   min={1}
                   max={100}
                   value={genCount}
                   onChange={(e) => setGenCount(parseInt(e.target.value, 10) || 1)}
-                  className="w-full px-3 py-2 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] focus:outline-none focus:border-[#AC82FF]"
+                  className="w-full h-11 px-4 rounded-xl bg-[#11152A] border border-[#1E2442] text-sm text-[#F8FAFC] focus:outline-none focus:border-[#A78BFA] font-mono"
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#9A94AA]">Префикс кода</label>
+              <div className="space-y-1.5">
+                <label className="text-xs sm:text-sm font-semibold text-[#94A3B8]">Префикс кода</label>
                 <input
                   type="text"
                   value={genPrefix}
                   onChange={(e) => setGenPrefix(e.target.value.toUpperCase())}
                   placeholder="DODIK"
-                  className="w-full px-3 py-2 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs font-mono text-[#F3F1F8] focus:outline-none focus:border-[#AC82FF]"
+                  className="w-full h-11 px-4 rounded-xl bg-[#11152A] border border-[#1E2442] text-sm font-mono text-[#F8FAFC] focus:outline-none focus:border-[#A78BFA]"
                 />
               </div>
 
-              <div className="pt-2 flex items-center justify-end gap-2">
+              <div className="pt-2 flex items-center justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={() => setShowGenModal(false)}
-                  className="px-3.5 py-2 rounded-xl bg-[#191724] text-[#9A94AA] hover:text-[#F3F1F8] text-xs font-semibold"
+                  className="h-11 px-5 rounded-xl bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] text-sm font-semibold cursor-pointer"
                 >
                   Закрыть
                 </button>
                 <button
                   type="submit"
                   disabled={generating}
-                  className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+                  className="h-11 px-6 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-sm font-bold flex items-center gap-2 shadow-lg shadow-purple-950/40 cursor-pointer"
                 >
                   {generating ? (
                     <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <RefreshCw className="w-4 h-4 animate-spin" />
                       Генерация...
                     </>
                   ) : (
                     <>
-                      <Sparkles className="w-3.5 h-3.5" />
+                      <Sparkles className="w-4 h-4" />
                       Сгенерировать
                     </>
                   )}
@@ -547,20 +544,20 @@ export const AdminInvitesTab: React.FC = () => {
 
             {/* Generated Codes Output */}
             {generatedCodes.length > 0 && (
-              <div className="pt-3 border-t border-[#252233] space-y-2">
+              <div className="pt-3 border-t border-[#1E2442] space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-emerald-400">
+                  <span className="text-sm font-bold text-emerald-400">
                     Сгенерировано ({generatedCodes.length}):
                   </span>
                   <button
                     onClick={copyBatchAll}
-                    className="text-[11px] font-semibold text-[#AC82FF] hover:text-[#C4A7FF] flex items-center gap-1"
+                    className="text-xs font-bold text-[#A78BFA] hover:text-[#C4A7FF] flex items-center gap-1.5 cursor-pointer"
                   >
-                    {copiedBatch ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    {copiedBatch ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     {copiedBatch ? 'Все скопированы' : 'Скопировать все'}
                   </button>
                 </div>
-                <div className="p-2.5 rounded-xl bg-[#191724] border border-[#2E2A40] max-h-36 overflow-y-auto space-y-1 font-mono text-xs text-[#F3F1F8]">
+                <div className="p-3.5 rounded-2xl bg-[#11152A] border border-[#1E2442] max-h-44 overflow-y-auto space-y-1.5 font-mono text-sm text-[#F8FAFC] custom-scrollbar">
                   {generatedCodes.map((c, i) => (
                     <div key={i} className="flex items-center justify-between">
                       <span>{c}</span>

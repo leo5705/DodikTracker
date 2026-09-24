@@ -14,15 +14,9 @@ import {
   Search,
   Users,
   AlertTriangle,
-  User,
-  ShieldCheck,
   Crown,
-  Eye,
   LogOut,
-  Sparkles,
   Clock,
-  UserCheck,
-  UserX,
   Mail,
   X,
 } from 'lucide-react';
@@ -30,6 +24,12 @@ import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { MediaCard } from '../common/MediaCard.tsx';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
+import {
+  PrimaryButton,
+  SecondaryButton,
+  DestructiveButton,
+  EmptyState,
+} from '../design-system/index.ts';
 
 const CATEGORY_NAMES: Record<string, string> = {
   MOVIES_TV: 'Фильмы и сериалы',
@@ -51,67 +51,67 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
   const [listData, setListData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
-  // Add Item to List search state
+  // Modals state
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showMembersModal, setShowMembersModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [itemToRemove, setItemToRemove] = useState<number | null>(null);
+
+  // Search in Add Media modal
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
   const [addingMediaId, setAddingMediaId] = useState<number | null>(null);
   const [addMediaError, setAddMediaError] = useState<string | null>(null);
 
-  // Manage Members / Collaborators state
-  const [showMembersModal, setShowMembersModal] = useState(false);
+  // Invite member in Members modal
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [memberSearchResults, setMemberSearchResults] = useState<any[]>([]);
   const [searchingMembers, setSearchingMembers] = useState(false);
   const [updatingMemberId, setUpdatingMemberId] = useState<number | null>(null);
   const [memberActionError, setMemberActionError] = useState<string | null>(null);
   const [memberActionSuccess, setMemberActionSuccess] = useState<string | null>(null);
+
+  // Operations state
+  const [deleting, setDeleting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [respondingToInvite, setRespondingToInvite] = useState(false);
 
-  // Delete modals state
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [showLeaveModal, setShowLeaveModal] = useState(false);
-  const [itemToRemove, setItemToRemove] = useState<number | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-
   const fetchList = async () => {
-    setLoading(true);
-    setError(null);
     try {
+      setLoading(true);
+      setError(null);
       const res = await authFetch(`/api/lists/${listId}`);
       if (!res.ok) {
         if (res.status === 403) {
-          throw new Error('Этот список является приватным и доступен только создателю или соавторам');
+          throw new Error('Этот список является приватным и доступен только автору');
         }
         if (res.status === 404) {
-          throw new Error('Список не найден в базе данных');
+          throw new Error('Список не найден');
         }
-        throw new Error('Не удалось загрузить список');
+        throw new Error('Ошибка загрузки списка');
       }
       const data = await res.json();
       setListData(data);
     } catch (err: any) {
-      setError(err.message);
+      console.error('Failed to load list details:', err);
+      setError(err.message || 'Ошибка загрузки');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (listId) {
-      fetchList();
-    }
-  }, [listId, dbUser]);
+    fetchList();
+  }, [listId, dbUser?.id]);
 
-  // Debounced member search
+  // Search users in member modal
   useEffect(() => {
-    if (!memberSearchQuery.trim() || memberSearchQuery.trim().length < 1) {
+    if (!memberSearchQuery.trim() || memberSearchQuery.trim().length < 2) {
       setMemberSearchResults([]);
-      setSearchingMembers(false);
       return;
     }
 
@@ -121,130 +121,136 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
         const res = await authFetch(`/api/users/search?q=${encodeURIComponent(memberSearchQuery.trim())}`);
         if (res.ok) {
           const data = await res.json();
-          const existingMemberIds = new Set((listData?.members || []).map((m: any) => m.userId));
-          const existingPendingIds = new Set((listData?.invitations || []).map((inv: any) => inv.inviteeId));
-          const filtered = (Array.isArray(data) ? data : []).filter(
+          const currentMemberIds = (listData?.members || []).map((m: any) => m.userId);
+          const pendingInviteeIds = (listData?.invitations || []).map((i: any) => i.inviteeId);
+
+          const filtered = (data.users || data || []).filter(
             (u: any) =>
               u.id !== dbUser?.id &&
-              !existingMemberIds.has(u.id) &&
-              !existingPendingIds.has(u.id) &&
-              u.id !== listData?.ownerId
+              u.id !== listData?.ownerId &&
+              !currentMemberIds.includes(u.id) &&
+              !pendingInviteeIds.includes(u.id)
           );
           setMemberSearchResults(filtered);
         }
       } catch (err) {
-        console.error('Member search error:', err);
+        console.error('Search users error:', err);
       } finally {
         setSearchingMembers(false);
       }
-    }, 250);
+    }, 300);
 
     return () => clearTimeout(timer);
-  }, [memberSearchQuery, listData, dbUser]);
-
-  const canEdit = Boolean(listData?.canEdit);
-  const isOwner = Boolean(listData?.isOwner);
-  const userRole = listData?.userRole || null;
-  const isCollaborator = !isOwner && (userRole === 'EDITOR' || userRole === 'VIEWER');
-  const items = Array.isArray(listData?.items) ? listData.items : [];
-  const members = Array.isArray(listData?.members) ? listData.members : [];
-
-  const handleDelete = async () => {
-    setDeleting(true);
-    setActionError(null);
-    try {
-      const res = await authFetch(`/api/lists/${listId}`, { method: 'DELETE' });
-      if (res.ok) {
-        setShowDeleteModal(false);
-        navigate('/lists');
-      } else {
-        const data = await res.json();
-        setActionError(data.error || 'Ошибка удаления списка');
-      }
-    } catch (err) {
-      setActionError('Ошибка при удалении списка');
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  const handleLeaveList = async () => {
-    if (!dbUser) return;
-    try {
-      const res = await authFetch(`/api/lists/${listId}/members/${dbUser.id}`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
-        setShowLeaveModal(false);
-        navigate('/lists');
-      } else {
-        const data = await res.json();
-        setActionError(data.error || 'Ошибка выхода из списка');
-      }
-    } catch (err) {
-      setActionError('Не удалось покинуть список');
-    }
-  };
-
-  const handleRemoveItem = async () => {
-    if (!itemToRemove) return;
-    try {
-      const res = await authFetch(`/api/lists/${listId}/items/${itemToRemove}`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
-        setItemToRemove(null);
-        fetchList();
-      }
-    } catch (err) {
-      console.error('Failed to remove item:', err);
-    }
-  };
+  }, [memberSearchQuery, listData, dbUser?.id]);
 
   const handleSearchMedia = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
+
     setSearching(true);
     setAddMediaError(null);
     try {
-      const res = await authFetch(
-        `/api/media/search?q=${encodeURIComponent(searchQuery.trim())}&listCategory=${listData?.category || 'ALL'}`
-      );
+      const categoryParam = listData?.category ? `&type=${listData.category}` : '';
+      const res = await authFetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}${categoryParam}`);
       if (res.ok) {
         const data = await res.json();
-        setSearchResults(Array.isArray(data) ? data : (data.results || []));
+        setSearchResults(data.results || data || []);
+      } else {
+        const data = await res.json();
+        setAddMediaError(data.error || 'Ошибка при поиске тайтлов');
       }
-    } catch (err) {
-      console.error('Failed to search media:', err);
+    } catch (err: any) {
+      setAddMediaError(err.message || 'Не удалось выполнить поиск');
     } finally {
       setSearching(false);
     }
   };
 
   const handleAddMedia = async (mediaItem: any) => {
-    const mId = mediaItem.id || mediaItem.mediaId;
-    setAddingMediaId(mId);
+    const targetMediaId = mediaItem.id || mediaItem.mediaId;
+    setAddingMediaId(targetMediaId);
     setAddMediaError(null);
+
     try {
       const res = await authFetch(`/api/lists/${listId}/items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mediaId: mId,
-          mediaPayload: mediaItem,
+          mediaId: targetMediaId,
+          externalId: mediaItem.externalId,
+          type: mediaItem.type,
+          title: mediaItem.title,
+          posterUrl: mediaItem.posterUrl,
         }),
       });
+
       if (res.ok) {
-        fetchList();
+        await fetchList();
       } else {
         const data = await res.json();
-        setAddMediaError(data.error || 'Ошибка добавления тайтла');
+        setAddMediaError(data.error || 'Не удалось добавить тайтл');
       }
     } catch (err: any) {
-      console.error('Failed to add item to list:', err);
       setAddMediaError(err.message || 'Ошибка добавления тайтла');
     } finally {
       setAddingMediaId(null);
+    }
+  };
+
+  const handleRemoveItem = async () => {
+    if (!itemToRemove) return;
+
+    try {
+      const res = await authFetch(`/api/lists/${listId}/items/${itemToRemove}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setItemToRemove(null);
+        await fetchList();
+      } else {
+        const data = await res.json();
+        setActionError(data.error || 'Ошибка удаления');
+      }
+    } catch (err: any) {
+      setActionError(err.message || 'Ошибка удаления тайтла');
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    setActionError(null);
+    try {
+      const res = await authFetch(`/api/lists/${listId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setShowDeleteModal(false);
+        navigate('/lists');
+      } else {
+        const data = await res.json();
+        setActionError(data.error || 'Ошибка при удалении списка');
+      }
+    } catch (err: any) {
+      setActionError(err.message || 'Не удалось удалить список');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleLeaveList = async () => {
+    try {
+      const res = await authFetch(`/api/lists/${listId}/leave`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        setShowLeaveModal(false);
+        navigate('/lists');
+      } else {
+        const data = await res.json();
+        setActionError(data.error || 'Ошибка при выходе из списка');
+      }
+    } catch (err: any) {
+      setActionError(err.message || 'Не удалось покинуть список');
     }
   };
 
@@ -349,10 +355,10 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
         fetchList();
       } else {
         const data = await res.json();
-        setMemberActionError(data.error || 'Ошибка изменения роли');
+        setMemberActionError(data.error || 'Ошибка обновления роли');
       }
     } catch (err: any) {
-      setMemberActionError(err.message || 'Ошибка изменения роли');
+      setMemberActionError(err.message || 'Ошибка обновления роли');
     } finally {
       setUpdatingMemberId(null);
     }
@@ -369,14 +375,21 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
         fetchList();
       } else {
         const data = await res.json();
-        setMemberActionError(data.error || 'Ошибка удаления участника');
+        setMemberActionError(data.error || 'Ошибка исключения участника');
       }
     } catch (err: any) {
-      setMemberActionError(err.message || 'Ошибка удаления участника');
+      setMemberActionError(err.message || 'Ошибка исключения участника');
     } finally {
       setUpdatingMemberId(null);
     }
   };
+
+  const isOwner = dbUser && listData && dbUser.id === listData.ownerId;
+  const userRole = listData?.currentUserRole || (isOwner ? 'OWNER' : null);
+  const canEdit = isOwner || userRole === 'EDITOR';
+  const isCollaborator = !isOwner && userRole && userRole !== 'OWNER';
+  const members = listData?.members || [];
+  const items = listData?.items || [];
 
   const handleShare = () => {
     if (navigator.clipboard) {
@@ -389,8 +402,8 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
   if (loading) {
     return (
       <div className="py-32 flex flex-col items-center justify-center space-y-3">
-        <Loader2 className="w-10 h-10 text-[#AC82FF] animate-spin" />
-        <p className="text-xs text-[#9A94AA] font-mono">Загрузка списка...</p>
+        <Loader2 className="w-10 h-10 text-[#8B5CF6] animate-spin" />
+        <p className="text-xs text-[#94A3B8] font-mono">Загрузка списка...</p>
       </div>
     );
   }
@@ -401,15 +414,12 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
         <div className="w-14 h-14 rounded-2xl bg-rose-950/40 border border-rose-800/40 flex items-center justify-center mx-auto text-rose-400">
           <AlertTriangle className="w-7 h-7" />
         </div>
-        <h2 className="text-lg font-bold text-[#F3F1F8] font-mono">Доступ ограничен</h2>
-        <p className="text-xs text-[#9A94AA] leading-relaxed">{error}</p>
+        <h2 className="text-lg font-bold text-[#F8FAFC] font-mono">Доступ ограничен</h2>
+        <p className="text-xs text-[#94A3B8] leading-relaxed">{error}</p>
         <div className="pt-2">
-          <button
-            onClick={() => navigate('/lists')}
-            className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold shadow transition-all"
-          >
+          <PrimaryButton onClick={() => navigate('/lists')}>
             Все списки
-          </button>
+          </PrimaryButton>
         </div>
       </div>
     );
@@ -421,16 +431,16 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <button
           onClick={() => goBack()}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#14131A] hover:bg-[#1F1C2E] border border-[#252233] text-xs font-medium text-[#9A94AA] hover:text-[#F3F1F8] transition-colors"
+          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#11152A] hover:bg-[#151932] border border-[#1E2442] text-xs font-medium text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
           Назад к спискам
         </button>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
             onClick={handleShare}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#14131A] hover:bg-[#1F1C2E] border border-[#252233] text-xs font-medium text-[#9A94AA] hover:text-[#F3F1F8] transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#11152A] hover:bg-[#151932] border border-[#1E2442] text-xs font-medium text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
           >
             {copiedLink ? (
               <>
@@ -451,31 +461,30 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
               setMemberActionError(null);
               setShowMembersModal(true);
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#191724] hover:bg-[#1F1C2E] border border-[#252233] text-xs font-medium text-[#D5D0E3] hover:text-[#F3F1F8] transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#11152A] hover:bg-[#151932] border border-[#1E2442] text-xs font-medium text-[#CBD5E1] hover:text-[#F8FAFC] transition-colors cursor-pointer"
           >
-            <Users className="w-3.5 h-3.5 text-[#AC82FF]" />
+            <Users className="w-3.5 h-3.5 text-[#8B5CF6]" />
             <span>Участники ({members.length})</span>
           </button>
 
           {/* Add Title Button (enabled for both Owner and Editor) */}
           {canEdit && (
-            <button
+            <PrimaryButton
               onClick={() => {
                 setAddMediaError(null);
                 setShowAddModal(true);
               }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold shadow transition-all"
+              icon={<Plus className="w-3.5 h-3.5" />}
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Добавить тайтл</span>
-            </button>
+              Добавить тайтл
+            </PrimaryButton>
           )}
 
           {/* Leave list button for collaborators */}
           {isCollaborator && (
             <button
               onClick={() => setShowLeaveModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-rose-950/40 border border-zinc-800 hover:border-rose-800/40 text-xs font-medium text-zinc-400 hover:text-rose-300 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#11152A] hover:bg-rose-950/40 border border-[#1E2442] hover:border-rose-800/40 text-xs font-medium text-[#94A3B8] hover:text-rose-300 transition-colors cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>Покинуть список</span>
@@ -484,36 +493,35 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
 
           {/* Delete list button for Owner */}
           {isOwner && (
-            <button
+            <DestructiveButton
               onClick={() => setShowDeleteModal(true)}
               disabled={deleting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/50 text-xs font-medium text-rose-300 transition-colors disabled:opacity-50"
+              icon={<Trash2 className="w-3.5 h-3.5" />}
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Удалить</span>
-            </button>
+              Удалить
+            </DestructiveButton>
           )}
         </div>
       </div>
 
       {/* Pending Invitation Banner for Invitee */}
       {listData?.pendingInvitation && (
-        <div className="p-5 rounded-3xl bg-[#191724] border-2 border-[#AC82FF] shadow-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fadeIn">
+        <div className="p-5 rounded-3xl bg-[#11152A] border-2 border-[#8B5CF6] shadow-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fadeIn">
           <div className="flex items-start gap-3.5">
-            <div className="w-10 h-10 rounded-2xl bg-[#9B6BFF]/20 border border-[#9B6BFF]/40 flex items-center justify-center text-[#AC82FF] shrink-0 mt-0.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#8B5CF6]/20 border border-[#8B5CF6]/40 flex items-center justify-center text-[#A78BFA] shrink-0 mt-0.5">
               <Mail className="w-5 h-5" />
             </div>
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-bold text-[#F3F1F8]">
+                <h3 className="text-sm font-bold text-[#F8FAFC]">
                   Приглашение в совместный список
                 </h3>
-                <span className="px-2 py-0.5 rounded-full bg-[#9B6BFF]/20 border border-[#9B6BFF]/40 text-[10px] font-mono font-medium text-[#AC82FF]">
+                <span className="px-2 py-0.5 rounded-full bg-[#8B5CF6]/20 border border-[#8B5CF6]/40 text-[10px] font-mono font-medium text-[#A78BFA]">
                   {listData.pendingInvitation.permission === 'EDITOR' ? 'Редактор' : 'Читатель'}
                 </span>
               </div>
-              <p className="text-xs text-[#9A94AA] leading-relaxed">
-                Пользователь <span className="text-[#AC82FF] font-semibold">@{listData.pendingInvitation.inviterUsername || listData.ownerUsername}</span> приглашает вас стать соавтором этого списка.
+              <p className="text-xs text-[#94A3B8] leading-relaxed">
+                Пользователь <span className="text-[#A78BFA] font-semibold">@{listData.pendingInvitation.inviterUsername || listData.ownerUsername}</span> приглашает вас стать соавтором этого списка.
                 {listData.pendingInvitation.permission === 'EDITOR'
                   ? ' После принятия вы сможете добавлять тайтлы и наполнять коллекцию.'
                   : ' После принятия список появится в вашей библиотеке коллекций.'}
@@ -522,46 +530,40 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0 w-full md:w-auto">
-            <button
+            <PrimaryButton
               onClick={handleAcceptInvitation}
               disabled={respondingToInvite}
-              className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-semibold shadow-lg transition-all disabled:opacity-50"
+              icon={respondingToInvite ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
             >
-              {respondingToInvite ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Check className="w-3.5 h-3.5" />
-              )}
               Принять приглашение
-            </button>
-            <button
+            </PrimaryButton>
+            <SecondaryButton
               onClick={handleDeclineInvitation}
               disabled={respondingToInvite}
-              className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#14131A] hover:bg-rose-950/40 border border-[#252233] hover:border-rose-800/40 text-xs font-medium text-zinc-400 hover:text-rose-300 transition-colors disabled:opacity-50"
             >
               Отклонить
-            </button>
+            </SecondaryButton>
           </div>
         </div>
       )}
 
       {/* Header Card */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-[#14131A] border border-[#252233] space-y-4 shadow-xl">
+      <div className="p-6 sm:p-8 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4 shadow-xl">
         <div className="flex flex-wrap items-center gap-2">
           {/* Category Pill */}
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1F1C2E] border border-[#3A344E] text-xs font-semibold text-[#AC82FF]">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#151932] border border-[#1E2442] text-xs font-semibold text-[#A78BFA]">
             <ListOrdered className="w-3.5 h-3.5" />
             {CATEGORY_NAMES[listData.category] || listData.category || 'Коллекция'}
           </span>
 
           {/* Visibility Pill */}
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-zinc-900/80 border border-zinc-800 text-[11px] text-zinc-400 font-mono">
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#11152A] border border-[#1E2442] text-[11px] text-[#94A3B8] font-mono">
             {listData.visibility === 'PUBLIC' ? (
               <>
                 <Globe className="w-3 h-3 text-emerald-400" />
                 <span>Публичный</span>
               </>
-            ) : listData.visibility === 'FRIENDS' || listData.visibility === 'FRIENDS' ? (
+            ) : listData.visibility === 'FRIENDS' ? (
               <>
                 <Users className="w-3 h-3 text-amber-400" />
                 <span>Для друзей</span>
@@ -576,23 +578,23 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
 
           {/* User Role Badge */}
           {userRole && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#9B6BFF]/20 border border-[#9B6BFF]/40 text-[11px] text-[#AC82FF] font-mono font-medium">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#8B5CF6]/15 border border-[#8B5CF6]/30 text-[11px] text-[#A78BFA] font-mono font-medium">
               {userRole === 'OWNER' ? 'Владелец' : userRole === 'EDITOR' ? 'Редактор' : 'Читатель'}
             </span>
           )}
 
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-zinc-900/80 border border-zinc-800 text-[11px] text-zinc-400 font-mono">
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#11152A] border border-[#1E2442] text-[11px] text-[#94A3B8] font-mono">
             <Calendar className="w-3 h-3" />
             {new Date(listData.createdAt).toLocaleDateString('ru-RU')}
           </span>
         </div>
 
-        <h1 className="text-2xl sm:text-3xl font-black text-[#F3F1F8] font-mono tracking-tight">
+        <h1 className="text-2xl sm:text-3xl font-black text-[#F8FAFC] tracking-tight">
           {listData.title}
         </h1>
 
         {listData.description && (
-          <p className="text-xs sm:text-sm text-[#9A94AA] leading-relaxed max-w-3xl">
+          <p className="text-xs sm:text-sm text-[#94A3B8] leading-relaxed max-w-3xl">
             {listData.description}
           </p>
         )}
@@ -602,16 +604,16 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
           {listData.ownerUsername && (
             <div
               onClick={() => navigate(`/u/${listData.ownerUsername}`)}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#191724] border border-[#252233] hover:border-[#AC82FF]/50 cursor-pointer transition-colors group"
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#11152A] border border-[#1E2442] hover:border-[#8B5CF6]/50 cursor-pointer transition-colors group"
             >
-              <div className="w-6 h-6 rounded-full bg-[#1F1C2E] flex items-center justify-center text-[10px] font-bold text-[#AC82FF] overflow-hidden">
+              <div className="w-6 h-6 rounded-full bg-[#151932] flex items-center justify-center text-[10px] font-bold text-[#A78BFA] overflow-hidden">
                 {listData.ownerAvatar ? (
                   <img src={listData.ownerAvatar} alt={listData.ownerUsername} className="w-full h-full object-cover" />
                 ) : (
                   (listData.ownerUsername?.[0] || 'U').toUpperCase()
                 )}
               </div>
-              <span className="text-xs text-[#9A94AA] group-hover:text-[#AC82FF] font-medium transition-colors flex items-center gap-1">
+              <span className="text-xs text-[#94A3B8] group-hover:text-[#A78BFA] font-medium transition-colors flex items-center gap-1">
                 <Crown className="w-3 h-3 text-amber-400" />
                 @{listData.ownerUsername}
               </span>
@@ -621,10 +623,10 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
           {members.length > 1 && (
             <div
               onClick={() => setShowMembersModal(true)}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#191724] border border-[#252233] hover:border-[#AC82FF]/50 cursor-pointer transition-colors"
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#11152A] border border-[#1E2442] hover:border-[#8B5CF6]/50 cursor-pointer transition-colors"
             >
-              <Users className="w-3.5 h-3.5 text-[#AC82FF]" />
-              <span className="text-xs text-[#9A94AA] font-medium">
+              <Users className="w-3.5 h-3.5 text-[#8B5CF6]" />
+              <span className="text-xs text-[#94A3B8] font-medium">
                 {members.length} участников
               </span>
             </div>
@@ -634,8 +636,8 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
 
       {/* Media Grid */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold text-[#F3F1F8] font-mono">
+        <div className="flex items-center justify-between border-b border-[#1E2442] pb-3">
+          <h2 className="text-base font-bold text-[#F8FAFC] tracking-tight">
             Содержимое списка ({items.length})
           </h2>
           {canEdit && (
@@ -644,7 +646,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                 setAddMediaError(null);
                 setShowAddModal(true);
               }}
-              className="text-xs text-[#AC82FF] hover:underline flex items-center gap-1 font-medium"
+              className="text-xs text-[#A78BFA] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               Добавить тайтл
@@ -653,15 +655,24 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
         </div>
 
         {items.length === 0 ? (
-          <div className="py-16 text-center space-y-3 bg-[#14131A] rounded-3xl border border-[#252233] p-6">
-            <Film className="w-10 h-10 text-zinc-600 mx-auto" />
-            <h3 className="text-sm font-semibold text-[#F3F1F8]">Список пока пуст</h3>
-            <p className="text-xs text-[#9A94AA]">
-              {canEdit
-                ? 'Нажмите кнопку «Добавить тайтл», чтобы наполнить список.'
-                : 'В этой коллекции пока нет добавленных тайтлов.'}
-            </p>
-          </div>
+          <EmptyState
+            icon={<Film className="w-10 h-10 text-[#8B5CF6]" />}
+            title="Список пока пуст"
+            description={
+              canEdit
+                ? 'Нажмите кнопку «Добавить тайтл», чтобы наполнить коллекцию.'
+                : 'В этой коллекции пока нет добавленных тайтлов.'
+            }
+            actionLabel={canEdit ? 'Добавить тайтл' : undefined}
+            onAction={
+              canEdit
+                ? () => {
+                    setAddMediaError(null);
+                    setShowAddModal(true);
+                  }
+                : undefined
+            }
+          />
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {items.map((item: any) => {
@@ -675,15 +686,15 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                         e.stopPropagation();
                         setItemToRemove(item.mediaId || item.id);
                       }}
-                      className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/80 hover:bg-rose-950 text-zinc-400 hover:text-rose-400 border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                      className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/80 hover:bg-rose-950 text-zinc-400 hover:text-rose-400 border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity z-10 cursor-pointer"
                       title="Удалить из списка"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   )}
                   {item.addedByUsername && (
-                    <div className="mt-1.5 px-1 flex items-center gap-1.5 text-[10px] text-[#9A94AA] truncate">
-                      <div className="w-3.5 h-3.5 rounded-full bg-[#1F1C2E] overflow-hidden shrink-0 flex items-center justify-center text-[8px] text-[#AC82FF]">
+                    <div className="mt-1.5 px-1 flex items-center gap-1.5 text-[10px] text-[#94A3B8] truncate">
+                      <div className="w-3.5 h-3.5 rounded-full bg-[#151932] overflow-hidden shrink-0 flex items-center justify-center text-[8px] text-[#A78BFA]">
                         {item.addedByAvatar ? (
                           <img src={item.addedByAvatar} alt={item.addedByUsername} className="w-full h-full object-cover" />
                         ) : (
@@ -691,8 +702,8 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                         )}
                       </div>
                       <span className="truncate">
-                        <span className="text-zinc-500">Добавил </span>
-                        <span className="text-[#AC82FF] font-medium">@{item.addedByUsername}</span>
+                        <span className="text-[#64748B]">Добавил </span>
+                        <span className="text-[#A78BFA] font-medium">@{item.addedByUsername}</span>
                       </span>
                     </div>
                   )}
@@ -706,22 +717,22 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
       {/* Add Media Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="w-full max-w-lg rounded-3xl bg-[#14131A] border border-[#252233] p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-[#252233] pb-3">
+          <div className="w-full max-w-lg rounded-3xl bg-[#0B0D20] border border-[#1E2442] p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#1E2442] pb-3">
               <div>
-                <h3 className="text-sm font-bold text-[#F3F1F8] font-mono flex items-center gap-2">
-                  <Plus className="w-4 h-4 text-[#AC82FF]" />
+                <h3 className="text-sm font-bold text-[#F8FAFC] font-mono flex items-center gap-2">
+                  <Plus className="w-4 h-4 text-[#8B5CF6]" />
                   Добавить тайтл в список
                 </h3>
-                <p className="text-[11px] text-[#9A94AA]">
-                  Категория списка: <span className="text-[#AC82FF] font-medium">{CATEGORY_NAMES[listData.category] || listData.category}</span>
+                <p className="text-[11px] text-[#94A3B8]">
+                  Категория списка: <span className="text-[#A78BFA] font-medium">{CATEGORY_NAMES[listData.category] || listData.category}</span>
                 </p>
               </div>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="text-xs text-[#9A94AA] hover:text-white"
+                className="p-1.5 rounded-xl text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] transition-colors cursor-pointer"
               >
-                Закрыть
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -733,27 +744,27 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
 
             <form onSubmit={handleSearchMedia} className="flex gap-2">
               <div className="relative flex-1">
-                <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-4 h-4 text-[#64748B] absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={`Поиск (${CATEGORY_NAMES[listData.category] || 'тайтлов'})...`}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#191724] border border-[#252233] text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-[#9B6BFF]"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs text-white placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                 />
               </div>
-              <button
+              <PrimaryButton
                 type="submit"
                 disabled={searching}
-                className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-xs font-bold transition-colors disabled:opacity-50"
+                icon={searching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined}
               >
-                {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Искать'}
-              </button>
+                Искать
+              </PrimaryButton>
             </form>
 
             <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
               {searchResults.length === 0 && !searching && searchQuery && (
-                <div className="py-8 text-center text-xs text-zinc-500 font-mono">
+                <div className="py-8 text-center text-xs text-[#64748B] font-mono">
                   Ничего не найдено в категории {CATEGORY_NAMES[listData.category] || listData.category}
                 </div>
               )}
@@ -766,10 +777,10 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                 return (
                   <div
                     key={resItem.id || resItem.mediaId || resItem.externalId}
-                    className="p-2.5 rounded-xl bg-[#191724] border border-[#252233] flex items-center justify-between gap-3"
+                    className="p-2.5 rounded-xl bg-[#11152A] border border-[#1E2442] flex items-center justify-between gap-3"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-9 h-12 rounded bg-zinc-800 overflow-hidden shrink-0">
+                      <div className="w-9 h-12 rounded bg-[#151932] overflow-hidden shrink-0 border border-[#1E2442]">
                         {resItem.posterUrl && (
                           <img
                             src={resItem.posterUrl}
@@ -780,8 +791,8 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                         )}
                       </div>
                       <div className="min-w-0">
-                        <p className="text-xs font-bold text-[#F3F1F8] truncate">{resItem.title}</p>
-                        <p className="text-[10px] text-zinc-500 font-mono">
+                        <p className="text-xs font-bold text-[#F8FAFC] truncate">{resItem.title}</p>
+                        <p className="text-[10px] text-[#64748B] font-mono">
                           {resItem.type} • {resItem.year || '—'}
                         </p>
                       </div>
@@ -789,7 +800,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                     <button
                       onClick={() => handleAddMedia(resItem)}
                       disabled={isAdding || isAlreadyInList}
-                      className="px-3 py-1.5 rounded-lg bg-[#9B6BFF]/20 hover:bg-[#9B6BFF] text-[#AC82FF] hover:text-white text-xs font-medium border border-[#9B6BFF]/40 transition-colors shrink-0 disabled:opacity-50"
+                      className="px-3 py-1.5 rounded-lg bg-[#8B5CF6]/15 hover:bg-[#8B5CF6] text-[#A78BFA] hover:text-white text-xs font-semibold border border-[#8B5CF6]/30 transition-all shrink-0 disabled:opacity-50 cursor-pointer"
                     >
                       {isAdding ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -810,14 +821,14 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
       {/* Manage Members / Collaborators Modal */}
       {showMembersModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="w-full max-w-lg rounded-3xl bg-[#14131A] border border-[#252233] p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-[#252233] pb-3">
+          <div className="w-full max-w-lg rounded-3xl bg-[#0B0D20] border border-[#1E2442] p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-[#1E2442] pb-3">
               <div>
-                <h3 className="text-sm font-bold text-[#F3F1F8] font-mono flex items-center gap-2">
-                  <Users className="w-4 h-4 text-[#AC82FF]" />
+                <h3 className="text-sm font-bold text-[#F8FAFC] font-mono flex items-center gap-2">
+                  <Users className="w-4 h-4 text-[#8B5CF6]" />
                   Участники и соавторы списка
                 </h3>
-                <p className="text-[11px] text-[#9A94AA]">
+                <p className="text-[11px] text-[#94A3B8]">
                   {isOwner
                     ? 'Управляйте правами редакторов и читателей списка'
                     : 'Список пользователей с доступом к совместному редактированию'}
@@ -825,9 +836,9 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
               </div>
               <button
                 onClick={() => setShowMembersModal(false)}
-                className="text-xs text-[#9A94AA] hover:text-white"
+                className="p-1.5 rounded-xl text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] transition-colors cursor-pointer"
               >
-                Закрыть
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -846,55 +857,55 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
 
             {/* If Owner: Search and Invite new collaborator */}
             {isOwner && (
-              <div className="space-y-2 pt-1 pb-2 border-b border-[#252233]">
+              <div className="space-y-2 pt-1 pb-2 border-b border-[#1E2442]">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-[#D5D0E3]">Пригласить соавтора</label>
-                  <span className="text-[10px] text-zinc-500 font-mono">Требуется подтверждение</span>
+                  <label className="text-xs font-semibold text-[#CBD5E1]">Пригласить соавтора</label>
+                  <span className="text-[10px] text-[#64748B] font-mono">Требуется подтверждение</span>
                 </div>
                 <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Search className="w-3.5 h-3.5 text-[#64748B] absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={memberSearchQuery}
                     onChange={(e) => setMemberSearchQuery(e.target.value)}
                     placeholder="Поиск пользователя по логину..."
-                    className="w-full pl-8 pr-8 py-2 rounded-xl bg-[#191724] border border-[#2E2A40] text-xs text-[#F3F1F8] placeholder-zinc-600 focus:outline-none focus:border-[#9B6BFF]"
+                    className="w-full pl-8 pr-8 py-2 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] transition-colors"
                   />
                   {searchingMembers && (
-                    <Loader2 className="w-3.5 h-3.5 text-[#AC82FF] animate-spin absolute right-3 top-1/2 -translate-y-1/2" />
+                    <Loader2 className="w-3.5 h-3.5 text-[#8B5CF6] animate-spin absolute right-3 top-1/2 -translate-y-1/2" />
                   )}
 
                   {/* Dropdown Results */}
                   {memberSearchResults.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1.5 z-20 rounded-xl bg-[#191724] border border-[#2E2A40] shadow-2xl max-h-48 overflow-y-auto p-1.5 space-y-1">
+                    <div className="absolute top-full left-0 right-0 mt-1.5 z-20 rounded-2xl bg-[#11152A] border border-[#1E2442] shadow-2xl max-h-48 overflow-y-auto p-1.5 space-y-1">
                       {memberSearchResults.map((u) => (
                         <div
                           key={u.id}
-                          className="flex items-center justify-between p-2 rounded-lg hover:bg-[#252233] transition-colors gap-2"
+                          className="flex items-center justify-between p-2 rounded-xl hover:bg-[#151932] transition-colors gap-2"
                         >
                           <div className="flex items-center gap-2 min-w-0">
-                            <div className="w-6 h-6 rounded-full bg-[#2E2A40] overflow-hidden shrink-0 flex items-center justify-center text-[10px] text-[#AC82FF] font-bold">
+                            <div className="w-6 h-6 rounded-full bg-[#151932] border border-[#1E2442] overflow-hidden shrink-0 flex items-center justify-center text-[10px] text-[#A78BFA] font-bold">
                               {u.avatar ? (
                                 <img src={u.avatar} alt={u.username} className="w-full h-full object-cover" />
                               ) : (
                                 u.username?.[0]?.toUpperCase() || 'U'
                               )}
                             </div>
-                            <span className="text-xs text-[#F3F1F8] font-medium truncate">@{u.username}</span>
+                            <span className="text-xs text-[#F8FAFC] font-medium truncate">@{u.username}</span>
                           </div>
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             <button
                               onClick={() => handleAddMember(u, 'EDITOR')}
                               disabled={updatingMemberId === u.id}
-                              className="px-2.5 py-1 rounded-lg bg-[#9B6BFF] hover:bg-[#8A55FF] text-white text-[11px] font-medium transition-colors disabled:opacity-50"
+                              className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-[11px] font-bold transition-all disabled:opacity-50 cursor-pointer"
                             >
                               + Редактор
                             </button>
                             <button
                               onClick={() => handleAddMember(u, 'VIEWER')}
                               disabled={updatingMemberId === u.id}
-                              className="px-2.5 py-1 rounded-lg bg-[#191724] hover:bg-[#252233] border border-[#2E2A40] text-[#D5D0E3] text-[11px] font-medium transition-colors disabled:opacity-50"
+                              className="px-2.5 py-1 rounded-lg bg-[#151932] hover:bg-[#191D38] border border-[#1E2442] text-[#CBD5E1] text-[11px] font-medium transition-colors disabled:opacity-50 cursor-pointer"
                             >
                               + Читатель
                             </button>
@@ -909,13 +920,13 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
 
             {/* Pending Invitations list (Owner Only) */}
             {isOwner && listData?.invitations && listData.invitations.length > 0 && (
-              <div className="space-y-2 pt-1 pb-2 border-b border-[#252233]">
+              <div className="space-y-2 pt-1 pb-2 border-b border-[#1E2442]">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-[#D5D0E3] flex items-center gap-1.5">
+                  <label className="text-xs font-semibold text-[#CBD5E1] flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5 text-amber-400" />
                     Ожидают подтверждения ({listData.invitations.length})
                   </label>
-                  <span className="text-[10px] text-zinc-500 font-mono">Приглашение отправлено</span>
+                  <span className="text-[10px] text-[#64748B] font-mono">Приглашение отправлено</span>
                 </div>
                 <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                   {listData.invitations.map((inv: any) => {
@@ -923,10 +934,10 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                     return (
                       <div
                         key={inv.id}
-                        className="flex items-center justify-between p-2.5 rounded-2xl bg-[#191724]/70 border border-dashed border-[#3A344E] gap-3"
+                        className="flex items-center justify-between p-2.5 rounded-2xl bg-[#11152A] border border-dashed border-[#1E2442] gap-3"
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="w-7 h-7 rounded-full bg-[#1F1C2E] flex items-center justify-center text-[10px] font-bold text-[#AC82FF] overflow-hidden shrink-0">
+                          <div className="w-7 h-7 rounded-full bg-[#151932] flex items-center justify-center text-[10px] font-bold text-[#A78BFA] overflow-hidden shrink-0 border border-[#1E2442]">
                             {inv.inviteeAvatar ? (
                               <img src={inv.inviteeAvatar} alt={inv.inviteeUsername} className="w-full h-full object-cover" />
                             ) : (
@@ -935,7 +946,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                           </div>
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <span className="text-xs font-semibold text-[#F3F1F8] truncate">
+                              <span className="text-xs font-semibold text-[#F8FAFC] truncate">
                                 @{inv.inviteeUsername}
                               </span>
                               <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[9px] font-mono flex items-center gap-1">
@@ -943,7 +954,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                                 Ожидает ответа
                               </span>
                             </div>
-                            <span className="text-[10px] text-zinc-500 font-mono">
+                            <span className="text-[10px] text-[#64748B] font-mono">
                               Роль: {inv.permission === 'EDITOR' ? 'Редактор' : 'Читатель'}
                             </span>
                           </div>
@@ -952,7 +963,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                         <button
                           onClick={() => handleRevokeInvitation(inv.id)}
                           disabled={isRevoking}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-950/30 hover:bg-rose-950/60 border border-rose-800/40 text-rose-300 text-[11px] font-medium transition-colors disabled:opacity-50 shrink-0"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-950/30 hover:bg-rose-950/60 border border-rose-800/40 text-rose-300 text-[11px] font-medium transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
                           title="Отозвать приглашение"
                         >
                           {isRevoking ? (
@@ -971,7 +982,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
 
             {/* List of current members */}
             <div className="space-y-2">
-              <label className="text-xs font-semibold text-[#D5D0E3]">Текущие участники ({members.length})</label>
+              <label className="text-xs font-semibold text-[#CBD5E1]">Текущие участники ({members.length})</label>
               <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                 {members.map((m: any) => {
                   const isThisOwner = m.role === 'OWNER';
@@ -981,10 +992,10 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                   return (
                     <div
                       key={m.userId || m.id}
-                      className="flex items-center justify-between p-2.5 rounded-2xl bg-[#191724] border border-[#252233] gap-3"
+                      className="flex items-center justify-between p-2.5 rounded-2xl bg-[#11152A] border border-[#1E2442] gap-3"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-7 h-7 rounded-full bg-[#1F1C2E] flex items-center justify-center text-[10px] font-bold text-[#AC82FF] overflow-hidden shrink-0">
+                        <div className="w-7 h-7 rounded-full bg-[#151932] flex items-center justify-center text-[10px] font-bold text-[#A78BFA] overflow-hidden shrink-0 border border-[#1E2442]">
                           {m.avatar ? (
                             <img src={m.avatar} alt={m.username} className="w-full h-full object-cover" />
                           ) : (
@@ -993,13 +1004,13 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                         </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-semibold text-[#F3F1F8] truncate">@{m.username}</span>
+                            <span className="text-xs font-semibold text-[#F8FAFC] truncate">@{m.username}</span>
                             {isThisOwner && <Crown className="w-3 h-3 text-amber-400 shrink-0" />}
                             {isCurrentSelf && (
-                              <span className="text-[10px] text-zinc-500 font-mono">(вы)</span>
+                              <span className="text-[10px] text-[#64748B] font-mono">(вы)</span>
                             )}
                           </div>
-                          <span className="text-[10px] text-zinc-500 font-mono">
+                          <span className="text-[10px] text-[#64748B] font-mono">
                             {isThisOwner ? 'Создатель списка' : m.role === 'EDITOR' ? 'Редактор' : 'Читатель'}
                           </span>
                         </div>
@@ -1012,7 +1023,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                               value={m.role}
                               disabled={isModifying}
                               onChange={(e) => handleUpdateMemberRole(m.userId, e.target.value as any)}
-                              className="px-2 py-1 rounded-lg bg-[#14131A] border border-[#2E2A40] text-xs text-[#AC82FF] focus:outline-none focus:border-[#9B6BFF] cursor-pointer disabled:opacity-50"
+                              className="px-2 py-1 rounded-lg bg-[#0B0D20] border border-[#1E2442] text-xs text-[#A78BFA] focus:outline-none focus:border-[#8B5CF6] cursor-pointer disabled:opacity-50"
                             >
                               <option value="EDITOR">Редактор</option>
                               <option value="VIEWER">Читатель</option>
@@ -1020,7 +1031,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                             <button
                               onClick={() => handleRemoveMember(m.userId)}
                               disabled={isModifying}
-                              className="p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-950/30 transition-colors disabled:opacity-50"
+                              className="p-1.5 rounded-lg text-[#64748B] hover:text-rose-400 hover:bg-rose-950/30 transition-colors disabled:opacity-50 cursor-pointer"
                               title="Исключить из списка"
                             >
                               {isModifying ? (
@@ -1031,7 +1042,7 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
                             </button>
                           </>
                         ) : (
-                          <span className="text-[11px] px-2.5 py-1 rounded-full bg-[#1F1C2E] border border-[#2E2A40] text-[#AC82FF] font-mono">
+                          <span className="text-[11px] px-2.5 py-1 rounded-full bg-[#151932] border border-[#1E2442] text-[#A78BFA] font-mono">
                             {isThisOwner ? 'Владелец' : m.role === 'EDITOR' ? 'Редактор' : 'Читатель'}
                           </span>
                         )}
@@ -1042,13 +1053,10 @@ export const ListDetailView: React.FC<ListDetailViewProps> = ({ listId }) => {
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[#252233] flex justify-end">
-              <button
-                onClick={() => setShowMembersModal(false)}
-                className="px-4 py-2 rounded-xl bg-[#191724] hover:bg-[#252233] text-xs text-[#F3F1F8] font-medium transition-colors"
-              >
+            <div className="pt-3 border-t border-[#1E2442] flex justify-end">
+              <SecondaryButton onClick={() => setShowMembersModal(false)}>
                 Готово
-              </button>
+              </SecondaryButton>
             </div>
           </div>
         </div>

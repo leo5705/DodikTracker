@@ -69,10 +69,16 @@ export interface SimilarMediaItem {
 export interface MediaVideoItem {
   id?: string | number;
   title?: string;
+  name?: string;
   url: string;
+  embedUrl?: string;
   site?: string;
   key?: string;
   type?: string;
+  thumbnailUrl?: string;
+  language?: string;
+  official?: boolean;
+  publishedAt?: string;
 }
 
 export interface MediaDetailExtended {
@@ -130,7 +136,17 @@ export interface UnifiedSearchFilters {
   // Rating & Votes
   ratingFrom?: number;
   ratingTo?: number;
+  dodikRatingFrom?: number;
+  dodikRatingTo?: number;
+  dodikRatingCountFrom?: number;
   votesFrom?: number;
+
+  // Safety & Adult Content
+  hideAdult?: boolean;
+  hideNudity?: boolean;
+  hideSexualContent?: boolean;
+  hideViolence?: boolean;
+  hideExplicitLanguage?: boolean;
 
   // Genres & Countries
   genres?: string[];
@@ -138,15 +154,26 @@ export interface UnifiedSearchFilters {
 
   // Age & duration
   ageRating?: string;
+  ageRatings?: string[];
+  adultFilter?: 'all' | 'hide_adult' | 'only_adult';
   durationFrom?: number;
   durationTo?: number;
   seasonsCount?: number;
   episodesFrom?: number;
   episodesTo?: number;
 
+  // Personal Library Filters
+  myStatus?: string;
+  inLibrary?: 'any' | 'in_library' | 'not_in_library' | string;
+  myRatingState?: 'any' | 'rated' | 'unrated' | string;
+  myRating?: number;
+  myRatingFrom?: number;
+  myRatingTo?: number;
+  hasReview?: 'any' | 'with_review' | 'without_review' | string;
+
   // Status & Sort
   status?: string;
-  sortBy?: 'popularity' | 'rating' | 'votes' | 'release_date' | 'title' | 'relevance';
+  sortBy?: 'trending' | 'popularity' | 'rating' | 'votes' | 'release_date' | 'title' | 'relevance' | 'dodik_rating' | 'dodik_votes' | string;
   sortOrder?: 'asc' | 'desc';
   page?: number;
   limit?: number;
@@ -161,8 +188,10 @@ export interface UnifiedSearchFilters {
   gameMode?: string;
   developer?: string;
 
-  // Specific to Books / Manga
+  // Specific to Books / Manga / Comics
   author?: string;
+  artist?: string;
+  album?: string;
   publisher?: string;
   language?: string;
 

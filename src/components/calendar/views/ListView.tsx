@@ -62,12 +62,12 @@ export const ListView: React.FC<ListViewProps> = ({
 
   if (items.length === 0) {
     return (
-      <div className="py-20 text-center rounded-3xl bg-[#13121B]/40 border border-dashed border-[#232032] p-8 space-y-3">
-        <Sparkles className="w-8 h-8 text-zinc-600 mx-auto" />
-        <h3 className="text-sm font-semibold text-zinc-300 font-mono">
+      <div className="py-20 text-center rounded-3xl bg-[#0B0D20] border border-dashed border-[#1E2442] p-8 space-y-3">
+        <Sparkles className="w-8 h-8 text-[#64748B] mx-auto" />
+        <h3 className="text-sm font-semibold text-[#CBD5E1] font-mono">
           Релизы не найдены
         </h3>
-        <p className="text-xs text-zinc-500 max-w-sm mx-auto">
+        <p className="text-xs text-[#94A3B8] max-w-sm mx-auto">
           Попробуйте изменить категорию, диапазон дат или сбросить фильтры
         </p>
       </div>
@@ -79,18 +79,18 @@ export const ListView: React.FC<ListViewProps> = ({
       {dateGroups.map((group) => (
         <div key={group.dateStr} className="space-y-3">
           {/* Sticky section header */}
-          <div className="sticky top-0 z-10 py-2 px-3 rounded-xl bg-[#0E0D15]/95 backdrop-blur border border-[#232032] flex items-center justify-between shadow-sm">
+          <div className="sticky top-0 z-10 py-2 px-3.5 rounded-xl bg-[#080A18]/95 backdrop-blur border border-[#1E2442] flex items-center justify-between shadow-md">
             <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-purple-400" />
+              <Calendar className="w-4 h-4 text-[#8B5CF6]" />
               <h3
                 className={`text-xs sm:text-sm font-mono font-bold ${
-                  group.isToday ? 'text-purple-300' : 'text-zinc-200'
+                  group.isToday ? 'text-[#A78BFA]' : 'text-[#F8FAFC]'
                 }`}
               >
                 {group.label}
               </h3>
             </div>
-            <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-semibold">
+            <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-[#8B5CF6]/20 text-[#A78BFA] font-semibold">
               {group.items.length} {group.items.length === 1 ? 'релиз' : 'релизов'}
             </span>
           </div>
@@ -115,11 +115,11 @@ export const ListView: React.FC<ListViewProps> = ({
           <button
             onClick={onLoadMore}
             disabled={isLoadingMore}
-            className="px-6 py-2.5 rounded-xl bg-[#151422] hover:bg-[#1C1A2E] border border-[#2B273F] text-purple-300 hover:text-purple-200 text-xs font-semibold font-mono transition-all inline-flex items-center gap-2 shadow-md"
+            className="px-6 py-2.5 rounded-xl bg-[#11152A] hover:bg-[#151932] border border-[#1E2442] text-[#A78BFA] hover:text-white text-xs font-semibold font-mono transition-all inline-flex items-center gap-2 shadow-md cursor-pointer"
           >
             {isLoadingMore ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+                <Loader2 className="w-4 h-4 animate-spin text-[#8B5CF6]" />
                 <span>Загрузка...</span>
               </>
             ) : (

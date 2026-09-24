@@ -1,4 +1,5 @@
 import { UnifiedContentItem, ContentType, ContentPerson, ContentSeason, ContentTrack, ContentRelation, ContentImage, ContentVideo } from '../types/content.ts';
+import { parseVideo } from './videoUtils.ts';
 
 export function normalizeMediaToUnified(raw: any, fallbackType?: string): UnifiedContentItem {
   if (!raw) {
@@ -173,6 +174,27 @@ export function normalizeMediaToUnified(raw: any, fallbackType?: string): Unifie
     publishers.push({ name: raw.publisher });
   }
 
+  const developers: any[] = [];
+  if (Array.isArray(raw.developers)) {
+    raw.developers.forEach((d: any) => developers.push(typeof d === 'string' ? { name: d } : d));
+  } else if (typeof raw.developer === 'string') {
+    developers.push({ name: raw.developer });
+  }
+
+  const platforms: string[] = [];
+  if (Array.isArray(raw.platforms)) {
+    raw.platforms.forEach((p: any) => platforms.push(typeof p === 'string' ? p : p.name || p.platform?.name || ''));
+  } else if (typeof raw.platforms === 'string') {
+    platforms.push(...raw.platforms.split(',').map((s: string) => s.trim()));
+  }
+
+  const requirements = raw.requirements || (raw.pc_requirements ? {
+    minimum: raw.pc_requirements.minimum,
+    recommended: raw.pc_requirements.recommended,
+  } : undefined);
+
+  const achievements = Array.isArray(raw.achievements) ? raw.achievements : undefined;
+
   const labels: any[] = [];
   if (Array.isArray(raw.labels)) {
     raw.labels.forEach((l: any) => labels.push(typeof l === 'string' ? { name: l } : l));
@@ -264,26 +286,50 @@ export function normalizeMediaToUnified(raw: any, fallbackType?: string): Unifie
     });
   }
 
-  // Videos
+  // Videos & Trailers
   const videos: ContentVideo[] = [];
+  let trailerUrl = raw.trailerUrl || raw.trailer || undefined;
+
   if (Array.isArray(raw.videos)) {
     raw.videos.forEach((v: any) => {
+      const parsed = parseVideo(v);
+      if (parsed.isValid || v.url || v.key) {
+        videos.push({
+          id: v.id || v.key || parsed.videoId,
+          name: v.name || v.title || 'Видео',
+          title: v.title || v.name,
+          url: parsed.canonicalUrl || v.url,
+          embedUrl: parsed.embedUrl || v.embedUrl,
+          key: v.key || parsed.videoId,
+          site: parsed.site !== 'Unknown' ? parsed.site : v.site || 'YouTube',
+          type: v.type || 'Трейлер',
+          thumbnailUrl: parsed.thumbnailUrl || v.thumbnailUrl,
+          official: v.official !== undefined ? Boolean(v.official) : true,
+          publishedAt: v.publishedAt || v.published_at,
+        });
+      }
+    });
+  } else if (trailerUrl) {
+    const parsed = parseVideo(trailerUrl);
+    if (parsed.isValid) {
       videos.push({
-        id: v.id || v.key,
-        name: v.name || v.title || 'Видео',
-        key: v.key,
-        url: v.url,
-        site: v.site || 'YouTube',
-        type: v.type || 'Трейлер',
-        thumbnailUrl: v.thumbnailUrl,
+        id: parsed.videoId || 'trailer-1',
+        name: 'Официальный трейлер',
+        title: 'Официальный трейлер',
+        url: parsed.canonicalUrl || trailerUrl,
+        embedUrl: parsed.embedUrl,
+        key: parsed.videoId,
+        site: parsed.site,
+        type: 'Trailer',
+        thumbnailUrl: parsed.thumbnailUrl,
+        official: true,
       });
-    });
-  } else if (raw.trailerUrl || raw.trailer) {
-    videos.push({
-      name: 'Официальный трейлер',
-      url: raw.trailerUrl || raw.trailer,
-      type: 'Трейлер',
-    });
+    }
+  }
+
+  if (!trailerUrl && videos.length > 0) {
+    const mainTrailer = videos.find((v) => (v.type || '').toLowerCase().includes('trailer') || (v.type || '').toLowerCase().includes('трейлер')) || videos[0];
+    trailerUrl = mainTrailer.url;
   }
 
   return {
@@ -325,6 +371,10 @@ export function normalizeMediaToUnified(raw: any, fallbackType?: string): Unifie
     cast,
     studios,
     publishers,
+    developers,
+    platforms,
+    requirements,
+    achievements,
     labels,
 
     budget: raw.budget,
@@ -345,6 +395,7 @@ export function normalizeMediaToUnified(raw: any, fallbackType?: string): Unifie
     relations,
     screenshots,
     videos,
+    trailerUrl,
     similar: raw.similar || [],
 
     userTracking: raw.userTracking,

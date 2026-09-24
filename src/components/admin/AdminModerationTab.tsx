@@ -76,7 +76,7 @@ export const AdminModerationTab: React.FC = () => {
       const res = await authFetch(`/api/admin/reports/${reportId}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ status: newStatus }),
       });
       if (res.ok) fetchReports();
     } catch (err) {
@@ -123,118 +123,173 @@ export const AdminModerationTab: React.FC = () => {
   const getReasonBadge = (reason: string, targetType?: string) => {
     if (targetType === 'SYSTEM') {
       return (
-        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+        <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
           ОБРАТНАЯ СВЯЗЬ
         </span>
       );
     }
     switch (reason) {
       case 'SPAM':
-        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/20 text-amber-300">СПАМ</span>;
+        return (
+          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-amber-500/20 text-amber-300">
+            СПАМ
+          </span>
+        );
       case 'HARASSMENT':
-        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-500/20 text-red-300">ОСКОРБЛЕНИЯ</span>;
+        return (
+          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-red-500/20 text-red-300">
+            ОСКОРБЛЕНИЯ
+          </span>
+        );
       case 'NSFW':
-        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/20 text-rose-300">18+ / NSFW</span>;
+        return (
+          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-rose-500/20 text-rose-300">
+            18+ / NSFW
+          </span>
+        );
       case 'SPOILER':
-        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/20 text-purple-300">СПОЙЛЕР</span>;
+        return (
+          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-purple-500/20 text-purple-300">
+            СПОЙЛЕР
+          </span>
+        );
       case 'RULES_VIOLATION':
-        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/20 text-indigo-300">ПРАВИЛА</span>;
+        return (
+          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-orange-500/20 text-orange-300">
+            НАРУШЕНИЕ ПРАВИЛ
+          </span>
+        );
+      case 'OTHER':
+        return (
+          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-zinc-700 text-zinc-300">
+            ДРУГОЕ
+          </span>
+        );
       default:
-        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-zinc-800 text-zinc-300">{reason}</span>;
+        return (
+          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-[#1E2442] text-[#CBD5E1]">
+            {reason}
+          </span>
+        );
     }
   };
 
   const getTargetIcon = (type: string) => {
     switch (type) {
       case 'REVIEW':
-        return <FileText className="w-4 h-4 text-emerald-400" />;
+        return <FileText className="w-4 h-4 text-indigo-400" />;
       case 'COMMENT':
-        return <MessageSquare className="w-4 h-4 text-blue-400" />;
+        return <MessageSquare className="w-4 h-4 text-teal-400" />;
+      case 'MESSAGE':
+        return <MessageSquare className="w-4 h-4 text-purple-400" />;
       case 'USER':
-        return <User className="w-4 h-4 text-purple-400" />;
+        return <User className="w-4 h-4 text-amber-400" />;
       case 'LIST':
       case 'TIER_LIST':
-        return <Layers className="w-4 h-4 text-amber-400" />;
+        return <Layers className="w-4 h-4 text-rose-400" />;
+      case 'MEDIA':
+        return <Film className="w-4 h-4 text-sky-400" />;
       case 'SYSTEM':
-        return <AlertTriangle className="w-4 h-4 text-orange-400" />;
+        return <MessageSquare className="w-4 h-4 text-purple-400" />;
       default:
-        return <Film className="w-4 h-4 text-zinc-400" />;
+        return <AlertTriangle className="w-4 h-4 text-amber-400" />;
     }
   };
 
   return (
-    <div className="space-y-5">
-      {/* Header & Filter Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl bg-[#14131A] border border-[#252233]">
-        <div className="flex items-center gap-2">
+    <div className="space-y-5 w-full animate-in fade-in duration-200">
+      {/* Top Filter Bar */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 p-4 sm:p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442]">
+        <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1 lg:pb-0">
           <button
-            onClick={() => { setStatusFilter('PENDING'); setPage(1); }}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+            onClick={() => {
+              setStatusFilter('PENDING');
+              setPage(1);
+            }}
+            className={`h-11 px-4 rounded-xl text-xs sm:text-sm font-bold transition-colors cursor-pointer shrink-0 ${
               statusFilter === 'PENDING'
-                ? 'bg-amber-500 text-black'
-                : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-[#7C3AED] text-white shadow-md'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-white border border-[#1E2442]'
             }`}
           >
-            Новые жалобы
+            Новые (Ожидают)
           </button>
           <button
-            onClick={() => { setStatusFilter('IN_REVIEW'); setPage(1); }}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+            onClick={() => {
+              setStatusFilter('IN_REVIEW');
+              setPage(1);
+            }}
+            className={`h-11 px-4 rounded-xl text-xs sm:text-sm font-bold transition-colors cursor-pointer shrink-0 ${
               statusFilter === 'IN_REVIEW'
-                ? 'bg-blue-500 text-black'
-                : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-blue-500 text-black shadow-md'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-white border border-[#1E2442]'
             }`}
           >
             В работе
           </button>
           <button
-            onClick={() => { setStatusFilter('RESOLVED'); setPage(1); }}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+            onClick={() => {
+              setStatusFilter('RESOLVED');
+              setPage(1);
+            }}
+            className={`h-11 px-4 rounded-xl text-xs sm:text-sm font-bold transition-colors cursor-pointer shrink-0 ${
               statusFilter === 'RESOLVED'
-                ? 'bg-emerald-500 text-black'
-                : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-emerald-500 text-black shadow-md'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-white border border-[#1E2442]'
             }`}
           >
             Решено
           </button>
           <button
-            onClick={() => { setStatusFilter('DISMISSED'); setPage(1); }}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+            onClick={() => {
+              setStatusFilter('DISMISSED');
+              setPage(1);
+            }}
+            className={`h-11 px-4 rounded-xl text-xs sm:text-sm font-bold transition-colors cursor-pointer shrink-0 ${
               statusFilter === 'DISMISSED'
-                ? 'bg-zinc-700 text-white'
-                : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-zinc-700 text-white shadow-md'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-white border border-[#1E2442]'
             }`}
           >
             Отклонённые
           </button>
         </div>
 
-        <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <button
-            onClick={() => { setTargetTypeFilter('ALL'); setPage(1); }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
+            onClick={() => {
+              setTargetTypeFilter('ALL');
+              setPage(1);
+            }}
+            className={`h-11 px-4 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
               targetTypeFilter === 'ALL'
-                ? 'bg-[#252233] text-[#F3F1F8] border border-[#3A344E]'
-                : 'bg-[#0F0E12] text-[#9A94AA] hover:text-[#F3F1F8]'
+                ? 'bg-[#1E2442] text-[#F8FAFC] border border-[#1E2442]'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-[#F8FAFC] border border-[#1E2442]'
             }`}
           >
             Все типы
           </button>
           <button
-            onClick={() => { setTargetTypeFilter('SYSTEM'); setPage(1); }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+            onClick={() => {
+              setTargetTypeFilter('SYSTEM');
+              setPage(1);
+            }}
+            className={`h-11 px-4 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 cursor-pointer ${
               targetTypeFilter === 'SYSTEM'
                 ? 'bg-purple-500/20 text-purple-200 border border-purple-500/40'
-                : 'bg-[#0F0E12] text-[#9A94AA] hover:text-purple-300'
+                : 'bg-[#11152A] text-[#94A3B8] hover:text-purple-300 border border-[#1E2442]'
             }`}
           >
-            <MessageSquare className="w-3.5 h-3.5 text-purple-400" />
+            <MessageSquare className="w-4 h-4 text-purple-400" />
             Обратная связь
           </button>
           <select
             value={targetTypeFilter}
-            onChange={(e) => { setTargetTypeFilter(e.target.value); setPage(1); }}
-            className="px-3 py-1.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+            onChange={(e) => {
+              setTargetTypeFilter(e.target.value);
+              setPage(1);
+            }}
+            className="h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-xs sm:text-sm text-[#F8FAFC] outline-none font-medium cursor-pointer"
           >
             <option value="ALL">Другие фильтры...</option>
             <option value="SYSTEM">Обратная связь (Идеи/Баги)</option>
@@ -249,26 +304,36 @@ export const AdminModerationTab: React.FC = () => {
       </div>
 
       {/* Reports Count Summary */}
-      <div className="text-xs text-[#9A94AA] flex items-center justify-between px-1">
-        <span>В списке: <strong className="text-[#F3F1F8]">{totalCount}</strong> {targetTypeFilter === 'SYSTEM' ? 'обращений' : 'записей'}</span>
-        <span>Страница {page} из {totalPages}</span>
+      <div className="text-xs sm:text-sm text-[#94A3B8] flex items-center justify-between px-1">
+        <span>
+          В списке: <strong className="text-[#F8FAFC]">{totalCount}</strong>{' '}
+          {targetTypeFilter === 'SYSTEM' ? 'обращений' : 'записей'}
+        </span>
+        <span>
+          Страница <strong className="text-[#F8FAFC]">{page}</strong> из{' '}
+          <strong className="text-[#F8FAFC]">{totalPages}</strong>
+        </span>
       </div>
 
       {/* Reports List */}
       {loading ? (
-        <div className="flex flex-col items-center justify-center py-20 space-y-3">
-          <RotateCw className="w-6 h-6 text-[#9B6BFF] animate-spin" />
-          <span className="text-xs text-[#9A94AA]">Загрузка очереди модерации...</span>
+        <div className="flex flex-col items-center justify-center py-24 space-y-3">
+          <RotateCw className="w-8 h-8 text-[#8B5CF6] animate-spin" />
+          <span className="text-sm text-[#94A3B8] font-mono">Загрузка очереди модерации...</span>
         </div>
       ) : error ? (
-        <div className="p-8 text-center text-red-400 text-xs bg-red-500/10 rounded-2xl border border-red-500/20">{error}</div>
+        <div className="p-8 text-center text-red-400 text-sm bg-red-500/10 rounded-2xl border border-red-500/20">
+          {error}
+        </div>
       ) : reports.length === 0 ? (
-        <div className="p-12 text-center rounded-2xl bg-[#14131A] border border-[#252233] text-zinc-500 text-xs space-y-2">
-          <ShieldCheck className="w-10 h-10 mx-auto text-emerald-500/40" />
-          <p className="font-semibold text-zinc-400">
-            {targetTypeFilter === 'SYSTEM' ? 'Нет новых обращений пользователей' : 'В этой категории нет жалоб'}
+        <div className="p-12 text-center rounded-2xl bg-[#0B0D20] border border-[#1E2442] text-zinc-500 text-sm space-y-2">
+          <ShieldCheck className="w-12 h-12 mx-auto text-emerald-500/40" />
+          <p className="font-bold text-zinc-300 text-base">
+            {targetTypeFilter === 'SYSTEM'
+              ? 'Нет новых обращений пользователей'
+              : 'В этой категории нет жалоб'}
           </p>
-          <p className="text-[11px]">
+          <p className="text-xs sm:text-sm text-[#64748B]">
             {targetTypeFilter === 'SYSTEM'
               ? 'Все предложения, сообщения об ошибках и отзывы обработаны.'
               : 'Все обращения успешно обработаны или отсутствуют.'}
@@ -279,15 +344,15 @@ export const AdminModerationTab: React.FC = () => {
           {reports.map((r) => (
             <div
               key={r.id}
-              className="p-5 rounded-2xl bg-[#14131A] border border-[#252233] hover:border-[#3A344E] transition-all space-y-4"
+              className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#1E2442] transition-all space-y-4 shadow-lg"
             >
               {/* Header: Type, Reason, Status, Date */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#252233]/70">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-1.5 rounded-lg bg-[#0F0E12] border border-[#252233]">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-[#1E2442]/70">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-[#11152A] border border-[#1E2442]">
                     {getTargetIcon(r.targetType)}
                   </div>
-                  <span className="font-bold text-xs text-[#F3F1F8]">
+                  <span className="font-bold text-sm sm:text-base text-[#F8FAFC]">
                     {r.targetType === 'SYSTEM'
                       ? `Обращение #${r.id} • ${
                           r.targetId === 'SUGGESTION'
@@ -303,10 +368,10 @@ export const AdminModerationTab: React.FC = () => {
                   {getReasonBadge(r.reason, r.targetType)}
                 </div>
 
-                <div className="flex items-center gap-3 text-xs text-[#9A94AA]">
+                <div className="flex items-center gap-3 text-xs sm:text-sm text-[#94A3B8]">
                   <span>
                     Отправитель:{' '}
-                    <strong className="text-[#F3F1F8]">
+                    <strong className="text-[#F8FAFC]">
                       {r.reporterUsername ? `@${r.reporterUsername}` : 'Аноним'}
                     </strong>
                   </span>
@@ -317,30 +382,30 @@ export const AdminModerationTab: React.FC = () => {
 
               {/* Reported Content / Entity Preview */}
               {r.targetType !== 'SYSTEM' && (
-                <div className="p-3.5 rounded-xl bg-[#0F0E12] border border-[#252233]/70 text-xs space-y-2">
-                  <div className="text-[11px] font-bold text-[#656075] uppercase tracking-wider">
+                <div className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442]/70 text-sm space-y-2.5">
+                  <div className="text-xs font-bold text-[#64748B] uppercase tracking-wider font-mono">
                     Проверяемый объект:
                   </div>
 
                   {r.preview ? (
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       {r.preview.title && (
-                        <div className="font-bold text-indigo-300 text-sm">{r.preview.title}</div>
+                        <div className="font-bold text-indigo-300 text-base">{r.preview.title}</div>
                       )}
                       {r.preview.text && (
-                        <div className="text-[#F3F1F8] leading-relaxed whitespace-pre-wrap bg-[#14131A] p-3 rounded-lg border border-[#252233]">
+                        <div className="text-[#F8FAFC] text-sm leading-relaxed whitespace-pre-wrap bg-[#0B0D20] p-3.5 rounded-xl border border-[#1E2442]">
                           «{r.preview.text}»
                         </div>
                       )}
                       {r.preview.isHidden && (
-                        <div className="text-amber-400 text-[11px] flex items-center gap-1 font-semibold pt-1">
-                          <EyeOff className="w-3.5 h-3.5" />
+                        <div className="text-amber-400 text-xs flex items-center gap-1.5 font-semibold pt-1">
+                          <EyeOff className="w-4 h-4" />
                           Данный объект уже скрыт модератором
                         </div>
                       )}
                     </div>
                   ) : (
-                    <div className="text-[#656075] italic">
+                    <div className="text-[#64748B] italic text-xs sm:text-sm">
                       Объект #{r.targetId} (исходный контент был удален или отсутствует)
                     </div>
                   )}
@@ -349,37 +414,34 @@ export const AdminModerationTab: React.FC = () => {
 
               {/* Reporter's notes / Feedback description */}
               {r.description && (
-                <div
-                  className={`text-xs p-3.5 rounded-xl ${
-                    r.targetType === 'SYSTEM'
-                      ? 'bg-[#191724] border border-[#2E2A40] text-[#F3F1F8]'
-                      : 'bg-amber-500/5 border border-amber-500/20 text-amber-200/90'
-                  }`}
-                >
-                  <span
-                    className={`font-bold block mb-1 ${
-                      r.targetType === 'SYSTEM' ? 'text-[#AC82FF]' : 'text-amber-300'
-                    }`}
-                  >
-                    {r.targetType === 'SYSTEM' ? 'Текст обращения:' : 'Комментарий заявителя:'}
-                  </span>
-                  <p className="whitespace-pre-wrap leading-relaxed">{r.description}</p>
+                <div className="p-4 rounded-2xl bg-[#080A18] border border-[#1E2442] space-y-1.5">
+                  <div className="text-xs font-bold text-[#64748B] uppercase tracking-wider font-mono">
+                    {r.targetType === 'SYSTEM' ? 'Текст сообщения / идеи:' : 'Пояснение заявителя:'}
+                  </div>
+                  <p className="text-sm text-[#CBD5E1] whitespace-pre-wrap leading-relaxed font-sans">
+                    {r.description}
+                  </p>
                 </div>
               )}
 
-              {/* Target User Info & History */}
-              {r.targetUsername && (
-                <div className="flex items-center justify-between text-xs text-[#9A94AA] pt-1">
+              {/* Target Author info */}
+              {r.targetUserId && (
+                <div className="flex items-center justify-between text-xs sm:text-sm text-[#94A3B8] pt-1">
                   <div className="flex items-center gap-2">
-                    <span>Автор контента:</span>
-                    <span className="font-bold text-[#F3F1F8]">@{r.targetUsername}</span>
-                    {r.targetUserWarnings > 0 && (
-                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold text-[10px]">
-                        {r.targetUserWarnings} пред.
+                    <User className="w-4 h-4 text-[#8B5CF6]" />
+                    <span>
+                      Автор контента:{' '}
+                      <strong className="text-[#F8FAFC]">
+                        {r.targetUsername ? `@${r.targetUsername}` : `User #${r.targetUserId}`}
+                      </strong>
+                    </span>
+                    {r.targetUserWarns > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold text-xs font-mono">
+                        {r.targetUserWarns} предупр.
                       </span>
                     )}
                     {r.targetUserBlocked && (
-                      <span className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-bold text-[10px]">
+                      <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-bold text-xs font-mono">
                         Заблокирован
                       </span>
                     )}
@@ -389,11 +451,11 @@ export const AdminModerationTab: React.FC = () => {
 
               {/* Resolution / Action Footer */}
               {r.targetType === 'SYSTEM' ? (
-                <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-[#252233]/60">
+                <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2.5 border-t border-[#1E2442]/60">
                   {r.status === 'PENDING' && (
                     <button
                       onClick={() => handleChangeStatus(r.id, 'IN_REVIEW')}
-                      className="px-3 py-1.5 rounded-xl bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/40 text-blue-300 text-xs font-bold transition-colors"
+                      className="h-10 px-4 rounded-xl bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/40 text-blue-300 text-xs sm:text-sm font-bold transition-colors cursor-pointer"
                     >
                       Взять в работу
                     </button>
@@ -402,31 +464,33 @@ export const AdminModerationTab: React.FC = () => {
                     <>
                       <button
                         onClick={() => handleChangeStatus(r.id, 'RESOLVED')}
-                        className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition-colors"
+                        className="h-10 px-4 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs sm:text-sm font-bold transition-colors cursor-pointer"
                       >
                         Решено
                       </button>
                       <button
                         onClick={() => handleChangeStatus(r.id, 'DISMISSED')}
-                        className="px-3 py-1.5 rounded-xl bg-[#252233] hover:bg-[#322E45] text-xs font-semibold text-[#F3F1F8] transition-colors"
+                        className="h-10 px-4 rounded-xl bg-[#1E2442] hover:bg-[#322E45] text-xs sm:text-sm font-semibold text-[#F8FAFC] transition-colors cursor-pointer"
                       >
                         Закрыть
                       </button>
                     </>
                   )}
                   {['RESOLVED', 'DISMISSED'].includes(r.status) && (
-                    <div className="p-2 rounded-lg bg-[#0F0E12] border border-[#252233] text-xs text-[#9A94AA] flex items-center justify-between w-full">
-                      <span className="text-emerald-400 font-bold">Статус: {r.status === 'RESOLVED' ? 'Решено' : 'Закрыто'}</span>
+                    <div className="p-3 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs sm:text-sm text-[#94A3B8] flex items-center justify-between w-full">
+                      <span className="text-emerald-400 font-bold">
+                        Статус: {r.status === 'RESOLVED' ? 'Решено' : 'Закрыто'}
+                      </span>
                       {r.resolvedAt && <span>{new Date(r.resolvedAt).toLocaleString('ru-RU')}</span>}
                     </div>
                   )}
                 </div>
               ) : r.status === 'PENDING' ? (
-                <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-[#252233]/60">
+                <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2.5 border-t border-[#1E2442]/60">
                   {/* Dismiss */}
                   <button
                     onClick={() => setActionModal({ report: r, actionType: 'DISMISS' })}
-                    className="px-3 py-1.5 rounded-xl bg-[#252233] hover:bg-[#322E45] text-xs font-semibold text-[#F3F1F8] transition-colors"
+                    className="h-10 px-4 rounded-xl bg-[#11152A] border border-[#1E2442] hover:bg-[#1E2442] text-xs sm:text-sm font-semibold text-[#F8FAFC] transition-colors cursor-pointer"
                   >
                     Отклонить жалобу
                   </button>
@@ -434,19 +498,25 @@ export const AdminModerationTab: React.FC = () => {
                   {/* Hide content */}
                   <button
                     onClick={() => setActionModal({ report: r, actionType: 'HIDE_CONTENT' })}
-                    className="px-3 py-1.5 rounded-xl bg-purple-900/40 hover:bg-purple-900/60 border border-purple-500/40 text-purple-200 text-xs font-bold transition-colors flex items-center gap-1.5"
+                    className="h-10 px-4 rounded-xl bg-purple-900/40 hover:bg-purple-900/60 border border-purple-500/40 text-purple-200 text-xs sm:text-sm font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
-                    <EyeOff className="w-3.5 h-3.5" />
+                    <EyeOff className="w-4 h-4" />
                     Скрыть контент
                   </button>
 
                   {/* Warn user */}
                   {r.targetUserId && (
                     <button
-                      onClick={() => setActionModal({ report: r, actionType: 'WARN_USER', warnReason: `Нарушение правил: ${r.reason}` })}
-                      className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold transition-colors flex items-center gap-1.5"
+                      onClick={() =>
+                        setActionModal({
+                          report: r,
+                          actionType: 'WARN_USER',
+                          warnReason: `Нарушение правил: ${r.reason}`,
+                        })
+                      }
+                      className="h-10 px-4 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs sm:text-sm font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
                     >
-                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <AlertTriangle className="w-4 h-4" />
                       Предупредить автора
                     </button>
                   )}
@@ -454,10 +524,12 @@ export const AdminModerationTab: React.FC = () => {
                   {/* Ban user */}
                   {r.targetUserId && (
                     <button
-                      onClick={() => setActionModal({ report: r, actionType: 'BAN_USER', banHours: '24' })}
-                      className="px-3 py-1.5 rounded-xl bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/40 text-orange-300 text-xs font-bold transition-colors flex items-center gap-1.5"
+                      onClick={() =>
+                        setActionModal({ report: r, actionType: 'BAN_USER', banHours: '24' })
+                      }
+                      className="h-10 px-4 rounded-xl bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/40 text-orange-300 text-xs sm:text-sm font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
                     >
-                      <Clock className="w-3.5 h-3.5" />
+                      <Clock className="w-4 h-4" />
                       Временный бан
                     </button>
                   )}
@@ -466,19 +538,23 @@ export const AdminModerationTab: React.FC = () => {
                   {r.targetUserId && (
                     <button
                       onClick={() => setActionModal({ report: r, actionType: 'BLOCK_USER' })}
-                      className="px-3 py-1.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs font-bold transition-colors flex items-center gap-1.5"
+                      className="h-10 px-4 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs sm:text-sm font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
                     >
-                      <Ban className="w-3.5 h-3.5" />
+                      <Ban className="w-4 h-4" />
                       Заблокировать
                     </button>
                   )}
                 </div>
               ) : (
-                <div className="p-3 rounded-xl bg-[#0F0E12] border border-[#252233] text-xs text-[#9A94AA] flex items-center justify-between">
+                <div className="p-3.5 rounded-2xl bg-[#11152A] border border-[#1E2442] text-xs sm:text-sm text-[#94A3B8] flex items-center justify-between">
                   <div>
                     <span className="text-emerald-400 font-bold">Рассмотрено: </span>
                     <span>Действие: {r.actionTaken || 'Решено'}</span>
-                    {r.moderatorNotes && <span className="block text-[11px] text-[#656075] mt-0.5">«{r.moderatorNotes}»</span>}
+                    {r.moderatorNotes && (
+                      <span className="block text-xs text-[#64748B] mt-0.5 font-mono">
+                        «{r.moderatorNotes}»
+                      </span>
+                    )}
                   </div>
                   {r.resolvedAt && <span>{new Date(r.resolvedAt).toLocaleString('ru-RU')}</span>}
                 </div>
@@ -491,8 +567,8 @@ export const AdminModerationTab: React.FC = () => {
       {/* Moderation Action Modal */}
       {actionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-[#14131A] border border-[#252233] rounded-2xl p-6 space-y-4">
-            <h3 className="text-sm font-bold text-[#F3F1F8]">
+          <div className="w-full max-w-md bg-[#0B0D20] border border-[#1E2442] rounded-3xl p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-[#F8FAFC]">
               {actionModal.actionType === 'DISMISS' && 'Отклонить жалобу'}
               {actionModal.actionType === 'HIDE_CONTENT' && 'Скрыть контент из общего доступа'}
               {actionModal.actionType === 'WARN_USER' && 'Вынести предупреждение автору'}
@@ -502,23 +578,25 @@ export const AdminModerationTab: React.FC = () => {
 
             {actionModal.actionType === 'WARN_USER' && (
               <div>
-                <label className="text-xs text-[#9A94AA] block mb-1">Причина предупреждения:</label>
+                <label className="text-xs sm:text-sm text-[#94A3B8] font-semibold block mb-1.5">Причина предупреждения:</label>
                 <input
                   type="text"
                   value={actionModal.warnReason || ''}
-                  onChange={(e) => setActionModal({ ...actionModal, warnReason: e.target.value })}
-                  className="w-full p-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+                  onChange={(e) =>
+                    setActionModal({ ...actionModal, warnReason: e.target.value })
+                  }
+                  className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none"
                 />
               </div>
             )}
 
             {actionModal.actionType === 'BAN_USER' && (
               <div>
-                <label className="text-xs text-[#9A94AA] block mb-1">Срок бана:</label>
+                <label className="text-xs sm:text-sm text-[#94A3B8] font-semibold block mb-1.5">Срок бана:</label>
                 <select
                   value={actionModal.banHours || '24'}
                   onChange={(e) => setActionModal({ ...actionModal, banHours: e.target.value })}
-                  className="w-full p-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+                  className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none"
                 >
                   <option value="6">6 часов</option>
                   <option value="24">24 часа (1 день)</option>
@@ -529,29 +607,31 @@ export const AdminModerationTab: React.FC = () => {
             )}
 
             <div>
-              <label className="text-xs text-[#9A94AA] block mb-1">Заметка модератора (для аудита):</label>
+              <label className="text-xs sm:text-sm text-[#94A3B8] font-semibold block mb-1.5">Заметка модератора (для аудита):</label>
               <textarea
                 value={actionModal.moderatorNotes || ''}
-                onChange={(e) => setActionModal({ ...actionModal, moderatorNotes: e.target.value })}
+                onChange={(e) =>
+                  setActionModal({ ...actionModal, moderatorNotes: e.target.value })
+                }
                 placeholder="Пояснение принятого решения..."
                 rows={2}
-                className="w-full p-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+                className="w-full p-3 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none"
               />
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2.5 pt-2">
               <button
                 onClick={() => setActionModal(null)}
-                className="px-4 py-2 rounded-xl bg-[#252233] hover:bg-[#322E45] text-xs font-semibold text-[#F3F1F8]"
+                className="h-11 px-5 rounded-xl bg-[#11152A] hover:bg-[#1E2442] text-sm font-semibold text-[#F8FAFC] border border-[#1E2442] transition-colors cursor-pointer"
               >
                 Отмена
               </button>
               <button
                 onClick={handleExecuteAction}
                 disabled={actingReportId !== null}
-                className="px-4 py-2 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] text-xs font-bold text-white flex items-center gap-1.5"
+                className="h-11 px-5 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-sm font-bold text-white flex items-center gap-2 transition-colors cursor-pointer shadow-md"
               >
-                {actingReportId !== null && <RotateCw className="w-3.5 h-3.5 animate-spin" />}
+                {actingReportId !== null && <RotateCw className="w-4 h-4 animate-spin" />}
                 Подтвердить
               </button>
             </div>

@@ -27,6 +27,7 @@ export interface DbUser {
   telegramId?: string | null;
   notificationSettings?: Record<string, boolean>;
   invitesLeft: number;
+  pts?: number;
   createdAt: string;
 }
 
@@ -40,6 +41,7 @@ export interface LibraryCounts {
   manga: number;
   comics: number;
   completed: number;
+  pts?: number;
 }
 
 interface AuthContextType {

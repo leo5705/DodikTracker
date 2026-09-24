@@ -93,18 +93,18 @@ export const AdminNotificationsTab: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full animate-in fade-in duration-200">
       {/* Header & Sender Box */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Form: Compose */}
-        <div className="lg:col-span-2 p-5 rounded-2xl bg-[#14131A] border border-[#252233] space-y-4">
-          <div className="flex items-center gap-2.5 pb-2 border-b border-[#252233]">
-            <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-[#AC82FF] flex items-center justify-center">
-              <Bell className="w-4 h-4" />
+        <div className="lg:col-span-2 p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4 shadow-xl">
+          <div className="flex items-center gap-3 pb-3 border-b border-[#1E2442]">
+            <div className="w-11 h-11 rounded-2xl bg-purple-500/15 text-[#A78BFA] flex items-center justify-center">
+              <Bell className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-[#F3F1F8]">Центр рассылки уведомлений</h3>
-              <p className="text-xs text-[#9A94AA]">
+              <h3 className="text-base sm:text-lg font-bold text-[#F8FAFC]">Центр рассылки уведомлений</h3>
+              <p className="text-xs sm:text-sm text-[#94A3B8]">
                 Отправка адресных и массовых системных push-уведомлений на платформе
               </p>
             </div>
@@ -112,59 +112,59 @@ export const AdminNotificationsTab: React.FC = () => {
 
           {feedback && (
             <div
-              className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+              className={`p-4 rounded-2xl text-sm flex items-center gap-2.5 ${
                 feedback.success
                   ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                   : 'bg-red-500/15 text-red-300 border border-red-500/30'
               }`}
             >
-              {feedback.success ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+              {feedback.success ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}
               <span>{feedback.message}</span>
             </div>
           )}
 
-          <form onSubmit={handleSend} className="space-y-3.5">
+          <form onSubmit={handleSend} className="space-y-4">
             {/* Target Select */}
             <div>
-              <label className="text-xs text-[#9A94AA] block mb-1.5 font-semibold">Аудитория получателей:</label>
-              <div className="grid grid-cols-3 gap-2">
+              <label className="text-xs sm:text-sm text-[#94A3B8] block mb-2 font-semibold">Аудитория получателей:</label>
+              <div className="grid grid-cols-3 gap-2.5">
                 <button
                   type="button"
                   onClick={() => setTarget('ALL')}
-                  className={`p-2.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                  className={`h-11 rounded-2xl border text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
                     target === 'ALL'
-                      ? 'bg-[#9B6BFF] text-white border-[#9B6BFF]'
-                      : 'bg-[#0F0E12] text-[#9A94AA] border-[#252233] hover:border-[#3A344E]'
+                      ? 'bg-[#8B5CF6] text-white border-[#8B5CF6] shadow-lg shadow-purple-950/40'
+                      : 'bg-[#11152A] text-[#94A3B8] border-[#1E2442] hover:border-[#8B5CF6]/40'
                   }`}
                 >
                   <Users className="w-4 h-4" />
-                  Все (Broadcast)
+                  <span>Все (Broadcast)</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setTarget('ROLE')}
-                  className={`p-2.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                  className={`h-11 rounded-2xl border text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
                     target === 'ROLE'
-                      ? 'bg-[#9B6BFF] text-white border-[#9B6BFF]'
-                      : 'bg-[#0F0E12] text-[#9A94AA] border-[#252233] hover:border-[#3A344E]'
+                      ? 'bg-[#8B5CF6] text-white border-[#8B5CF6] shadow-lg shadow-purple-950/40'
+                      : 'bg-[#11152A] text-[#94A3B8] border-[#1E2442] hover:border-[#8B5CF6]/40'
                   }`}
                 >
                   <Shield className="w-4 h-4" />
-                  По роли
+                  <span>По роли</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setTarget('SPECIFIC')}
-                  className={`p-2.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                  className={`h-11 rounded-2xl border text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
                     target === 'SPECIFIC'
-                      ? 'bg-[#9B6BFF] text-white border-[#9B6BFF]'
-                      : 'bg-[#0F0E12] text-[#9A94AA] border-[#252233] hover:border-[#3A344E]'
+                      ? 'bg-[#8B5CF6] text-white border-[#8B5CF6] shadow-lg shadow-purple-950/40'
+                      : 'bg-[#11152A] text-[#94A3B8] border-[#1E2442] hover:border-[#8B5CF6]/40'
                   }`}
                 >
                   <User className="w-4 h-4" />
-                  Конкретному
+                  <span>Конкретному</span>
                 </button>
               </div>
             </div>
@@ -172,11 +172,11 @@ export const AdminNotificationsTab: React.FC = () => {
             {/* Target Sub-inputs */}
             {target === 'ROLE' && (
               <div>
-                <label className="text-xs text-[#9A94AA] block mb-1">Выберите целевую роль:</label>
+                <label className="text-xs sm:text-sm text-[#94A3B8] block mb-1.5 font-semibold">Выберите целевую роль:</label>
                 <select
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
-                  className="w-full p-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+                  className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none"
                 >
                   <option value="USER">USER (Все обычные пользователи)</option>
                   <option value="NEWS_EDITOR">NEWS_EDITOR (Редакторы новостей)</option>
@@ -190,61 +190,62 @@ export const AdminNotificationsTab: React.FC = () => {
 
             {target === 'SPECIFIC' && (
               <div>
-                <label className="text-xs text-[#9A94AA] block mb-1">Имя пользователя (username):</label>
+                <label className="text-xs sm:text-sm text-[#94A3B8] block mb-1.5 font-semibold">Имя пользователя (username):</label>
                 <input
                   type="text"
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="Введите никнейм пользователя..."
-                  className="w-full p-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+                  className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none"
                 />
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               <div>
-                <label className="text-xs text-[#9A94AA] block mb-1 font-semibold">Заголовок *</label>
+                <label className="text-xs sm:text-sm text-[#94A3B8] block mb-1.5 font-semibold">Заголовок *</label>
                 <input
                   type="text"
                   required
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Важное системное уведомление..."
-                  className="w-full p-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+                  className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none"
                 />
               </div>
 
               <div>
-                <label className="text-xs text-[#9A94AA] block mb-1 font-semibold">Ссылка перехода (опционально)</label>
+                <label className="text-xs sm:text-sm text-[#94A3B8] block mb-1.5 font-semibold">Ссылка перехода (опционально)</label>
                 <input
                   type="text"
                   value={link}
                   onChange={(e) => setLink(e.target.value)}
                   placeholder="/calendar или https://..."
-                  className="w-full p-2.5 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+                  className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none"
                 />
               </div>
             </div>
 
             <div>
-              <label className="text-xs text-[#9A94AA] block mb-1 font-semibold">Текст сообщения *</label>
+              <label className="text-xs sm:text-sm text-[#94A3B8] block mb-1.5 font-semibold">Текст сообщения *</label>
               <textarea
                 required
                 rows={4}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 placeholder="Текст оповещения для пользователя..."
-                className="w-full p-3 bg-[#0F0E12] border border-[#252233] rounded-xl text-xs text-[#F3F1F8] outline-none"
+                className="w-full p-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none resize-none custom-scrollbar"
               />
             </div>
 
             <div className="pt-1">
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-blue-300 font-medium">
+              <label className="flex items-center gap-2.5 cursor-pointer text-xs sm:text-sm text-blue-300 font-medium">
                 <input
                   type="checkbox"
                   checked={sendTelegram}
                   onChange={(e) => setSendTelegram(e.target.checked)}
+                  className="w-4 h-4 rounded border-[#1E2442] bg-[#11152A] text-[#8B5CF6]"
                 />
                 <span>Дублировать в Telegram (пользователям с привязанным ботом)</span>
               </label>
@@ -254,74 +255,74 @@ export const AdminNotificationsTab: React.FC = () => {
               <button
                 type="submit"
                 disabled={sending || !title.trim() || !body.trim()}
-                className="px-6 py-2.5 rounded-xl bg-[#9B6BFF] hover:bg-[#8B58F8] disabled:opacity-40 text-white text-xs font-bold transition-colors flex items-center gap-2"
+                className="h-11 px-6 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] disabled:opacity-40 text-white text-sm font-bold transition-colors flex items-center gap-2 shadow-lg shadow-purple-950/40 cursor-pointer"
               >
                 {sending ? <RotateCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                Отправить уведомление
+                <span>Отправить уведомление</span>
               </button>
             </div>
           </form>
         </div>
 
         {/* Right: Live Preview Box */}
-        <div className="p-5 rounded-2xl bg-[#14131A] border border-[#252233] flex flex-col justify-between space-y-4">
+        <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] flex flex-col justify-between space-y-4 shadow-xl">
           <div>
-            <h4 className="text-xs font-bold text-[#656075] uppercase tracking-wider mb-3">
+            <h4 className="text-xs font-bold text-[#64748B] uppercase tracking-wider mb-3">
               Предпросмотр уведомления
             </h4>
 
-            <div className="p-4 rounded-xl bg-[#0F0E12] border border-[#252233] space-y-2">
-              <div className="flex items-center gap-2 text-xs font-bold text-[#F3F1F8]">
-                <div className="w-6 h-6 rounded-lg bg-purple-500/20 text-[#AC82FF] flex items-center justify-center shrink-0">
-                  <Bell className="w-3.5 h-3.5" />
+            <div className="p-4 sm:p-5 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-2.5">
+              <div className="flex items-center gap-2.5 text-sm font-bold text-[#F8FAFC]">
+                <div className="w-7 h-7 rounded-lg bg-purple-500/20 text-[#A78BFA] flex items-center justify-center shrink-0">
+                  <Bell className="w-4 h-4" />
                 </div>
                 <span className="truncate">{title.trim() || 'Заголовок оповещения'}</span>
               </div>
 
-              <p className="text-xs text-[#9A94AA] leading-relaxed">
+              <p className="text-xs sm:text-sm text-[#94A3B8] leading-relaxed">
                 {body.trim() || 'Здесь будет отображаться текст уведомления, как его увидит пользователь в панели.'}
               </p>
 
               {link.trim() && (
-                <div className="text-[11px] text-[#AC82FF] flex items-center gap-1 font-semibold pt-1">
-                  <ExternalLink className="w-3 h-3" />
-                  {link.trim()}
+                <div className="text-xs text-[#A78BFA] flex items-center gap-1.5 font-semibold pt-1">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>{link.trim()}</span>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="text-[11px] text-[#656075] border-t border-[#252233] pt-3">
+          <div className="text-xs text-[#64748B] border-t border-[#1E2442] pt-3 leading-relaxed">
             Уведомления сохраняются в базу данных, рассылаются через Server-Sent Events (SSE) в реальном времени и отображаются в колокольчике пользователя.
           </div>
         </div>
       </div>
 
       {/* Recent Notifications Sent */}
-      <div className="p-5 rounded-2xl bg-[#14131A] border border-[#252233] space-y-3">
-        <h3 className="text-sm font-bold text-[#F3F1F8]">История отправленных уведомлений</h3>
+      <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4 shadow-xl">
+        <h3 className="text-base font-bold text-[#F8FAFC]">История отправленных уведомлений</h3>
 
         {loadingHistory ? (
-          <div className="py-8 text-center text-xs text-[#9A94AA]">Загрузка истории...</div>
+          <div className="py-12 text-center text-sm text-[#94A3B8]">Загрузка истории...</div>
         ) : history.length === 0 ? (
-          <div className="py-8 text-center text-xs text-[#656075]">Уведомлений пока не отправлялось</div>
+          <div className="py-12 text-center text-sm text-[#64748B]">Уведомлений пока не отправлялось</div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {history.map((h) => (
               <div
                 key={h.id}
-                className="p-3 rounded-xl bg-[#0F0E12] border border-[#252233]/70 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442] text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
               >
                 <div className="min-w-0">
-                  <div className="font-bold text-[#F3F1F8] flex items-center gap-2">
+                  <div className="font-bold text-base text-[#F8FAFC] flex items-center gap-2">
                     <span>{h.title}</span>
                     {h.recipientUsername && (
-                      <span className="text-[10px] text-[#AC82FF] font-mono">@{h.recipientUsername}</span>
+                      <span className="text-xs text-[#A78BFA] font-mono">@{h.recipientUsername}</span>
                     )}
                   </div>
-                  <p className="text-[#9A94AA] truncate mt-0.5">{h.body}</p>
+                  <p className="text-xs sm:text-sm text-[#94A3B8] truncate mt-0.5">{h.body}</p>
                 </div>
-                <span className="text-[11px] text-[#656075] whitespace-nowrap">
+                <span className="text-xs text-[#64748B] whitespace-nowrap font-mono">
                   {new Date(h.createdAt).toLocaleString('ru-RU')}
                 </span>
               </div>

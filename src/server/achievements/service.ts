@@ -350,6 +350,22 @@ export class AchievementService {
     const [ach] = await db.select().from(achievements).where(eq(achievements.id, achievementId)).limit(1);
     if (!ach) throw new Error('Достижение не найдено');
 
+    // Check if user already has active achievement
+    const [existing] = await db
+      .select()
+      .from(userAchievements)
+      .where(
+        and(
+          eq(userAchievements.userId, userId),
+          eq(userAchievements.achievementId, achievementId)
+        )
+      )
+      .limit(1);
+
+    if (existing && !existing.isRevoked) {
+      throw new Error('У пользователя уже есть это достижение');
+    }
+
     await this.internalGrant(userId, achievementId, 'ADMIN', adminId, reason || 'Выдано администратором');
 
     // Audit log
@@ -420,7 +436,7 @@ export class AchievementService {
 
     // 3. Admin audit log
     const [targetUser] = await db.select({ username: users.username }).from(users).where(eq(users.id, userId)).limit(1);
-    const [ach] = await db.select({ title: achievements.title }).from(achievements).where(eq(achievements.id, achievementId)).limit(1);
+    const [ach] = await db.select({ title: achievements.title, slug: achievements.slug }).from(achievements).where(eq(achievements.id, achievementId)).limit(1);
 
     await db.insert(adminAuditLogs).values({
       userId: adminId,
@@ -429,6 +445,7 @@ export class AchievementService {
         targetUserId: userId,
         targetUsername: targetUser?.username,
         achievementId,
+        achievementSlug: ach?.slug,
         achievementTitle: ach?.title,
         reason,
       }),
@@ -446,7 +463,43 @@ export class AchievementService {
     adminId: number,
     reason?: string
   ): Promise<{ success: boolean; message: string }> {
-    return this.grantToUser(userId, achievementId, adminId, reason || 'Повторная выдача администратором');
+    const [targetUser] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!targetUser) throw new Error('Пользователь не найден');
+
+    const [ach] = await db.select().from(achievements).where(eq(achievements.id, achievementId)).limit(1);
+    if (!ach) throw new Error('Достижение не найдено');
+
+    const [existing] = await db
+      .select()
+      .from(userAchievements)
+      .where(
+        and(
+          eq(userAchievements.userId, userId),
+          eq(userAchievements.achievementId, achievementId)
+        )
+      )
+      .limit(1);
+
+    if (existing && !existing.isRevoked) {
+      throw new Error('У пользователя уже есть это достижение');
+    }
+
+    await this.internalGrant(userId, achievementId, 'ADMIN', adminId, reason || 'Повторная выдача администратором');
+
+    await db.insert(adminAuditLogs).values({
+      userId: adminId,
+      action: 'ACHIEVEMENT_REGRANT',
+      details: JSON.stringify({
+        targetUserId: userId,
+        targetUsername: targetUser.username,
+        achievementId,
+        achievementSlug: ach.slug,
+        achievementTitle: ach.title,
+        reason,
+      }),
+    });
+
+    return { success: true, message: `Достижение «${ach.title}» повторно выдано пользователю ${targetUser.username}` };
   }
 
   /**

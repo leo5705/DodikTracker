@@ -18,6 +18,7 @@ export interface RouteMatch {
     | 'calendar'
     | 'admin'
     | 'achievements'
+    | 'messages'
     | 'profile'
     | 'settings'
     | 'notifications'
@@ -26,6 +27,17 @@ export interface RouteMatch {
     | 'reset-password'
     | 'news'
     | 'news-detail'
+    | 'music-home'
+    | 'music-releases'
+    | 'music-new'
+    | 'music-artists'
+    | 'music-genres'
+    | 'music-search'
+    | 'music-library'
+    | 'music-studio'
+    | 'music-release-editor'
+    | 'music-artist'
+    | 'music-release'
     | 'game-catalog'
     | 'game-detail'
     | 'game-developers'
@@ -116,6 +128,73 @@ export function parseRoute(rawPathname: string): RouteMatch {
       params: { ...queryParams, id: gameDetailMatch[1] },
       pathname: cleanPath,
     };
+  }
+
+  const musicArtistMatch = cleanPath.match(/^\/music\/artist\/([a-zA-Z0-9_.-]+)$/);
+  if (musicArtistMatch) {
+    return {
+      name: 'music-artist',
+      params: { ...queryParams, idOrSlug: musicArtistMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+
+  const musicReleaseMatch = cleanPath.match(/^\/music\/release\/([a-zA-Z0-9_.-]+)$/);
+  if (musicReleaseMatch) {
+    return {
+      name: 'music-release',
+      params: { ...queryParams, idOrSlug: musicReleaseMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+
+  const releaseEditMatch = cleanPath.match(/^\/music\/studio\/releases\/edit\/(\d+)$/);
+  if (releaseEditMatch) {
+    return {
+      name: 'music-release-editor',
+      params: { ...queryParams, mode: 'edit', id: releaseEditMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+
+  if (cleanPath === '/music/studio/releases/new') {
+    return {
+      name: 'music-release-editor',
+      params: { ...queryParams, mode: 'new' },
+      pathname: cleanPath,
+    };
+  }
+
+  if (cleanPath === '/music/studio' || cleanPath === '/music-studio') {
+    return { name: 'music-studio', params: queryParams, pathname: cleanPath };
+  }
+
+  if (cleanPath === '/music/releases') {
+    return { name: 'music-releases', params: queryParams, pathname: cleanPath };
+  }
+
+  if (cleanPath === '/music/new') {
+    return { name: 'music-new', params: queryParams, pathname: cleanPath };
+  }
+
+  if (cleanPath === '/music/artists') {
+    return { name: 'music-artists', params: queryParams, pathname: cleanPath };
+  }
+
+  if (cleanPath === '/music/genres') {
+    return { name: 'music-genres', params: queryParams, pathname: cleanPath };
+  }
+
+  if (cleanPath === '/music/search') {
+    return { name: 'music-search', params: queryParams, pathname: cleanPath };
+  }
+
+  if (cleanPath === '/music/library') {
+    return { name: 'music-library', params: queryParams, pathname: cleanPath };
+  }
+
+  if (cleanPath === '/music') {
+    return { name: 'music-home', params: queryParams, pathname: cleanPath };
   }
 
   // Category-specific Direct Routes: /movies/:id, /anime/:id, /series/:id, /manga/:id, /books/:id, /comics/:id, /music/:id
@@ -244,8 +323,23 @@ export function parseRoute(rawPathname: string): RouteMatch {
     };
   }
 
+  // Messages / Chat: /messages/:userId or /messages
+  const messagesUserMatch = cleanPath.match(/^\/messages\/([a-zA-Z0-9_-]+)$/);
+  if (messagesUserMatch) {
+    return {
+      name: 'messages',
+      params: { ...queryParams, userId: messagesUserMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+  if (cleanPath === '/messages' || cleanPath === '/chat') {
+    return { name: 'messages', params: queryParams, pathname: cleanPath };
+  }
+
   // 6. Top-level tabs
-  if (cleanPath === '/search') return { name: 'search', params: queryParams, pathname: cleanPath };
+  if (cleanPath === '/search' || cleanPath === '/catalog' || cleanPath === '/catalogue') {
+    return { name: 'search', params: queryParams, pathname: cleanPath };
+  }
   if (cleanPath === '/library') return { name: 'library', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/feed') return { name: 'feed', params: queryParams, pathname: cleanPath };
   if (cleanPath === '/friends') return { name: 'friends', params: queryParams, pathname: cleanPath };

@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { RouterProvider, useRouter } from './context/RouterContext.tsx';
 import { NotificationProvider } from './context/NotificationContext.tsx';
-import { Navigation, ActiveTab } from './components/Navigation.tsx';
 import { HomeView } from './components/views/HomeView.tsx';
 import { SearchView } from './components/views/SearchView.tsx';
 import { LibraryView } from './components/views/LibraryView.tsx';
@@ -16,6 +15,7 @@ import { StatisticsView } from './components/views/StatisticsView.tsx';
 import { CalendarView } from './components/views/CalendarView.tsx';
 import { AdminView } from './components/views/AdminView.tsx';
 import { AchievementsView } from './components/views/AchievementsView.tsx';
+import { MessagesView } from './components/views/MessagesView.tsx';
 import { ProfileView } from './components/views/ProfileView.tsx';
 import { SettingsView } from './components/views/SettingsView.tsx';
 import { NotificationCenterView } from './components/views/NotificationCenterView.tsx';
@@ -33,12 +33,25 @@ import { GamePublisherDetailView } from './components/views/GamePublisherDetailV
 import { GameSeriesDetailView } from './components/views/GameSeriesDetailView.tsx';
 import { NewsView } from './components/views/NewsView.tsx';
 import { NewsDetailView } from './components/views/NewsDetailView.tsx';
+import { MusicStudioView } from './components/views/MusicStudioView.tsx';
+import { MusicReleaseEditorView } from './components/views/MusicReleaseEditorView.tsx';
+import { ArtistProfileView } from './components/views/ArtistProfileView.tsx';
+import { MusicReleaseView } from './components/views/MusicReleaseView.tsx';
+import { MusicHomeView } from './components/views/MusicHomeView.tsx';
+import { MusicReleasesView } from './components/views/MusicReleasesView.tsx';
+import { MusicNewReleasesView } from './components/views/MusicNewReleasesView.tsx';
+import { MusicArtistsView } from './components/views/MusicArtistsView.tsx';
+import { MusicGenresView } from './components/views/MusicGenresView.tsx';
+import { MusicSearchView } from './components/views/MusicSearchView.tsx';
+import { MusicLibraryView } from './components/views/MusicLibraryView.tsx';
+import { MusicPlayerProvider } from './context/MusicPlayerContext.tsx';
 import { AuthGatekeeper } from './components/auth/AuthGatekeeper.tsx';
 import { ResetPasswordView } from './components/auth/ResetPasswordView.tsx';
 import { MiniMessenger } from './components/modals/MiniMessenger.tsx';
 import { AnnouncementBanner } from './components/AnnouncementBanner.tsx';
 import { FeedbackModal } from './components/modals/FeedbackModal.tsx';
 import { ShareProvider } from './context/ShareContext.tsx';
+import { AppShell } from './components/design-system/index.ts';
 import { Loader2 } from 'lucide-react';
 
 function MainApp() {
@@ -55,9 +68,9 @@ function MainApp() {
   // If initial auth is resolving, show sleek spinner
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0A090D] flex flex-col items-center justify-center text-[#9A94AA] gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-[#AC82FF]" />
-        <span className="text-xs font-medium tracking-wide">Загрузка Dodik Tracker...</span>
+      <div className="min-h-screen bg-[#080A18] flex flex-col items-center justify-center text-[#94A3B8] gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-[#8B5CF6]" />
+        <span className="text-xs font-semibold tracking-wide font-mono">Загрузка Dodik Tracker...</span>
       </div>
     );
   }
@@ -145,6 +158,9 @@ function MainApp() {
       case 'friends':
         return <FriendsView />;
 
+      case 'messages':
+        return <MessagesView />;
+
       case 'lists':
         return <ListsView />;
 
@@ -171,6 +187,44 @@ function MainApp() {
 
       case 'news-detail':
         return <NewsDetailView key={route.params.slug} slug={route.params.slug} />;
+
+      case 'music-home':
+        return <MusicHomeView />;
+
+      case 'music-releases':
+        return <MusicReleasesView />;
+
+      case 'music-new':
+        return <MusicNewReleasesView />;
+
+      case 'music-artists':
+        return <MusicArtistsView />;
+
+      case 'music-genres':
+        return <MusicGenresView />;
+
+      case 'music-search':
+        return <MusicSearchView />;
+
+      case 'music-library':
+        return <MusicLibraryView />;
+
+      case 'music-studio':
+        return <MusicStudioView />;
+
+      case 'music-release-editor':
+        return (
+          <MusicReleaseEditorView
+            mode={(route.params.mode as 'new' | 'edit') || 'new'}
+            releaseId={route.params.id}
+          />
+        );
+
+      case 'music-artist':
+        return <ArtistProfileView key={route.params.idOrSlug} idOrSlug={route.params.idOrSlug} />;
+
+      case 'music-release':
+        return <MusicReleaseView key={route.params.idOrSlug} idOrSlug={route.params.idOrSlug} />;
 
       case 'notifications':
         return <NotificationCenterView onNavigate={navigate} />;
@@ -219,28 +273,11 @@ function MainApp() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0F0E12] text-[#F3F1F8] flex flex-col md:flex-row antialiased selection:bg-[#9B6BFF] selection:text-white">
-      {/* Desktop Sidebar & Mobile Nav */}
-      <Navigation
-        activeTab="home"
-        setActiveTab={() => {}}
-        selectedCategory={selectedCategory}
-        onSelectCategory={handleSelectCategory}
-        onOpenProfile={() => navigate(dbUser ? `/u/${dbUser.username}` : '/profile')}
-        onOpenSettings={() => navigate('/settings')}
-      />
-
-      {/* Main View Area */}
-      <main className="flex-1 min-w-0 pt-16 md:pt-0 pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-8 px-4 sm:px-6 lg:px-10 max-w-7xl mx-auto w-full">
-        <div className="py-6 sm:py-8">
-          <AnnouncementBanner />
-          {renderView()}
-        </div>
-      </main>
-
-      {/* Mini Messenger globally available for authenticated users */}
+    <AppShell>
+      <AnnouncementBanner />
+      {renderView()}
       {dbUser && <MiniMessenger />}
-    </div>
+    </AppShell>
   );
 }
 
@@ -259,7 +296,9 @@ export default function App() {
       <RouterProvider>
         <NotificationWrapper>
           <ShareProvider>
-            <ErrorBoundary><MainApp /></ErrorBoundary>
+            <MusicPlayerProvider>
+              <ErrorBoundary><MainApp /></ErrorBoundary>
+            </MusicPlayerProvider>
           </ShareProvider>
         </NotificationWrapper>
       </RouterProvider>

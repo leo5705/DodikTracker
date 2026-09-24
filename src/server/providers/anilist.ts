@@ -5,6 +5,7 @@ import {
   MediaDetailExtended,
   MediaCastMember,
   MediaCrewMember,
+  MediaVideoItem,
   SimilarMediaItem,
 } from './types.ts';
 
@@ -263,6 +264,8 @@ export class AniListProvider implements MediaProvider {
             description(asHtml: false)
             format
             status
+            isAdult
+            countryOfOrigin
             episodes
             duration
             chapters
@@ -282,6 +285,11 @@ export class AniListProvider implements MediaProvider {
               year
               month
               day
+            }
+            trailer {
+              id
+              site
+              thumbnail
             }
             studios(isMain: true) {
               nodes {
@@ -450,6 +458,33 @@ export class AniListProvider implements MediaProvider {
           };
         });
 
+      // Trailer & Video
+      const videos: MediaVideoItem[] = [];
+      let trailerUrl: string | undefined;
+
+      if (m.trailer && m.trailer.id) {
+        const tId = String(m.trailer.id).trim();
+        const site = (m.trailer.site || '').toLowerCase() === 'dailymotion' ? 'Dailymotion' : 'YouTube';
+        const url = site === 'YouTube' ? `https://www.youtube.com/watch?v=${tId}` : `https://www.dailymotion.com/video/${tId}`;
+        const embedUrl = site === 'YouTube'
+          ? `https://www.youtube-nocookie.com/embed/${tId}?autoplay=1&rel=0`
+          : `https://www.dailymotion.com/embed/video/${tId}?autoplay=1`;
+        const thumbnail = m.trailer.thumbnail || (site === 'YouTube' ? `https://img.youtube.com/vi/${tId}/hqdefault.jpg` : undefined);
+
+        trailerUrl = url;
+        videos.push({
+          id: tId,
+          title: 'Официальный промо-ролик (PV) / Трейлер',
+          url,
+          embedUrl,
+          site,
+          key: tId,
+          type: 'Trailer',
+          thumbnailUrl: thumbnail,
+          official: true,
+        });
+      }
+
       return {
         provider: 'AniList',
         externalId: String(m.id),
@@ -462,11 +497,14 @@ export class AniListProvider implements MediaProvider {
         year: m.startDate?.year || m.seasonYear || undefined,
         genres: m.genres || [],
         rating: m.averageScore ? Math.round(m.averageScore / 10 * 10) / 10 : undefined,
+        ageRating: m.isAdult ? '18+' : undefined,
         totalEpisodes: m.episodes || m.chapters || undefined,
         cast,
         crew,
         directors: directors.length > 0 ? directors : undefined,
         studios: studios.length > 0 ? studios : undefined,
+        videos: videos.length > 0 ? videos : undefined,
+        trailerUrl,
         criticScore,
         statusText,
         sourceText,

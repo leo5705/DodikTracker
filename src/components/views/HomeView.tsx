@@ -1,539 +1,1105 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Compass,
   Play,
   Flame,
   Radio,
   Dice5,
-  BarChart3,
   Sparkles,
   ArrowRight,
   Plus,
   Star,
   Film,
   Tv,
-  MessageSquare,
   Gamepad2,
   Book,
+  BookOpen,
   Newspaper,
   Calendar,
   User,
   Pin,
   Eye,
-  RotateCw,
+  CheckCircle2,
+  Clock,
+  Trophy,
+  Users,
+  Search,
+  MessageSquare,
+  Bell,
+  ChevronLeft,
+  ChevronRight,
+  TrendingUp,
+  BookmarkPlus,
+  Award,
+  Layers,
+  Activity,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { AddToLibraryModal } from '../modals/AddToLibraryModal.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
-import { formatMediaTypePath } from '../../utils/formatters.ts';
+import { formatMediaTypePath, formatDuration } from '../../utils/formatters.ts';
+import {
+  SectionHeader,
+  MediaCard,
+  PrimaryButton,
+  SecondaryButton,
+  CategoryBadge,
+  RatingBadge,
+  StatusBadge,
+  Avatar,
+  ActivityTimelineItem,
+  NewsCard,
+  ActivityItemSkeleton,
+  NewsCardSkeleton,
+} from '../design-system/index.ts';
 
 interface HomeViewProps {
   onNavigate: (tab: any) => void;
 }
 
+function formatTimeAgo(dateStr?: string | Date | null): string {
+  if (!dateStr) return '';
+  const now = Date.now();
+  const past = new Date(dateStr).getTime();
+  const diffSec = Math.max(0, Math.floor((now - past) / 1000));
+  if (diffSec < 60) return 'только что';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} мин назад`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours} ч назад`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays} дн назад`;
+  return new Date(dateStr).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+}
+
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
   const { dbUser, counts, authFetch } = useAuth();
   const { navigate } = useRouter();
+
+  // State
   const [inProgress, setInProgress] = useState<any[]>([]);
-  const [trending, setTrending] = useState<any[]>([]);
-  const [recentFeed, setRecentFeed] = useState<any[]>([]);
+  const [heroIndex, setHeroIndex] = useState(0);
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [recCategory, setRecCategory] = useState<'ALL' | 'MOVIE' | 'GAME' | 'ANIME'>('ALL');
+  const [friendsFeed, setFriendsFeed] = useState<any[]>([]);
+  const [feedLoading, setFeedLoading] = useState(true);
+  const [userFeed, setUserFeed] = useState<any[]>([]);
+  const [achievementsData, setAchievementsData] = useState<{
+    stats: { total: number; unlocked: number; points: number; percentage: number };
+    latestUnlocked?: any;
+    nextLocked?: any;
+  } | null>(null);
+  const [friendsOnline, setFriendsOnline] = useState<any[]>([]);
   const [latestNews, setLatestNews] = useState<any[]>([]);
   const [newsLoading, setNewsLoading] = useState(true);
+  const [spotlightItem, setSpotlightItem] = useState<any | null>(null);
   const [modalItem, setModalItem] = useState<any | null>(null);
+  const [quickSearchInput, setQuickSearchInput] = useState('');
+  const [updatingProgressId, setUpdatingProgressId] = useState<number | null>(null);
+  const [upcomingReleases, setUpcomingReleases] = useState<any[]>([]);
+  const [upcomingLoading, setUpcomingLoading] = useState(false);
 
-  const handleTrendingClick = async (item: any) => {
-    if (item.mediaId || (typeof item.id === 'number' && !item.provider)) {
-      const id = item.mediaId || item.id;
-      navigate(`/media/${formatMediaTypePath(item.type)}/${id}`);
-      return;
+  // Quick search submit
+  const handleQuickSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (quickSearchInput.trim()) {
+      navigate(`/search?q=${encodeURIComponent(quickSearchInput.trim())}`);
+    } else {
+      navigate('/search');
     }
+  };
+
+  // Fetch In-Progress Media (WATCHING, PLAYING, READING)
+  const fetchInProgress = async () => {
+    if (!dbUser) return;
     try {
-      const res = await fetch('/api/media/ensure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaPayload: item }),
-      });
+      const res = await authFetch('/api/library');
       if (res.ok) {
         const data = await res.json();
-        if (data.media?.id) {
-          navigate(`/media/${formatMediaTypePath(data.media.type)}/${data.media.id}`);
+        const active = data.filter((item: any) =>
+          ['WATCHING', 'PLAYING', 'READING', 'PLAN_TO_WATCH', 'PLAN_TO_PLAY', 'PLAN_TO_READ'].includes(item.status)
+        );
+        // Prioritize strictly active ones
+        const strictlyActive = active.filter((item: any) =>
+          ['WATCHING', 'PLAYING', 'READING'].includes(item.status)
+        );
+        const finalItems = strictlyActive.length > 0 ? strictlyActive : active.slice(0, 6);
+        setInProgress(finalItems);
+      }
+    } catch (_err) {}
+  };
+
+  // Quick +1 progress update
+  const handleIncrementProgress = async (item: any, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!dbUser || !item.userMediaId) return;
+    const nextProg = (item.progress || 0) + 1;
+    setUpdatingProgressId(item.userMediaId);
+    try {
+      const res = await authFetch('/api/library', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mediaId: item.mediaId || item.id,
+          progress: nextProg,
+          status: item.status || 'WATCHING',
+        }),
+      });
+      if (res.ok) {
+        setInProgress((prev) =>
+          prev.map((it) => (it.userMediaId === item.userMediaId ? { ...it, progress: nextProg } : it))
+        );
+      }
+    } catch (_err) {
+    } finally {
+      setUpdatingProgressId(null);
+    }
+  };
+
+  // Fetch Recommendations / Trending
+  const fetchRecommendations = async (type: string = 'ALL') => {
+    try {
+      const endpoint =
+        type === 'ALL'
+          ? '/api/media/trending?type=MOVIE'
+          : `/api/media/trending?type=${type}`;
+      const res = await fetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        const items = Array.isArray(data) ? data : data.results || [];
+        setRecommendations(items.slice(0, 6));
+        if (items.length > 0 && !spotlightItem) {
+          setSpotlightItem(items[0]);
         }
       }
-    } catch (err) {
-      console.error('Failed to resolve trending media:', err);
+    } catch (_err) {}
+  };
+
+  // Fetch Feed (Friends & Community)
+  const fetchFeeds = async () => {
+    setFeedLoading(true);
+    try {
+      // 1. Social friends feed
+      const resFriends = await authFetch('/api/feed?tab=friends&limit=8');
+      if (resFriends.ok) {
+        const data = await resFriends.json();
+        const items = data.activities || (Array.isArray(data) ? data : []);
+        if (items.length > 0) {
+          setFriendsFeed(items.slice(0, 8));
+        } else {
+          // Fallback to all feed if not authenticated or no friends
+          const resAll = await fetch('/api/feed?tab=all&limit=8');
+          if (resAll.ok) {
+            const dataAll = await resAll.json();
+            const itemsAll = dataAll.activities || (Array.isArray(dataAll) ? dataAll : []);
+            setFriendsFeed(itemsAll.slice(0, 8));
+          }
+        }
+      } else {
+        const resAll = await fetch('/api/feed?tab=all&limit=8');
+        if (resAll.ok) {
+          const dataAll = await resAll.json();
+          const itemsAll = dataAll.activities || (Array.isArray(dataAll) ? dataAll : []);
+          setFriendsFeed(itemsAll.slice(0, 8));
+        }
+      }
+    } catch (_err) {
+      setFriendsFeed([]);
+    } finally {
+      setFeedLoading(false);
+    }
+
+    // 2. User personal activity
+    if (dbUser) {
+      try {
+        const resUser = await authFetch('/api/feed?tab=my&limit=5');
+        if (resUser.ok) {
+          const dataUser = await resUser.json();
+          const itemsUser = dataUser.activities || (Array.isArray(dataUser) ? dataUser : []);
+          setUserFeed(itemsUser.slice(0, 5));
+        }
+      } catch (_err) {}
+    }
+  };
+
+  // Fetch Achievements
+  const fetchAchievements = async () => {
+    try {
+      const res = await authFetch('/api/achievements');
+      if (res.ok) {
+        const data = await res.json();
+        const unlockedList = (data.achievements || []).filter((a: any) => a.isUnlocked);
+        const lockedList = (data.achievements || []).filter((a: any) => !a.isUnlocked && !a.isSecret);
+        setAchievementsData({
+          stats: data.stats || { total: 0, unlocked: 0, points: 0, percentage: 0 },
+          latestUnlocked: unlockedList.length > 0 ? unlockedList[unlockedList.length - 1] : null,
+          nextLocked: lockedList.length > 0 ? lockedList[0] : null,
+        });
+      }
+    } catch (_err) {}
+  };
+
+  // Fetch Friends List (Online presence)
+  const fetchFriends = async () => {
+    if (!dbUser) return;
+    try {
+      const res = await authFetch('/api/friends');
+      if (res.ok) {
+        const data = await res.json();
+        setFriendsOnline(Array.isArray(data) ? data.slice(0, 5) : []);
+      }
+    } catch (_err) {}
+  };
+
+  // Fetch News
+  const fetchNews = async () => {
+    setNewsLoading(true);
+    try {
+      const res = await fetch('/api/news?limit=3');
+      if (res.ok) {
+        const data = await res.json();
+        const items = Array.isArray(data) ? data : data.items || [];
+        setLatestNews(items.slice(0, 3));
+      }
+    } catch (_err) {
+      setLatestNews([]);
+    } finally {
+      setNewsLoading(false);
+    }
+  };
+
+  const fetchUpcomingReleases = async () => {
+    try {
+      setUpcomingLoading(true);
+      let res: Response | null = null;
+      try {
+        res = await authFetch('/api/releases?scope=upcoming&limit=6');
+      } catch (_e) {
+        res = await fetch('/api/releases?scope=upcoming&limit=6');
+      }
+      if (res && res.ok) {
+        const data = await res.json();
+        const items = data.releases || data.items || (Array.isArray(data) ? data : []);
+        setUpcomingReleases(items.slice(0, 6));
+      }
+    } catch (_err) {
+      setUpcomingReleases([]);
+    } finally {
+      setUpcomingLoading(false);
     }
   };
 
   useEffect(() => {
-    // 1. Fetch in-progress media if logged in
-    if (dbUser) {
-      authFetch('/api/library?status=WATCHING')
-        .then((res) => (res.ok ? res.json() : []))
-        .then((data) => setInProgress(data.slice(0, 6)))
-        .catch(() => {});
-    }
-
-    // 2. Fetch trending
-    fetch('/api/media/trending?type=MOVIE')
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => {
-        const items = Array.isArray(data) ? data : (data.results || []);
-        setTrending(items.slice(0, 6));
-      })
-      .catch(() => {});
-
-    // 3. Fetch recent activities
-    fetch('/api/feed')
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => setRecentFeed(data.slice(0, 4)))
-      .catch(() => {});
-
-    // 4. Fetch latest published news
-    setNewsLoading(true);
-    fetch('/api/news?limit=3')
-      .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((data) => {
-        const items = Array.isArray(data) ? data : (data.items || []);
-        setLatestNews(items.slice(0, 3));
-      })
-      .catch(() => setLatestNews([]))
-      .finally(() => setNewsLoading(false));
+    fetchInProgress();
+    fetchRecommendations(recCategory);
+    fetchFeeds();
+    fetchAchievements();
+    fetchFriends();
+    fetchNews();
+    fetchUpcomingReleases();
   }, [dbUser]);
 
+  useEffect(() => {
+    fetchRecommendations(recCategory);
+  }, [recCategory]);
+
+  // Determine current active hero item
+  const activeHeroItem =
+    inProgress.length > 0 ? inProgress[heroIndex % inProgress.length] : spotlightItem;
+
+  const handleHeroNavigate = (item: any) => {
+    if (!item) return;
+    const id = item.mediaId || item.id;
+    const type = item.type || 'MOVIE';
+    navigate(`/media/${formatMediaTypePath(type)}/${id}`);
+  };
+
   return (
-    <div className="space-y-8 pb-12">
-      {/* Hero Welcome Banner */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-purple-950/70 via-zinc-900 to-zinc-950 border border-purple-900/40 p-6 sm:p-8 shadow-2xl">
-        <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 rounded-full bg-purple-600/10 blur-3xl pointer-events-none" />
-        <div className="relative z-10 max-w-2xl space-y-4">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-semibold">
-            <Sparkles className="w-3.5 h-3.5" />
-            Социальный медиатрекер нового поколения
-          </div>
+    <div className="space-y-6 sm:space-y-8 pb-16">
+      {/* 1. TOP DASHBOARD GREETING & QUICK BAR */}
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 p-4 sm:p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] shadow-xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-[#8B5CF6]/5 rounded-full blur-3xl pointer-events-none" />
 
-          <h1 className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight">
-            {dbUser ? `С возвращением, ${dbUser.username}!` : 'Добро пожаловать в Dodik Tracker!'}
-          </h1>
-
-          <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
-            Отслеживайте кино, сериалы, игры, аниме и книги. Делитесь впечатлениями с друзьями,
-            создавайте Tier Lists и используйте умную рулетку выбора контента.
-          </p>
-
-          {/* Quick Metrics Bar */}
-          {counts && (
-            <div className="pt-2 grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-              <div className="p-2.5 rounded-xl bg-zinc-900/80 border border-zinc-800">
-                <span className="text-zinc-400 block text-[11px]">Фильмы & ТВ</span>
-                <span className="text-base font-bold text-white font-mono">
-                  {counts.movies + counts.tv}
-                </span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-zinc-900/80 border border-zinc-800">
-                <span className="text-zinc-400 block text-[11px]">Аниме</span>
-                <span className="text-base font-bold text-white font-mono">{counts.anime}</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-zinc-900/80 border border-zinc-800">
-                <span className="text-zinc-400 block text-[11px]">Игры</span>
-                <span className="text-base font-bold text-white font-mono">{counts.games}</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-zinc-900/80 border border-zinc-800">
-                <span className="text-zinc-400 block text-[11px]">Завершено</span>
-                <span className="text-base font-bold text-emerald-400 font-mono">
-                  {counts.completed}
-                </span>
-              </div>
+        {/* User Greeting & Status Info */}
+        <div className="flex items-center gap-3.5 min-w-0">
+          {dbUser ? (
+            <div
+              onClick={() => navigate(`/u/${dbUser.username}`)}
+              className="relative cursor-pointer group shrink-0"
+            >
+              <Avatar src={dbUser.avatar} username={dbUser.username} size="md" />
+              <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-[#0B0D20]" />
+            </div>
+          ) : (
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#7C3AED] to-[#6366F1] flex items-center justify-center text-white shrink-0 shadow-md shadow-[#7C3AED]/20">
+              <Sparkles className="w-5 h-5" />
             </div>
           )}
 
-          <div className="flex flex-wrap gap-2.5 pt-2">
-            <button
-              onClick={() => onNavigate('search')}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-lg shadow-purple-900/40 transition-all"
-            >
-              Искать медиа
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => onNavigate('roulette')}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold border border-zinc-700 transition-all"
-            >
-              <Dice5 className="w-3.5 h-3.5 text-purple-400" />
-              Рулетка выбора
-            </button>
+          <div className="min-w-0 space-y-0.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-base sm:text-lg font-black text-[#F8FAFC] truncate tracking-tight">
+                {dbUser ? `Привет, ${dbUser.username}!` : 'Добро пожаловать в Dodik Tracker'}
+              </h1>
+              {achievementsData?.stats && (
+                <span className="px-2 py-0.5 rounded-full bg-[#151932] border border-[#8B5CF6]/30 text-[11px] font-bold text-[#A78BFA] font-mono tabular-nums flex items-center gap-1">
+                  <Trophy className="w-3 h-3 text-[#A78BFA]" />
+                  {achievementsData.stats.points} PTS
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-[#94A3B8] truncate">
+              {dbUser
+                ? 'Твой персональный медиа-дашборд готов к работе'
+                : 'Сохраняйте, оценивайте и исследуйте фильмы, игры, аниме и книги'}
+            </p>
           </div>
+        </div>
+
+        {/* Center/Right Global Quick Search & Quick Actions */}
+        <div className="flex items-center gap-2.5 flex-1 lg:max-w-xl">
+          <form onSubmit={handleQuickSearchSubmit} className="relative flex-1">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-[#64748B]" />
+            <input
+              type="text"
+              value={quickSearchInput}
+              onChange={(e) => setQuickSearchInput(e.target.value)}
+              placeholder="Поиск по названию, жанру или персоне..."
+              className="w-full h-11 pl-10 pr-24 rounded-xl bg-[#080A18] hover:bg-[#11152A] focus:bg-[#080A18] text-sm text-[#F8FAFC] placeholder-[#64748B] border border-[#1E2442] focus:border-[#8B5CF6] focus:ring-1 focus:ring-[#8B5CF6]/40 transition-all outline-none"
+            />
+            <button
+              type="submit"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-lg bg-[#151932] hover:bg-[#7C3AED] text-xs font-semibold text-[#CBD5E1] hover:text-white transition-colors cursor-pointer border border-[#1E2442]"
+            >
+              Найти
+            </button>
+          </form>
+
+          {/* Quick Roulette trigger */}
+          <button
+            onClick={() => onNavigate('roulette')}
+            className="hidden sm:flex items-center gap-2 h-11 px-4 rounded-xl bg-[#151932] hover:bg-[#191D38] border border-[#1E2442] hover:border-[#8B5CF6]/40 text-xs sm:text-sm font-semibold text-[#A78BFA] hover:text-white transition-all cursor-pointer shrink-0"
+            title="Случайный выбор"
+          >
+            <Dice5 className="w-4.5 h-4.5 text-[#8B5CF6]" />
+            <span className="hidden md:inline">Рулетка</span>
+          </button>
         </div>
       </div>
 
-      {/* In-Progress Section */}
-      {dbUser && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-zinc-100 font-mono flex items-center gap-2">
-              <Play className="w-4 h-4 text-purple-400 fill-purple-400" />
-              СЕЙЧАС СМОТРЮ / ИГРАЮ
-            </h2>
-            <button
-              onClick={() => onNavigate('library')}
-              className="text-xs text-purple-400 hover:text-purple-300 font-medium"
-            >
-              Вся библиотека →
-            </button>
-          </div>
-
-          {inProgress.length > 0 ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              {inProgress.map((item) => (
-                <div
-                  key={item.userMediaId}
-                  className="rounded-xl bg-zinc-900 border border-zinc-800 p-2 space-y-2 hover:border-purple-500/40 transition-all"
-                >
-                  <div
-                    onClick={() => navigate(`/media/${formatMediaTypePath(item.type)}/${item.mediaId}`)}
-                    className="aspect-[2/3] rounded-lg bg-zinc-950 overflow-hidden relative cursor-pointer hover:opacity-90 transition-opacity"
-                  >
-                    {item.posterUrl ? (
-                      <img
-                        src={item.posterUrl}
-                        alt={item.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-400">
-                        Нет постера
-                      </div>
-                    )}
-                  </div>
-                  <div
-                    onClick={() => navigate(`/media/${formatMediaTypePath(item.type)}/${item.mediaId}`)}
-                    className="cursor-pointer"
-                  >
-                    <p className="text-xs font-bold text-zinc-100 line-clamp-1 hover:text-purple-400 transition-colors">{item.title}</p>
-                    <p className="text-[10px] text-zinc-400">Серия {item.progress || 0}</p>
-                  </div>
-                </div>
-              ))}
+      {/* 2. HERO / CONTINUE SECTION (25-30% screen height, compact & atmospheric) */}
+      {activeHeroItem && (
+        <div className="relative rounded-3xl overflow-hidden bg-[#0B0D20] border border-[#1E2442] shadow-2xl group min-h-[260px] sm:min-h-[290px] flex flex-col justify-end">
+          {/* Backdrop Image with gradient overlay */}
+          {activeHeroItem.backdropUrl || activeHeroItem.posterUrl ? (
+            <div className="absolute inset-0 z-0 overflow-hidden">
+              <img
+                src={activeHeroItem.backdropUrl || activeHeroItem.posterUrl}
+                alt={activeHeroItem.title}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover object-center filter brightness-60 scale-105 group-hover:scale-100 transition-transform duration-700 ease-out"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#080A18] via-[#080A18]/85 via-55% to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-r from-[#080A18] via-[#080A18]/70 to-transparent" />
             </div>
           ) : (
-            <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800 text-center space-y-2">
-              <p className="text-xs text-zinc-400">
-                У вас пока нет активных тайтлов в статусе «В процессе».
-              </p>
+            <div className="absolute inset-0 bg-gradient-to-br from-[#151932] via-[#11152A] to-[#080A18]" />
+          )}
+
+          {/* Carousel Selector Controls (if multiple in-progress items) */}
+          {inProgress.length > 1 && (
+            <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 bg-[#080A18]/80 backdrop-blur-md px-2.5 py-1 rounded-xl border border-[#1E2442] text-[11px] font-mono text-[#94A3B8]">
               <button
-                onClick={() => onNavigate('search')}
-                className="text-xs font-semibold text-purple-400 hover:text-purple-300"
+                onClick={() =>
+                  setHeroIndex((prev) => (prev - 1 + inProgress.length) % inProgress.length)
+                }
+                className="p-1 hover:text-[#F8FAFC] transition-colors cursor-pointer"
+                title="Предыдущий тайтл"
               >
-                Найти что посмотреть или сыграть
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span className="tabular-nums font-semibold text-[#A78BFA]">
+                {heroIndex + 1} / {inProgress.length}
+              </span>
+              <button
+                onClick={() => setHeroIndex((prev) => (prev + 1) % inProgress.length)}
+                className="p-1 hover:text-[#F8FAFC] transition-colors cursor-pointer"
+                title="Следующий тайтл"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
+
+          {/* Hero Content Body */}
+          <div className="relative z-10 p-5 sm:p-6 lg:p-7 flex flex-col sm:flex-row items-start sm:items-end gap-5">
+            {/* Poster Thumbnail */}
+            <div
+              onClick={() => handleHeroNavigate(activeHeroItem)}
+              className="w-20 sm:w-28 md:w-32 aspect-[2/3] rounded-2xl overflow-hidden bg-[#11152A] border-2 border-[#1E2442] shadow-2xl shrink-0 cursor-pointer group-hover:border-[#8B5CF6]/50 transition-colors"
+            >
+              {activeHeroItem.posterUrl ? (
+                <img
+                  src={activeHeroItem.posterUrl}
+                  alt={activeHeroItem.title}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-[#64748B]">
+                  <Film className="w-8 h-8" />
+                </div>
+              )}
+            </div>
+
+            {/* Title & Metadata */}
+            <div className="space-y-3 flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <CategoryBadge type={activeHeroItem.type || 'MOVIE'} size="sm" />
+                {activeHeroItem.status ? (
+                  <StatusBadge status={activeHeroItem.status} size="sm" />
+                ) : (
+                  <span className="px-2 py-0.5 rounded-md bg-[#151932] text-[#A78BFA] border border-[#8B5CF6]/30 text-[11px] font-semibold flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-[#A78BFA]" /> Рекомендация
+                  </span>
+                )}
+                {activeHeroItem.year && (
+                  <span className="text-xs text-[#94A3B8] font-mono tabular-nums">
+                    {activeHeroItem.year}
+                  </span>
+                )}
+                {activeHeroItem.rating && (
+                  <RatingBadge rating={activeHeroItem.rating} size="sm" />
+                )}
+              </div>
+
+              <h2
+                onClick={() => handleHeroNavigate(activeHeroItem)}
+                className="text-xl sm:text-2xl lg:text-3xl font-black text-[#F8FAFC] tracking-tight hover:text-[#A78BFA] transition-colors cursor-pointer line-clamp-1"
+              >
+                {activeHeroItem.title}
+              </h2>
+
+              {activeHeroItem.description && (
+                <p className="text-xs sm:text-sm text-[#94A3B8] line-clamp-2 max-w-2xl leading-relaxed">
+                  {activeHeroItem.description}
+                </p>
+              )}
+
+              {/* Progress Bar (if in-progress) */}
+              {activeHeroItem.progress !== undefined && (
+                <div className="space-y-1.5 max-w-md pt-1">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-[#94A3B8]">
+                    <span>Прогресс:</span>
+                    <span className="text-[#A78BFA] font-bold tabular-nums">
+                      {activeHeroItem.progress} {activeHeroItem.totalEpisodes ? `/ ${activeHeroItem.totalEpisodes}` : 'серий / глав'}
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-[#151932] overflow-hidden border border-[#1E2442]">
+                    <div
+                      className="h-full bg-gradient-to-r from-[#7C3AED] to-[#6366F1] rounded-full transition-all duration-300"
+                      style={{
+                        width: activeHeroItem.totalEpisodes
+                          ? `${Math.min(100, Math.round((activeHeroItem.progress / activeHeroItem.totalEpisodes) * 100))}%`
+                          : '40%',
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                <PrimaryButton
+                  onClick={() => handleHeroNavigate(activeHeroItem)}
+                  size="sm"
+                  icon={<Play className="w-3.5 h-3.5 fill-white" />}
+                >
+                  Продолжить
+                </PrimaryButton>
+
+                {activeHeroItem.userMediaId ? (
+                  <>
+                    <SecondaryButton
+                      onClick={(e) => handleIncrementProgress(activeHeroItem, e)}
+                      size="sm"
+                      disabled={updatingProgressId === activeHeroItem.userMediaId}
+                      icon={<Plus className="w-3.5 h-3.5 text-[#A78BFA]" />}
+                    >
+                      +1 прогресс
+                    </SecondaryButton>
+                    <SecondaryButton
+                      onClick={() => setModalItem(activeHeroItem)}
+                      size="sm"
+                    >
+                      Изменить статус
+                    </SecondaryButton>
+                  </>
+                ) : (
+                  <SecondaryButton
+                    onClick={() => setModalItem(activeHeroItem)}
+                    size="sm"
+                    icon={<BookmarkPlus className="w-3.5 h-3.5 text-[#A78BFA]" />}
+                  >
+                    В библиотеку
+                  </SecondaryButton>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* News Section */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-bold text-zinc-100 font-mono flex items-center gap-2">
-            <Newspaper className="w-4 h-4 text-[#9B6BFF]" />
-            НОВОСТИ & АНОНСЫ
-          </h2>
-          <button
-            onClick={() => navigate('/news')}
-            className="text-xs text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 transition-colors"
-          >
-            Все новости →
-          </button>
-        </div>
+      {/* 3. «ПРОДОЛЖИТЬ» (Horizontal In-Progress Shelf) */}
+      {dbUser && inProgress.length > 0 && (
+        <div className="space-y-3.5">
+          <SectionHeader
+            title="Продолжить"
+            icon={<Play className="w-4 h-4 text-[#8B5CF6] fill-[#8B5CF6]" />}
+            actionText="Вся библиотека"
+            onAction={() => onNavigate('library')}
+            count={inProgress.length}
+          />
 
-        {newsLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="p-5 rounded-2xl bg-[#14131A] border border-[#252233] animate-pulse space-y-3">
-                <div className="w-full h-36 bg-zinc-800/50 rounded-xl" />
-                <div className="h-4 bg-zinc-800/60 rounded w-3/4" />
-                <div className="h-3 bg-zinc-800/40 rounded w-full" />
-                <div className="h-3 bg-zinc-800/40 rounded w-1/2" />
-              </div>
-            ))}
-          </div>
-        ) : latestNews.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {latestNews.map((art) => {
-              let tags: string[] = [];
-              try {
-                if (Array.isArray(art.tags)) tags = art.tags;
-                else if (typeof art.tags === 'string') tags = JSON.parse(art.tags);
-              } catch {}
-
-              const articleUrl = `/news/${art.slug || art.id}`;
-
-              return (
-                <div
-                  key={art.id}
-                  onClick={() => navigate(articleUrl)}
-                  className="group cursor-pointer rounded-2xl bg-[#14131A] border border-[#252233] hover:border-[#9B6BFF]/50 overflow-hidden flex flex-col justify-between transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-purple-950/20"
-                >
-                  <div>
-                    {/* Cover Preview */}
-                    <div className="relative w-full h-40 bg-[#0F0E12] overflow-hidden">
-                      {art.cover ? (
-                        <img
-                          src={art.cover}
-                          alt={art.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-zinc-600 bg-gradient-to-br from-[#1C1A27] to-[#121118]">
-                          <Newspaper className="w-10 h-10 text-zinc-500/70" />
-                          <span className="text-[11px] font-medium text-zinc-500 mt-1">Dodik Tracker News</span>
-                        </div>
-                      )}
-
-                      {/* Badges */}
-                      <div className="absolute top-2.5 left-2.5 flex flex-wrap gap-1.5">
-                        {art.isPinned && (
-                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/90 text-black shadow">
-                            <Pin className="w-2.5 h-2.5 fill-black" /> Закреплено
-                          </span>
-                        )}
-                        {art.isFeatured && (
-                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#9B6BFF] text-white shadow">
-                            <Star className="w-2.5 h-2.5 fill-white" /> Главное
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Content */}
-                    <div className="p-4 space-y-2">
-                      <h3 className="font-bold text-sm text-[#F3F1F8] group-hover:text-[#9B6BFF] transition-colors line-clamp-2 leading-snug">
-                        {art.title}
-                      </h3>
-
-                      {art.excerpt ? (
-                        <p className="text-xs text-[#9A94AA] line-clamp-2 leading-relaxed">
-                          {art.excerpt}
-                        </p>
-                      ) : (
-                        <p className="text-xs text-[#9A94AA] line-clamp-2 leading-relaxed">
-                          {art.content ? art.content.replace(/[#*`_>]/g, '').slice(0, 100) : ''}
-                        </p>
-                      )}
-
-                      {/* Tags */}
-                      {tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1 pt-1">
-                          {tags.slice(0, 2).map((tag, idx) => (
-                            <span
-                              key={idx}
-                              className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#1C1A27] text-[#9A94AA] border border-[#252233]"
-                            >
-                              #{tag}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Footer */}
-                  <div className="px-4 py-3 border-t border-[#252233] flex items-center justify-between text-[11px] text-[#9A94AA]">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      {art.authorAvatar ? (
-                        <img
-                          src={art.authorAvatar}
-                          alt={art.authorUsername || 'admin'}
-                          className="w-4 h-4 rounded-full object-cover border border-[#252233] shrink-0"
-                        />
-                      ) : (
-                        <User className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-                      )}
-                      <span className="truncate text-zinc-300 font-medium">
-                        @{art.authorUsername || 'admin'}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-3 shrink-0">
-                      <span className="flex items-center gap-1 text-zinc-400 text-[10px]">
-                        <Eye className="w-3 h-3" />
-                        {art.viewsCount || 0}
-                      </span>
-                      <span className="flex items-center gap-1 text-[10px]">
-                        <Calendar className="w-3 h-3" />
-                        {art.publishedAt
-                          ? new Date(art.publishedAt).toLocaleDateString('ru-RU', {
-                              day: '2-digit',
-                              month: '2-digit',
-                              year: 'numeric',
-                            })
-                          : ''}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="p-8 rounded-2xl bg-[#14131A] border border-[#252233] text-center space-y-2">
-            <Newspaper className="w-8 h-8 mx-auto text-zinc-600" />
-            <p className="font-semibold text-sm text-zinc-300">Пока нет новостей</p>
-            <p className="text-xs text-zinc-500 max-w-sm mx-auto">
-              Здесь будут публиковаться свежие анонсы платформы, обновления каталога и важные события.
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Trending Section */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-bold text-zinc-100 font-mono flex items-center gap-2">
-            <Flame className="w-4 h-4 text-amber-500 fill-amber-500" />
-            ТРЕНДЫ & ПОПУЛЯРНОЕ
-          </h2>
-          <button
-            onClick={() => onNavigate('search')}
-            className="text-xs text-purple-400 hover:text-purple-300 font-medium"
-          >
-            Смотреть каталог →
-          </button>
-        </div>
-
-        {trending.length > 0 ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-            {trending.map((item, idx) => (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 sm:gap-5">
+            {inProgress.map((item) => (
               <div
-                key={idx}
-                className="group rounded-xl bg-zinc-900 border border-zinc-800 hover:border-purple-500/50 p-2 flex flex-col justify-between space-y-2 transition-all"
+                key={item.userMediaId || item.id}
+                onClick={() => handleHeroNavigate(item)}
+                className="group relative flex flex-col justify-between p-3 rounded-2xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#8B5CF6]/50 transition-all duration-200 cursor-pointer hover:-translate-y-1 shadow-lg"
               >
-                <div
-                  onClick={() => handleTrendingClick(item)}
-                  className="aspect-[2/3] rounded-lg bg-zinc-950 overflow-hidden relative cursor-pointer hover:opacity-90 transition-opacity"
-                >
+                {/* Poster */}
+                <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden bg-[#11152A] mb-2">
                   {item.posterUrl ? (
                     <img
                       src={item.posterUrl}
                       alt={item.title}
                       referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center text-xs text-zinc-400">
-                      Нет постера
+                    <div className="w-full h-full flex items-center justify-center text-[#64748B]">
+                      <Film className="w-6 h-6" />
                     </div>
                   )}
+
+                  {/* Badges */}
+                  <div className="absolute top-1.5 left-1.5">
+                    <CategoryBadge type={item.type || 'MOVIE'} size="sm" />
+                  </div>
+
                   {item.rating && (
-                    <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/80 text-amber-400 text-[10px] font-bold flex items-center gap-0.5">
-                      <Star className="w-3 h-3 fill-amber-400" />
-                      {item.rating}
+                    <div className="absolute bottom-1.5 right-1.5">
+                      <RatingBadge rating={item.rating} size="sm" />
                     </div>
                   )}
                 </div>
 
-                <div
-                  onClick={() => handleTrendingClick(item)}
-                  className="space-y-1 cursor-pointer"
-                >
-                  <p className="text-xs font-bold text-zinc-100 line-clamp-1 hover:text-purple-400 transition-colors">{item.title}</p>
-                  <p className="text-[10px] text-zinc-400">{item.year || ''}</p>
-                </div>
+                {/* Details */}
+                <div className="space-y-1.5 flex-1 flex flex-col justify-between">
+                  <div>
+                    <h3 className="font-bold text-xs text-[#F8FAFC] group-hover:text-[#A78BFA] transition-colors line-clamp-1">
+                      {item.title}
+                    </h3>
+                    <div className="flex items-center justify-between text-[10px] text-[#94A3B8] font-mono mt-0.5">
+                      <StatusBadge status={item.status} size="sm" />
+                      {item.progress !== undefined && (
+                        <span className="tabular-nums font-semibold text-[#CBD5E1]">
+                          {item.progress} {item.totalEpisodes ? `/${item.totalEpisodes}` : 'пр.'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
 
-                <button
-                  onClick={() => setModalItem(item)}
-                  className="w-full py-1 rounded-lg bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/30 text-[11px] font-medium flex items-center justify-center gap-1 transition-colors"
-                >
-                  <Plus className="w-3 h-3" /> В список
-                </button>
+                  {/* Progress bar + Quick Action */}
+                  <div className="pt-1.5 flex items-center gap-1.5">
+                    <div className="flex-1 h-1.5 rounded-full bg-[#151932] overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-[#7C3AED] to-[#6366F1] rounded-full"
+                        style={{
+                          width: item.totalEpisodes
+                            ? `${Math.min(100, Math.round((item.progress / item.totalEpisodes) * 100))}%`
+                            : '50%',
+                        }}
+                      />
+                    </div>
+                    <button
+                      onClick={(e) => handleIncrementProgress(item, e)}
+                      disabled={updatingProgressId === item.userMediaId}
+                      className="p-1 rounded-md bg-[#151932] hover:bg-[#7C3AED] text-[#A78BFA] hover:text-white border border-[#1E2442] text-[10px] font-bold transition-colors cursor-pointer"
+                      title="Увеличить прогресс на 1"
+                    >
+                      +1
+                    </button>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
-        ) : (
-          <div className="p-8 rounded-2xl bg-zinc-900/30 border border-zinc-800 text-center text-xs text-zinc-400">
-            Подключение к API каталога...
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Recent Activity Snapshot */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-bold text-zinc-100 font-mono flex items-center gap-2">
-            <Radio className="w-4 h-4 text-purple-400" />
-            СОЦИАЛЬНАЯ ЛЕНТА
-          </h2>
-          <button
-            onClick={() => onNavigate('feed')}
-            className="text-xs text-purple-400 hover:text-purple-300 font-medium"
-          >
-            Вся лента →
-          </button>
+      {/* 4. «РЕКОМЕНДАЦИИ ДЛЯ ТЕБЯ» (5-7 visually rich cards) */}
+      <div className="space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <SectionHeader
+            title="Рекомендации для тебя"
+            icon={<Sparkles className="w-4 h-4 text-[#8B5CF6]" />}
+            className="!mb-0"
+          />
+
+          {/* Category Filter Tabs */}
+          <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-[#0B0D20] border border-[#1E2442] overflow-x-auto">
+            {[
+              { id: 'ALL', label: 'Все' },
+              { id: 'MOVIE', label: 'Фильмы' },
+              { id: 'GAME', label: 'Игры' },
+              { id: 'ANIME', label: 'Аниме' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setRecCategory(tab.id as any)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                  recCategory === tab.id
+                    ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-sm'
+                    : 'text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932]'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {recentFeed.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {recentFeed.map((act) => (
-              <div
-                key={act.id}
-                className="p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center gap-3"
-              >
-                {act.mediaPoster ? (
-                  <img
-                    src={act.mediaPoster}
-                    alt={act.mediaTitle || 'Media'}
-                    referrerPolicy="no-referrer"
-                    className="w-10 h-14 object-cover rounded-lg shrink-0"
-                  />
-                ) : (
-                  <div className="w-10 h-14 bg-zinc-800 rounded-lg flex items-center justify-center text-xs text-zinc-400 shrink-0">
-                    <Film className="w-5 h-5" />
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1">
-                    <p className="text-xs text-zinc-200">
-                      <strong
-                        onClick={() => navigate(`/u/${act.username}`)}
-                        className="text-purple-300 hover:text-purple-200 cursor-pointer"
-                      >
-                        @{act.username}
-                      </strong>{' '}
-                      {act.type === 'MEDIA_COMPLETED' ? 'завершил(а)' : 'добавил(а) в библиотеку'}
-                    </p>
-                    {act.userId && dbUser && act.userId !== dbUser.id && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          window.dispatchEvent(new CustomEvent('open_chat', { detail: { id: act.userId, username: act.username, avatar: act.avatar } }));
-                        }}
-                        className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
-                        title="Написать сообщение"
-                      >
-                        <MessageSquare className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                  <p
-                    onClick={() => act.mediaId && navigate(`/media/${formatMediaTypePath(act.mediaType || 'MOVIE')}/${act.mediaId}`)}
-                    className="text-xs font-bold text-zinc-100 truncate mt-0.5 hover:text-purple-400 cursor-pointer transition-colors"
-                  >
-                    {act.mediaTitle || 'Медиа'}
-                  </p>
-                  <span className="text-[10px] text-zinc-400">
-                    {new Date(act.createdAt).toLocaleDateString('ru-RU')}
-                  </span>
-                </div>
-              </div>
+        {recommendations.length > 0 ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 sm:gap-5">
+            {recommendations.map((item, idx) => (
+              <MediaCard
+                key={item.mediaId || item.id || idx}
+                media={{
+                  id: item.mediaId || item.id,
+                  title: item.title,
+                  type: item.type || (recCategory === 'ALL' ? 'MOVIE' : recCategory),
+                  posterUrl: item.posterUrl,
+                  year: item.year,
+                  rating: item.rating,
+                }}
+                showQuickActions={true}
+                onQuickAdd={(m) => setModalItem(m)}
+              />
             ))}
           </div>
         ) : (
-          <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800 text-center text-xs text-zinc-400">
-            В социальной ленте пока нет записей. Добавьте свой первый фильм или пригласите друзей!
+          <div className="p-8 rounded-2xl bg-[#0B0D20] border border-[#1E2442] text-center text-xs text-[#94A3B8]">
+            Подбор персональных рекомендаций...
           </div>
         )}
       </div>
 
+      {/* 5. 2-COLUMN SECTION: SOCIAL ACTIVITY FEED (65%) & EDITORIAL NEWS (35%) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* LEFT COLUMN: «ЛЕНТА АКТИВНОСТИ» (8 cols ~ 65%) */}
+        <div className="lg:col-span-8 space-y-3.5">
+          <SectionHeader
+            title="Лента активности"
+            icon={<Radio className="w-4 h-4 text-[#8B5CF6]" />}
+            actionText="Вся лента →"
+            onAction={() => onNavigate('feed')}
+          />
+
+          <div className="p-4 sm:p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] shadow-xl">
+            {feedLoading ? (
+              <div className="space-y-1 divide-y divide-[#1E2442]/60">
+                {[1, 2, 3, 4].map((i) => (
+                  <ActivityItemSkeleton key={i} />
+                ))}
+              </div>
+            ) : friendsFeed.length > 0 ? (
+              <div className="space-y-1 divide-y divide-[#1E2442]/50">
+                {friendsFeed.slice(0, 7).map((act, index) => (
+                  <ActivityTimelineItem
+                    key={act.id || index}
+                    activity={act}
+                    isLast={index === Math.min(friendsFeed.length, 7) - 1}
+                    onUserClick={(uname) => navigate(`/u/${uname}`)}
+                    onMediaClick={(type, id) =>
+                      navigate(`/media/${formatMediaTypePath(type)}/${id}`)
+                    }
+                    onListClick={(id) => navigate(`/lists/${id}`)}
+                    onAchievementClick={() => onNavigate('achievements')}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="py-8 text-center space-y-2">
+                <Users className="w-7 h-7 text-[#64748B] mx-auto" />
+                <p className="text-xs text-[#94A3B8]">Пока нет активности друзей</p>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('friends')}
+                  className="text-xs font-semibold text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
+                >
+                  Найти друзей →
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN: «НОВОСТИ» (4 cols ~ 35%) */}
+        <div className="lg:col-span-4 space-y-3.5">
+          <SectionHeader
+            title="Новости"
+            icon={<Newspaper className="w-4 h-4 text-[#8B5CF6]" />}
+            actionText="Все новости →"
+            onAction={() => navigate('/news')}
+          />
+
+          {newsLoading ? (
+            <div className="space-y-3.5">
+              {[1, 2].map((i) => (
+                <NewsCardSkeleton key={i} />
+              ))}
+            </div>
+          ) : latestNews.length > 0 ? (
+            <div className="space-y-3.5">
+              {latestNews.slice(0, 3).map((art) => {
+                let parsedCategory = 'Новости';
+                if (art.tags) {
+                  if (Array.isArray(art.tags) && art.tags.length > 0) {
+                    parsedCategory = art.tags[0];
+                  } else if (typeof art.tags === 'string' && art.tags.startsWith('[')) {
+                    try {
+                      const arr = JSON.parse(art.tags);
+                      if (Array.isArray(arr) && arr.length > 0) parsedCategory = arr[0];
+                    } catch (_e) {}
+                  }
+                }
+
+                return (
+                  <NewsCard
+                    key={art.id}
+                    image={art.cover}
+                    title={art.title}
+                    excerpt={
+                      art.excerpt ||
+                      (art.content
+                        ? art.content.replace(/[#*`_>]/g, '').slice(0, 85) + '...'
+                        : '')
+                    }
+                    category={parsedCategory}
+                    date={art.publishedAt || art.createdAt}
+                    authorUsername={art.authorUsername}
+                    isPinned={art.isPinned}
+                    isFeatured={art.isFeatured}
+                    onClick={() => navigate(`/news/${art.slug || art.id}`)}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-8 rounded-2xl bg-[#0B0D20] border border-[#1E2442] text-center text-xs text-[#94A3B8]">
+              Пока нет новых публикаций
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 6. «СТАТИСТИКА» (5 Compact Dashboard Widgets with Real Data) */}
+      <div className="space-y-3.5">
+        <SectionHeader
+          title="Твоя статистика"
+          icon={<TrendingUp className="w-4 h-4 text-[#8B5CF6]" />}
+          actionText="Полная статистика"
+          onAction={() => onNavigate('statistics')}
+        />
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {/* Movies */}
+          <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-2 hover:border-[#8B5CF6]/40 transition-colors">
+            <div className="flex items-center justify-between text-[#94A3B8]">
+              <span className="text-xs font-semibold">Фильмы</span>
+              <Film className="w-4 h-4 text-[#8B5CF6]" />
+            </div>
+            <div className="text-2xl font-bold text-[#F8FAFC] font-mono tabular-nums">
+              {counts?.movies || 0}
+            </div>
+            <p className="text-[10px] text-[#64748B]">В коллекции</p>
+          </div>
+
+          {/* TV Shows */}
+          <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-2 hover:border-[#8B5CF6]/40 transition-colors">
+            <div className="flex items-center justify-between text-[#94A3B8]">
+              <span className="text-xs font-semibold">Сериалы</span>
+              <Tv className="w-4 h-4 text-[#8B5CF6]" />
+            </div>
+            <div className="text-2xl font-bold text-[#F8FAFC] font-mono tabular-nums">
+              {counts?.tv || 0}
+            </div>
+            <p className="text-[10px] text-[#64748B]">В библиотеке</p>
+          </div>
+
+          {/* Games */}
+          <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-2 hover:border-[#8B5CF6]/40 transition-colors">
+            <div className="flex items-center justify-between text-[#94A3B8]">
+              <span className="text-xs font-semibold">Игры</span>
+              <Gamepad2 className="w-4 h-4 text-[#8B5CF6]" />
+            </div>
+            <div className="text-2xl font-bold text-[#F8FAFC] font-mono tabular-nums">
+              {counts?.games || 0}
+            </div>
+            <p className="text-[10px] text-[#64748B]">В трекере</p>
+          </div>
+
+          {/* Anime & Manga */}
+          <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-2 hover:border-[#8B5CF6]/40 transition-colors">
+            <div className="flex items-center justify-between text-[#94A3B8]">
+              <span className="text-xs font-semibold">Аниме & Манга</span>
+              <BookOpen className="w-4 h-4 text-[#8B5CF6]" />
+            </div>
+            <div className="text-2xl font-bold text-[#F8FAFC] font-mono tabular-nums">
+              {(counts?.anime || 0) + (counts?.manga || 0)}
+            </div>
+            <p className="text-[10px] text-[#64748B]">Тайтлов</p>
+          </div>
+
+          {/* Completed Total */}
+          <div className="col-span-2 sm:col-span-1 p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-2 hover:border-emerald-500/40 transition-colors">
+            <div className="flex items-center justify-between text-emerald-400">
+              <span className="text-xs font-semibold">Завершено</span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-2xl font-bold text-emerald-400 font-mono tabular-nums">
+              {counts?.completed || 0}
+            </div>
+            <p className="text-[10px] text-[#64748B]">Пройдено & просмотрено</p>
+          </div>
+        </div>
+      </div>
+
+      {/* 7. «ПРЕДСТОЯЩИЕ РЕЛИЗЫ» */}
+      <div className="space-y-3.5">
+        <SectionHeader
+          title="Предстоящие релизы"
+          icon={<Calendar className="w-4 h-4 text-[#8B5CF6]" />}
+          actionText="Календарь релизов"
+          onAction={() => onNavigate('calendar')}
+        />
+
+        {upcomingLoading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <div
+                key={i}
+                className="aspect-[2/3] rounded-2xl bg-[#0B0D20] border border-[#1E2442] animate-pulse"
+              />
+            ))}
+          </div>
+        ) : upcomingReleases.length > 0 ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {upcomingReleases.map((rel, idx) => {
+              const relDate = rel.releaseDate ? new Date(rel.releaseDate) : null;
+              const formattedDate = relDate
+                ? relDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
+                : '';
+              const daysLeft = relDate
+                ? Math.ceil((relDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                : null;
+
+              return (
+                <div key={rel.id || rel.mediaId || idx} className="relative group">
+                  <MediaCard
+                    media={{
+                      id: rel.mediaId || rel.id,
+                      title: rel.title,
+                      type: rel.type || rel.category || 'MOVIE',
+                      posterUrl: rel.posterUrl,
+                      year: relDate ? relDate.getFullYear() : undefined,
+                      rating: rel.rating,
+                    }}
+                    showQuickActions={true}
+                    onQuickAdd={(m) => setModalItem(m)}
+                  />
+                  {formattedDate && (
+                    <div className="absolute top-3 left-3 px-2 py-0.5 rounded-lg bg-[#080A18]/90 backdrop-blur-md border border-[#8B5CF6]/50 text-[10px] font-mono font-bold text-[#A78BFA] shadow-md pointer-events-none z-10 flex items-center gap-1">
+                      <span>{formattedDate}</span>
+                      {daysLeft !== null && daysLeft > 0 && daysLeft <= 30 && (
+                        <span className="text-[#64748B]">({daysLeft} дн.)</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="p-8 rounded-2xl bg-[#0B0D20] border border-[#1E2442] text-center text-xs text-[#94A3B8]">
+            Нет ближайших релизов на этой неделе
+          </div>
+        )}
+      </div>
+
+      {/* 8. 2-COLUMN WIDGETS: «ТВОИ ДОСТИЖЕНИЯ» & «ДРУЗЬЯ ОНЛАЙН» */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left: «ТВОИ ДОСТИЖЕНИЯ» WIDGET (6 cols) */}
+        <div className="lg:col-span-6 p-4 sm:p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-xl bg-[#151932] border border-[#8B5CF6]/30 text-[#A78BFA]">
+                <Trophy className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-[#F8FAFC]">Твои достижения</h3>
+                <p className="text-[11px] text-[#94A3B8]">Награды и прогресс профиля</p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onNavigate('achievements')}
+              className="text-xs font-semibold text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
+            >
+              Все →
+            </button>
+          </div>
+
+          {/* Achievement Progress Bar */}
+          {achievementsData?.stats && (
+            <div className="space-y-2 p-3 rounded-xl bg-[#080A18] border border-[#1E2442]">
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="text-[#94A3B8]">Открыто наград:</span>
+                <span className="font-bold text-[#F8FAFC] tabular-nums">
+                  {achievementsData.stats.unlocked} / {achievementsData.stats.total}{' '}
+                  <span className="text-[#A78BFA]">({achievementsData.stats.percentage}%)</span>
+                </span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-[#151932] overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-[#7C3AED] via-[#8B5CF6] to-[#6366F1] rounded-full transition-all duration-500"
+                  style={{ width: `${Math.max(4, achievementsData.stats.percentage)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Latest Unlocked or Next Target */}
+          {achievementsData?.latestUnlocked ? (
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-[#151932]/50 border border-[#8B5CF6]/30">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#7C3AED] to-[#6366F1] flex items-center justify-center text-white shrink-0 shadow-md">
+                <Award className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">
+                  Последнее достижение
+                </span>
+                <h4 className="text-xs font-bold text-[#F8FAFC] truncate">
+                  {achievementsData.latestUnlocked.title}
+                </h4>
+                <p className="text-[11px] text-[#94A3B8] truncate">
+                  +{achievementsData.latestUnlocked.points} Dodik PTS
+                </p>
+              </div>
+            </div>
+          ) : achievementsData?.nextLocked ? (
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-[#080A18] border border-[#1E2442]">
+              <div className="w-9 h-9 rounded-xl bg-[#151932] border border-[#1E2442] flex items-center justify-center text-[#64748B] shrink-0">
+                <Trophy className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <span className="text-[10px] text-[#A78BFA] font-bold uppercase tracking-wider">
+                  Следующая цель
+                </span>
+                <h4 className="text-xs font-bold text-[#F8FAFC] truncate">
+                  {achievementsData.nextLocked.title}
+                </h4>
+                <p className="text-[11px] text-[#94A3B8] truncate">
+                  {achievementsData.nextLocked.description}
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {/* Right: «ОНЛАЙН ДРУЗЬЯ» (6 cols) */}
+        <div className="lg:col-span-6 p-4 sm:p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-xl bg-[#151932] border border-[#8B5CF6]/30 text-[#A78BFA]">
+                <Users className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-[#F8FAFC]">Друзья</h3>
+                <p className="text-[11px] text-[#94A3B8]">Быстрые сообщения и статус</p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onNavigate('friends')}
+              className="text-xs font-semibold text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
+            >
+              Все →
+            </button>
+          </div>
+
+          {friendsOnline.length > 0 ? (
+            <div className="space-y-2">
+              {friendsOnline.map((fr) => (
+                <div
+                  key={fr.id}
+                  onClick={() => navigate(`/u/${fr.username}`)}
+                  className="flex items-center justify-between gap-2.5 p-2 rounded-xl bg-[#080A18] hover:bg-[#151932] border border-[#1E2442] transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="relative">
+                      <Avatar src={fr.avatar} username={fr.username} size="sm" />
+                      <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#080A18]" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-[#F8FAFC] truncate block">
+                        @{fr.username}
+                      </span>
+                      <span className="text-[10px] text-[#64748B] truncate block">
+                        {fr.bio || 'В сети'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      window.dispatchEvent(
+                        new CustomEvent('open_chat', { detail: fr })
+                      );
+                    }}
+                    className="p-1.5 rounded-lg bg-[#151932] hover:bg-[#7C3AED] text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
+                    title="Написать сообщение"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-6 text-center space-y-2">
+              <Users className="w-6 h-6 text-[#64748B] mx-auto" />
+              <p className="text-xs text-[#94A3B8]">
+                {dbUser ? 'У вас пока нет друзей в сети' : 'Войдите, чтобы находить друзей'}
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigate('friends')}
+                className="text-xs font-semibold text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
+              >
+                Перейти в раздел «Друзья» →
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Modal for adding to tracker */}
       {modalItem && (
         <AddToLibraryModal mediaItem={modalItem} onClose={() => setModalItem(null)} />
       )}

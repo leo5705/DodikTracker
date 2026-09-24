@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { UnifiedContentItem } from '../../types/content.ts';
 import { useRouter } from '../../context/RouterContext.tsx';
+import { normalizeAgeRating } from '../../utils/ageRating.ts';
 
 interface ContentMetadataGridProps {
   item: UnifiedContentItem;
@@ -124,13 +125,18 @@ export const ContentMetadataGrid: React.FC<ContentMetadataGridProps> = ({ item }
   }
 
   // 8. Age Rating
-  if (item.ageRating) {
-    rows.push({
-      label: 'Возрастной рейтинг',
-      icon: Award,
-      value: <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 font-mono font-bold text-xs">{item.ageRating}</span>,
-    });
-  }
+  const normRating = normalizeAgeRating(item.ageRating, item.provider);
+  rows.push({
+    label: 'Возрастной рейтинг',
+    icon: Award,
+    value: normRating ? (
+      <span className="px-2 py-0.5 rounded-lg bg-[#151932] border border-[#8B5CF6]/40 text-[#A78BFA] font-mono font-bold text-xs shadow-xs">
+        {normRating.displayText}
+      </span>
+    ) : (
+      <span className="text-[#64748B] italic text-xs">Возрастной рейтинг не указан</span>
+    ),
+  });
 
   // 9. Directors / Authors / Creators / Artists
   if (item.directors && item.directors.length > 0) {
@@ -274,6 +280,69 @@ export const ContentMetadataGrid: React.FC<ContentMetadataGridProps> = ({ item }
     });
   }
 
+  // Developers & Platforms for Games
+  if (item.developers && item.developers.length > 0) {
+    rows.push({
+      label: 'Разработчик' + (item.developers.length > 1 ? 'и' : ''),
+      icon: Building2,
+      value: (
+        <div className="flex flex-wrap gap-1.5">
+          {item.developers.map((d, idx) => (
+            <button
+              key={idx}
+              onClick={() => handlePersonClick(d.name)}
+              className="text-[#A78BFA] hover:text-[#C4B5FD] hover:underline text-left font-medium"
+            >
+              {d.name}{idx < item.developers!.length - 1 ? ',' : ''}
+            </button>
+          ))}
+        </div>
+      ),
+    });
+  }
+
+  if (item.platforms && item.platforms.length > 0) {
+    rows.push({
+      label: 'Платформы',
+      icon: Layers,
+      value: (
+        <div className="flex flex-wrap gap-1">
+          {item.platforms.map((plat, idx) => (
+            <span
+              key={idx}
+              className="px-2 py-0.5 rounded bg-[#151932] border border-[#1E2442] text-[11px] font-mono text-[#CBD5E1]"
+            >
+              {plat}
+            </span>
+          ))}
+        </div>
+      ),
+    });
+  }
+
+  if (item.requirements) {
+    rows.push({
+      label: 'Системные требования',
+      icon: Info,
+      value: (
+        <div className="space-y-1.5 text-[11px] leading-relaxed">
+          {item.requirements.minimum && (
+            <div>
+              <span className="font-bold text-[#94A3B8]">Мин: </span>
+              <span className="text-[#CBD5E1]">{item.requirements.minimum}</span>
+            </div>
+          )}
+          {item.requirements.recommended && (
+            <div>
+              <span className="font-bold text-[#94A3B8]">Рек: </span>
+              <span className="text-[#CBD5E1]">{item.requirements.recommended}</span>
+            </div>
+          )}
+        </div>
+      ),
+    });
+  }
+
   if (item.labels && item.labels.length > 0) {
     rows.push({
       label: 'Музыкальный лейбл',
@@ -333,33 +402,33 @@ export const ContentMetadataGrid: React.FC<ContentMetadataGridProps> = ({ item }
   if (rows.length === 0) return null;
 
   return (
-    <div className="p-6 md:p-8 rounded-3xl bg-zinc-900/80 border border-zinc-800 space-y-4">
-      <div className="flex items-center gap-2.5 border-b border-zinc-800/80 pb-4">
-        <div className="p-2 rounded-xl bg-purple-950/40 border border-purple-800/40 text-purple-400">
+    <div className="p-6 md:p-8 rounded-3xl bg-[#11152A] border border-[#1E2442] space-y-4">
+      <div className="flex items-center gap-2.5 border-b border-[#1E2442] pb-4">
+        <div className="p-2 rounded-xl bg-[#151932] border border-[#8B5CF6]/30 text-[#A78BFA]">
           <Info className="w-5 h-5" />
         </div>
         <div>
-          <h2 className="text-lg font-bold text-zinc-100">Информация и детали</h2>
-          <p className="text-xs text-zinc-400">Спецификация, производство и выход</p>
+          <h2 className="text-base font-bold text-[#F8FAFC]">Информация и детали</h2>
+          <p className="text-xs text-[#94A3B8]">Спецификация, производство и выход</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 pt-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
         {rows.map((row, idx) => {
           const Icon = row.icon;
           return (
             <div
               key={idx}
-              className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 flex items-start gap-3"
+              className="p-3.5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] flex items-start gap-3"
             >
-              <div className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 shrink-0 mt-0.5">
+              <div className="p-2 rounded-xl bg-[#151932] border border-[#1E2442] text-[#A78BFA] shrink-0 mt-0.5">
                 <Icon className="w-4 h-4" />
               </div>
               <div className="min-w-0 flex-1 space-y-0.5">
-                <div className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider font-mono">
                   {row.label}
                 </div>
-                <div className="text-xs font-medium text-zinc-200 leading-relaxed">
+                <div className="text-xs font-semibold text-[#F8FAFC] leading-relaxed">
                   {row.value}
                 </div>
               </div>

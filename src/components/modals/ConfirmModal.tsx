@@ -45,10 +45,10 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
       case 'primary':
       default:
         return {
-          icon: <Info className="w-6 h-6 text-[#AC82FF]" />,
-          iconBg: 'bg-purple-950/60 border border-purple-800/50',
+          icon: <Info className="w-6 h-6 text-[#A78BFA]" />,
+          iconBg: 'bg-[#151932] border border-[#8B5CF6]/40',
           confirmBtn:
-            'bg-[#9B6BFF] hover:bg-[#8A55FF] text-white shadow-lg shadow-purple-950/40 border border-purple-500/50',
+            'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white shadow-lg shadow-[#7C3AED]/25 border border-[#8B5CF6]/50',
         };
     }
   };
@@ -59,16 +59,16 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#080A18]/80 backdrop-blur-sm animate-fade-in"
       onClick={onCancel}
     >
       <div
-        className="w-full max-w-md rounded-3xl bg-[#14131A] border border-[#252233] p-6 shadow-2xl space-y-4 relative"
+        className="w-full max-w-md rounded-3xl bg-[#11152A] border border-[#1E2442] p-6 shadow-2xl space-y-4 relative"
         onClick={(e) => e.stopPropagation()}
       >
         <button
           onClick={onCancel}
-          className="absolute top-4 right-4 p-1.5 rounded-lg text-[#9A94AA] hover:text-white hover:bg-[#252233] transition-colors"
+          className="absolute top-4 right-4 p-1.5 rounded-lg text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#151932] transition-colors cursor-pointer"
           title="Закрыть"
         >
           <X className="w-4 h-4" />
@@ -79,17 +79,17 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             {icon}
           </div>
           <div className="space-y-1 pr-6">
-            <h3 className="text-base font-bold text-[#F3F1F8] font-mono leading-snug">{title}</h3>
-            <p className="text-xs text-[#9A94AA] leading-relaxed">{message}</p>
+            <h3 className="text-sm font-bold text-[#F8FAFC] leading-snug">{title}</h3>
+            <p className="text-xs text-[#94A3B8] leading-relaxed">{message}</p>
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#252233]">
+        <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#1E2442]">
           <button
             type="button"
             onClick={onCancel}
             disabled={loading}
-            className="px-4 py-2 rounded-xl bg-[#191724] hover:bg-[#252233] border border-[#252233] text-xs font-semibold text-[#D5D0E3] transition-colors disabled:opacity-50"
+            className="px-4 py-2 rounded-xl bg-[#0B0D20] hover:bg-[#151932] border border-[#1E2442] text-xs font-semibold text-[#CBD5E1] transition-colors disabled:opacity-50 cursor-pointer"
           >
             {cancelText}
           </button>
@@ -97,7 +97,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             type="button"
             onClick={onConfirm}
             disabled={loading}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50 ${confirmBtn}`}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer ${confirmBtn}`}
           >
             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
             <span>{confirmText}</span>

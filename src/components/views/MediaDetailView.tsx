@@ -1,5 +1,4 @@
 import React from 'react';
-import { GameDetailView } from './GameDetailView.tsx';
 import { ContentDetailView } from './ContentDetailView.tsx';
 
 interface MediaDetailViewProps {
@@ -13,16 +12,6 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
   mediaType,
   queryParams,
 }) => {
-  const isGame = (mediaType || '').toLowerCase() === 'game';
-
-  if (isGame) {
-    return (
-      <GameDetailView
-        idOrSlug={String(queryParams?.externalId || mediaId)}
-      />
-    );
-  }
-
   return (
     <ContentDetailView
       mediaId={mediaId}

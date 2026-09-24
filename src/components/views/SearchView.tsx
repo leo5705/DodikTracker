@@ -12,16 +12,19 @@ import {
   Loader2,
   Flame,
   Bookmark,
-  Music,
-  RefreshCw,
-  AlertCircle,
-  CheckCircle2,
+  Music2,
   X,
+  TrendingUp,
+  Calendar,
+  Heart,
+  Check,
   SlidersHorizontal,
 } from 'lucide-react';
 import { AddToLibraryModal } from '../modals/AddToLibraryModal.tsx';
 import { AddToListModal } from '../modals/AddToListModal.tsx';
+import { QuickRatingModal } from '../modals/QuickRatingModal.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
+import { useAuth } from '../../context/AuthContext.tsx';
 import { formatMediaTypePath } from '../../utils/formatters.ts';
 import { SearchFilterPanel } from '../search/SearchFilterPanel.tsx';
 import {
@@ -29,20 +32,30 @@ import {
   SearchSort,
   MediaTypeCategory,
   INITIAL_SEARCH_FILTERS,
-  INITIAL_SEARCH_STATE,
   hasActiveFilters,
   stateToQueryString,
   parseQueryStringToState,
+  sanitizeFiltersForCategory,
 } from '../../types/search.ts';
+import {
+  MediaCard,
+  EmptyState,
+  SecondaryButton,
+  CategoryBadge,
+  RatingBadge,
+} from '../design-system/index.ts';
 
 interface SearchViewProps {
   onSelectMedia?: (mediaId?: number, mediaData?: any) => void;
 }
 
-export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
-  const { pathname, route, navigate } = useRouter();
+type DiscoveryTab = 'TRENDING' | 'POPULAR' | 'NEW_RELEASES' | 'TOP_RATED' | 'FOR_YOU';
 
-  // Parse initial state from URL
+export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
+  const { navigate } = useRouter();
+  const { authFetch } = useAuth();
+
+  // Parse initial state from URL query params
   const initialFromUrl = parseQueryStringToState(window.location.search || '');
 
   // Core Search State
@@ -51,6 +64,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
   const [selectedType, setSelectedType] = useState<MediaTypeCategory>(
     initialFromUrl.type || 'ALL'
   );
+  const [discoveryTab, setDiscoveryTab] = useState<DiscoveryTab>('TRENDING');
   const [filters, setFilters] = useState<SearchFilters>(
     initialFromUrl.filters || INITIAL_SEARCH_FILTERS
   );
@@ -67,33 +81,40 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
-  // Filter Panel visibility
-  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState<boolean>(() =>
-    hasActiveFilters(initialFromUrl.filters || INITIAL_SEARCH_FILTERS)
-  );
+  // Filter Panel Drawer State
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState<boolean>(false);
 
   // Modals
   const [activeModalItem, setActiveModalItem] = useState<any | null>(null);
   const [addToListMedia, setAddToListMedia] = useState<any | null>(null);
+  const [quickRateItem, setQuickRateItem] = useState<any | null>(null);
 
-  // Concurrency & debounce guards
+  // Abort and concurrency control
   const abortControllerRef = useRef<AbortController | null>(null);
   const isRequestInFlightRef = useRef<boolean>(false);
   const lastFetchTimeRef = useRef<number>(0);
 
   const categories = [
-    { id: 'ALL', label: 'Все категории', icon: Sparkles },
+    { id: 'ALL', label: 'Все', icon: Sparkles },
     { id: 'MOVIE', label: 'Фильмы', icon: Film },
     { id: 'TV', label: 'Сериалы', icon: Tv },
     { id: 'ANIME', label: 'Аниме', icon: Sparkles },
-    { id: 'MANGA', label: 'Манга', icon: BookOpen },
     { id: 'GAME', label: 'Игры', icon: Gamepad2 },
+    { id: 'MANGA', label: 'Манга', icon: BookOpen },
     { id: 'BOOK', label: 'Книги', icon: Book },
     { id: 'COMIC', label: 'Комиксы', icon: Flame },
-    { id: 'MUSIC', label: 'Музыка', icon: Music },
+    { id: 'MUSIC', label: 'Музыка', icon: Music2 },
   ];
 
-  // Helper deduplicator
+  const discoveryTabs: { id: DiscoveryTab; label: string; icon: React.FC<any>; sortOption?: SearchSort }[] = [
+    { id: 'TRENDING', label: 'Тренды', icon: Flame, sortOption: { sortBy: 'popularity', sortOrder: 'desc' } },
+    { id: 'POPULAR', label: 'Популярное', icon: TrendingUp, sortOption: { sortBy: 'popularity', sortOrder: 'desc' } },
+    { id: 'NEW_RELEASES', label: 'Новые релизы', icon: Calendar, sortOption: { sortBy: 'release_date', sortOrder: 'desc' } },
+    { id: 'TOP_RATED', label: 'Высокие оценки', icon: Star, sortOption: { sortBy: 'rating', sortOrder: 'desc' } },
+    { id: 'FOR_YOU', label: 'Для тебя', icon: Sparkles, sortOption: { sortBy: 'popularity', sortOrder: 'desc' } },
+  ];
+
+  // Deduplication helper
   const deduplicateMedia = (items: any[]) => {
     const seen = new Set<string>();
     const result: any[] = [];
@@ -113,11 +134,22 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
 
   const isFilterActive = hasActiveFilters(filters);
   const hasTextQuery = appliedQuery.trim().length >= 2;
-  // If user searched text OR specified any deep filter, we run in Search/Catalog mode.
-  // Otherwise, if completely empty, we run in Trending mode.
   const isSearchOrCatalogMode = hasTextQuery || isFilterActive;
 
-  // Sync state to URL (debounced for query)
+  // Debounce query input changes (350ms)
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setAppliedQuery(queryInput.trim());
+    }, 350);
+    return () => clearTimeout(handler);
+  }, [queryInput]);
+
+  const handleSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setAppliedQuery(queryInput.trim());
+  };
+
+  // Sync state with URL query parameters for sharing and back/forward navigation
   useEffect(() => {
     const qs = stateToQueryString({
       query: appliedQuery,
@@ -125,185 +157,190 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
       filters,
       sort,
     });
-    const currentSearch = window.location.search.replace(/^\?/, '');
-    if (qs !== currentSearch) {
-      navigate(qs ? `/search?${qs}` : '/search', { replace: true, scroll: false });
+    const newUrl = qs ? `/search?${qs}` : '/search';
+    if (window.location.search !== `?${qs}` && !(window.location.search === '' && qs === '')) {
+      window.history.replaceState(null, '', newUrl);
     }
-  }, [appliedQuery, selectedType, filters, sort, navigate]);
+  }, [appliedQuery, selectedType, filters, sort]);
 
-  // Debounce query input to appliedQuery
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setAppliedQuery(queryInput);
-    }, 380);
-    return () => clearTimeout(timer);
-  }, [queryInput]);
-
-  // Primary Data Fetcher
+  // Main API runner
   const executeFetch = useCallback(
-    async (pageToFetch: number, append: boolean) => {
-      // Cooldown prevention: at least 400ms between calls
-      const now = Date.now();
-      if (now - lastFetchTimeRef.current < 400 && append) {
-        return;
-      }
-      lastFetchTimeRef.current = now;
-
-      if (isRequestInFlightRef.current && append) {
-        return;
-      }
-
-      // Abort previous in-flight request if starting a new query
-      if (!append && abortControllerRef.current) {
+    async (targetPage: number = 1, append: boolean = false) => {
+      if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-
       const controller = new AbortController();
       abortControllerRef.current = controller;
-      isRequestInFlightRef.current = true;
 
-      if (!append) {
-        setIsLoading(true);
-        setError(null);
-      } else {
+      if (append) {
         setIsLoadingMore(true);
         setLoadMoreError(null);
+      } else {
+        setIsLoading(true);
+        setError(null);
       }
+      isRequestInFlightRef.current = true;
 
       try {
-        const queryParams = new URLSearchParams();
-        queryParams.set('page', String(pageToFetch));
-        queryParams.set('limit', '20');
+        let endpoint = '';
+        if (isSearchOrCatalogMode || discoveryTab !== 'TRENDING') {
+          const params = new URLSearchParams();
+          if (hasTextQuery) params.set('q', appliedQuery.trim());
+          if (selectedType !== 'ALL') params.set('type', selectedType);
+          params.set('page', targetPage.toString());
+          params.set('limit', '24');
 
-        if (selectedType !== 'ALL') {
-          queryParams.set('type', selectedType);
+          if (sort.sortBy) params.set('sortBy', sort.sortBy);
+          if (sort.sortOrder) params.set('sortOrder', sort.sortOrder);
+
+          if (filters.genres && filters.genres.length > 0) {
+            params.set('genres', filters.genres.join(','));
+          }
+          if (filters.countries && filters.countries.length > 0) {
+            params.set('countries', filters.countries.join(','));
+          }
+          if (filters.ageRatings && filters.ageRatings.length > 0) {
+            params.set('age_ratings', filters.ageRatings.join(','));
+          }
+          if (filters.adultFilter && filters.adultFilter !== 'all') {
+            params.set('adult_filter', filters.adultFilter);
+          }
+          if (filters.year) params.set('year', filters.year.toString());
+          if (filters.yearFrom) params.set('yearFrom', filters.yearFrom.toString());
+          if (filters.yearTo) params.set('yearTo', filters.yearTo.toString());
+          if (filters.ratingFrom !== undefined) params.set('ratingFrom', filters.ratingFrom.toString());
+          if (filters.ratingTo !== undefined) params.set('ratingTo', filters.ratingTo.toString());
+          if (filters.dodikRatingFrom !== undefined) params.set('dodikRatingFrom', filters.dodikRatingFrom.toString());
+          if (filters.dodikRatingTo !== undefined) params.set('dodikRatingTo', filters.dodikRatingTo.toString());
+          if (filters.dodikRatingCountFrom !== undefined) params.set('dodikRatingCountFrom', filters.dodikRatingCountFrom.toString());
+          if (filters.platforms && filters.platforms.length > 0) {
+            params.set('platforms', filters.platforms.join(','));
+          }
+          if (filters.developer) params.set('developer', filters.developer);
+          if (filters.publisher) params.set('publisher', filters.publisher);
+          if (filters.author) params.set('author', filters.author);
+          if (filters.artist) params.set('artist', filters.artist);
+          if (filters.album) params.set('album', filters.album);
+          if (filters.language) params.set('language', filters.language);
+          if (filters.status) params.set('status', filters.status);
+          if (filters.season) params.set('season', filters.season);
+          if (filters.seasonYear) params.set('seasonYear', filters.seasonYear.toString());
+          if (filters.animeFormat) params.set('animeFormat', filters.animeFormat);
+          if (filters.myStatus) params.set('my_status', filters.myStatus);
+          if (filters.inLibrary && filters.inLibrary !== 'any') params.set('in_library', filters.inLibrary);
+          if (filters.myRatingState && filters.myRatingState !== 'any') params.set('my_rating_state', filters.myRatingState);
+          if (filters.myRating !== undefined) params.set('my_rating', filters.myRating.toString());
+          if (filters.myRatingFrom !== undefined) params.set('my_rating_from', filters.myRatingFrom.toString());
+          if (filters.myRatingTo !== undefined) params.set('my_rating_to', filters.myRatingTo.toString());
+          if (filters.hasReview && filters.hasReview !== 'any') params.set('has_review', filters.hasReview);
+          if (filters.hideAdult) params.set('hideAdult', 'true');
+          if (filters.hideNudity) params.set('hideNudity', 'true');
+          if (filters.hideSexualContent) params.set('hideSexualContent', 'true');
+          if (filters.hideViolence) params.set('hideViolence', 'true');
+          if (filters.hideExplicitLanguage) params.set('hideExplicitLanguage', 'true');
+
+          endpoint = `/api/media/catalog?${params.toString()}`;
+        } else {
+          const targetCategory = selectedType === 'ALL' ? 'ALL' : selectedType;
+          endpoint = `/api/media/trending?type=${targetCategory}&page=${targetPage}&limit=24`;
         }
 
-        if (appliedQuery.trim()) {
-          queryParams.set('q', appliedQuery.trim());
-        }
-
-        // Add filters
-        if (filters.genres && filters.genres.length > 0) {
-          queryParams.set('genres', filters.genres.join(','));
-        }
-        if (filters.year) queryParams.set('year', String(filters.year));
-        if (filters.yearFrom) queryParams.set('year_from', String(filters.yearFrom));
-        if (filters.yearTo) queryParams.set('year_to', String(filters.yearTo));
-        if (filters.ratingFrom !== undefined) queryParams.set('rating_from', String(filters.ratingFrom));
-        if (filters.ratingTo !== undefined) queryParams.set('rating_to', String(filters.ratingTo));
-        if (filters.status) queryParams.set('status', filters.status);
-        if (filters.platforms && filters.platforms.length > 0) {
-          queryParams.set('platforms', filters.platforms.join(','));
-        }
-        if (filters.season) queryParams.set('season', filters.season);
-        if (filters.seasonYear) queryParams.set('season_year', String(filters.seasonYear));
-        if (filters.animeFormat) queryParams.set('anime_format', filters.animeFormat);
-
-        // Sorting
-        if (sort.sortBy) queryParams.set('sort_by', sort.sortBy);
-        if (sort.sortOrder) queryParams.set('sort_order', sort.sortOrder);
-
-        const endpoint = isSearchOrCatalogMode
-          ? `/api/media/search?${queryParams.toString()}`
-          : `/api/media/trending?${queryParams.toString()}`;
-
-        const res = await fetch(endpoint, { signal: controller.signal });
-
-        if (controller.signal.aborted) return;
+        const res = await authFetch(endpoint, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
 
         if (!res.ok) {
-          throw new Error(`Ошибка сервера: ${res.status}`);
+          throw new Error(`Ошибка загрузки данных (${res.status})`);
         }
 
         const data = await res.json();
-        const incoming = Array.isArray(data.results)
-          ? data.results
-          : Array.isArray(data)
-          ? data
-          : [];
+        const incomingResults = Array.isArray(data) ? data : data.results || [];
+        const hasMoreIncoming =
+          data.hasMore !== undefined
+            ? data.hasMore
+            : incomingResults.length >= 24;
 
         if (append) {
-          setResults((prev) => deduplicateMedia([...prev, ...incoming]));
+          setResults((prev) => deduplicateMedia([...prev, ...incomingResults]));
+          setPage(targetPage);
+          setHasMore(hasMoreIncoming);
         } else {
-          setResults(deduplicateMedia(incoming));
+          setResults(deduplicateMedia(incomingResults));
+          setPage(1);
+          setHasMore(hasMoreIncoming);
         }
-
-        setHasMore(Boolean(data.hasMore) || incoming.length >= 20);
-        setPage(pageToFetch);
-        setLoadMoreError(null);
       } catch (err: any) {
         if (err.name === 'AbortError') return;
-        console.error('Search / trending fetch error:', err);
+        console.error('Search fetch failed:', err);
         if (append) {
-          setLoadMoreError('Не удалось загрузить следующие элементы.');
+          setLoadMoreError(err.message || 'Не удалось подгрузить следующие результаты');
         } else {
-          setError('Ошибка загрузки данных. Проверьте сеть или повторите попытку.');
+          setError(err.message || 'Ошибка выполнения запроса');
+          setResults([]);
         }
       } finally {
-        isRequestInFlightRef.current = false;
-        if (!append) setIsLoading(false);
-        else setIsLoadingMore(false);
+        if (!controller.signal.aborted) {
+          setIsLoading(false);
+          setIsLoadingMore(false);
+          isRequestInFlightRef.current = false;
+        }
       }
     },
-    [appliedQuery, selectedType, filters, sort, isSearchOrCatalogMode]
+    [appliedQuery, selectedType, filters, sort, isSearchOrCatalogMode, hasTextQuery, discoveryTab]
   );
 
-  // Trigger search when query, category, filters, or sort change
+  // Trigger search execution when applied parameters change
   useEffect(() => {
-    setPage(1);
-    setResults([]);
-    setHasMore(false);
     executeFetch(1, false);
-  }, [appliedQuery, selectedType, filters, sort, executeFetch]);
+  }, [appliedQuery, selectedType, filters, sort, discoveryTab]);
 
-  // Handle Load More
-  const handleLoadMore = useCallback(() => {
-    if (isLoadingMore || isLoading || !hasMore || isRequestInFlightRef.current) {
-      return;
-    }
-    executeFetch(page + 1, true);
-  }, [isLoadingMore, isLoading, hasMore, page, executeFetch]);
+  // Infinite Scroll Intersection Observer
+  const observerTarget = useRef<HTMLDivElement | null>(null);
 
-  // Sentinel IntersectionObserver
-  const observerTarget = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const target = observerTarget.current;
-    if (!target) return;
-
-    if (!hasMore || isLoading || isLoadingMore || loadMoreError) {
-      return;
-    }
+    if (!hasMore || isLoading || isLoadingMore) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (
-          entries[0].isIntersecting &&
-          hasMore &&
-          !isLoadingMore &&
-          !isLoading &&
-          !loadMoreError &&
-          !isRequestInFlightRef.current
-        ) {
-          handleLoadMore();
+        if (entries[0].isIntersecting && hasMore && !isRequestInFlightRef.current) {
+          const now = Date.now();
+          if (now - lastFetchTimeRef.current > 600) {
+            lastFetchTimeRef.current = now;
+            executeFetch(page + 1, true);
+          }
         }
       },
-      { threshold: 0.1, rootMargin: '300px' }
+      { threshold: 0.1, rootMargin: '500px' }
     );
 
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [hasMore, isLoadingMore, isLoading, loadMoreError, handleLoadMore]);
+    const currentTarget = observerTarget.current;
+    if (currentTarget) observer.observe(currentTarget);
 
-  // Media item click handler
+    return () => {
+      if (currentTarget) observer.unobserve(currentTarget);
+    };
+  }, [hasMore, isLoading, isLoadingMore, page, executeFetch]);
+
+  const handleSelectCategory = (category: MediaTypeCategory) => {
+    setSelectedType(category);
+    // Automatically sanitize incompatible filter parameters
+    const sanitized = sanitizeFiltersForCategory(filters, category);
+    setFilters(sanitized);
+  };
+
   const handleItemClick = async (item: any) => {
+    if (onSelectMedia) {
+      onSelectMedia(item.id || item.mediaId, item);
+      return;
+    }
+
     if (item.mediaId || (typeof item.id === 'number' && !item.provider)) {
       const id = item.mediaId || item.id;
       navigate(`/media/${formatMediaTypePath(item.type)}/${id}`);
       return;
     }
 
-    // External item - ensure it exists in DB
     try {
       const res = await fetch('/api/media/ensure', {
         method: 'POST',
@@ -317,7 +354,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
         }
       }
     } catch (err) {
-      console.error('Failed to resolve media:', err);
+      console.error('Failed to ensure media in DB:', err);
     }
   };
 
@@ -326,311 +363,400 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
     setSort({ sortBy: 'popularity', sortOrder: 'desc' });
   };
 
-  return (
-    <div className="space-y-6 pb-16">
-      {/* Search Header & Input */}
-      <div className="space-y-4">
-        <div>
-          <h1 className="text-2xl font-black text-zinc-100 font-mono tracking-tight flex items-center gap-2">
-            <span>ПОИСК И КАТАЛОГ</span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-900/40 text-purple-300 border border-purple-800/50 font-sans font-medium">
-              v2 Deep Search
-            </span>
-          </h1>
-          <p className="text-xs text-zinc-400 mt-1">
-            Глубокий поиск и каталог по реальным базам TMDB, Кинопоиск, AniList, RAWG, OpenLibrary и локальной БД Dodik Tracker
-          </p>
-        </div>
+  const handleDiscoveryTabChange = (tab: (typeof discoveryTabs)[0]) => {
+    setDiscoveryTab(tab.id);
+    if (tab.sortOption) {
+      setSort(tab.sortOption);
+    }
+  };
 
-        {/* Input Bar with clear button */}
-        <div className="relative">
-          <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
-          <input
-            id="global-search-input"
-            type="text"
-            value={queryInput}
-            onChange={(e) => setQueryInput(e.target.value)}
-            placeholder="Поиск по названию, оригиналу (напр. Interstellar, Атака титанов, Cyberpunk)..."
-            className="w-full pl-12 pr-20 py-3.5 rounded-2xl bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500/80 focus:ring-2 focus:ring-purple-500/20 transition-all shadow-inner"
-          />
-          <div className="absolute right-3.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-            {queryInput && (
-              <button
-                type="button"
-                onClick={() => setQueryInput('')}
-                className="p-1 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-                title="Очистить поиск"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
-            {isLoading && (
-              <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
-            )}
+  const handleRatingSuccess = (item: any, newRating: number, dodikData?: any) => {
+    setResults((prev) =>
+      prev.map((r) => {
+        const isMatch =
+          (item.mediaId && r.mediaId === item.mediaId) ||
+          (item.id && r.id === item.id) ||
+          (item.externalId && r.externalId === item.externalId);
+        if (isMatch) {
+          return {
+            ...r,
+            userRating: newRating > 0 ? newRating : null,
+            dodikRating: dodikData?.averageRating ?? r.dodikRating,
+            dodikRatingCount: dodikData?.ratingCount ?? r.dodikRatingCount,
+          };
+        }
+        return r;
+      })
+    );
+  };
+
+  return (
+    <div className="space-y-6 sm:space-y-8 pb-20">
+      {/* 1. TOP HEADER & GLOBAL SEARCH BAR */}
+      <div className="space-y-4 sm:space-y-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-[#F8FAFC]">
+              Каталог и Поиск
+            </h1>
+            <p className="text-sm text-[#94A3B8] mt-1">
+              Полноценный поиск по медиакаталогу: фильмы, сериалы, аниме, игры, книги, манга и музыка
+            </p>
           </div>
         </div>
 
-        {/* Categories Chips */}
-        <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
+        {/* Global Catalog Search Form */}
+        <form onSubmit={handleSearchSubmit} className="flex gap-3 w-full">
+          <div className="relative flex-1">
+            <Search className="absolute left-4.5 top-1/2 -translate-y-1/2 w-5.5 h-5.5 text-[#8B5CF6]" />
+            <input
+              type="text"
+              value={queryInput}
+              onChange={(e) => setQueryInput(e.target.value)}
+              placeholder="Найти фильм, игру, книгу, аниме, сериал, комикс..."
+              className="w-full h-14 pl-13 pr-12 rounded-2xl bg-[#0B0D20] hover:bg-[#11152A] focus:bg-[#080A18] text-sm sm:text-base text-[#F8FAFC] placeholder-[#64748B] border border-[#1E2442] focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/30 shadow-xl transition-all outline-none"
+            />
+            {queryInput && (
+              <button
+                type="button"
+                onClick={() => {
+                  setQueryInput('');
+                  setAppliedQuery('');
+                }}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1.5 rounded-xl text-[#64748B] hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4.5 h-4.5" />
+              </button>
+            )}
+          </div>
+          <button
+            type="submit"
+            className="px-7 h-14 rounded-2xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] text-white text-sm sm:text-base font-bold flex items-center gap-2.5 shadow-lg shadow-[#7C3AED]/25 hover:shadow-[#7C3AED]/40 transition-all cursor-pointer shrink-0"
+          >
+            <Search className="w-4.5 h-4.5" />
+            <span>Найти</span>
+          </button>
+        </form>
+
+        {/* 2. CATEGORY TABS */}
+        <div className="flex gap-2.5 overflow-x-auto pb-1.5 custom-scrollbar">
           {categories.map((cat) => {
             const Icon = cat.icon;
             const isSelected = selectedType === cat.id;
+
             return (
               <button
                 key={cat.id}
-                onClick={() => setSelectedType(cat.id as MediaTypeCategory)}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                type="button"
+                onClick={() => handleSelectCategory(cat.id as MediaTypeCategory)}
+                className={`flex items-center gap-2.5 px-5 py-3 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap transition-all duration-200 cursor-pointer ${
                   isSelected
-                    ? 'bg-purple-600 text-white shadow-md shadow-purple-950 border border-purple-500'
-                    : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 border border-zinc-800'
+                    ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-lg shadow-[#7C3AED]/30 border border-violet-400/40 scale-102'
+                    : 'bg-[#0B0D20] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#11152A] border border-[#1E2442]'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
-                {cat.label}
+                <Icon className={`w-4.5 h-4.5 ${isSelected ? 'text-white' : 'text-[#8B5CF6]'}`} />
+                <span>{cat.label}</span>
               </button>
             );
           })}
         </div>
 
-        {/* Unified Search Filter & Sorting Panel */}
-        <SearchFilterPanel
-          type={selectedType}
-          filters={filters}
-          sort={sort}
-          onFilterChange={(newFilters) => setFilters(newFilters)}
-          onSortChange={(newSort) => setSort(newSort)}
-          onReset={handleResetFilters}
-          resultCount={results.length}
-          isOpen={isFilterPanelOpen}
-          onToggleOpen={() => setIsFilterPanelOpen((prev) => !prev)}
-        />
-      </div>
+        {/* 3. DISCOVERY TABS (Тренды, Популярное, Новые релизы, Высокие оценки, Для тебя) */}
+        {!hasTextQuery && (
+          <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] overflow-x-auto custom-scrollbar">
+            {discoveryTabs.map((tab) => {
+              const TabIcon = tab.icon;
+              const isSelected = discoveryTab === tab.id;
 
-      {/* Results Section */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-2 font-mono">
-            {isSearchOrCatalogMode ? (
-              <>
-                <span>Каталог & Результаты</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-800 text-purple-300 font-sans">
-                  {results.length} найдено
-                </span>
-                {hasActiveFilters(filters) && (
-                  <span className="text-[11px] text-zinc-500 font-sans font-normal">
-                    (фильтры применены)
-                  </span>
-                )}
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 text-purple-400" />
-                <span>Популярное & Тренды</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-purple-900/40 text-purple-300 border border-purple-800/50 font-sans">
-                  {selectedType === 'ALL'
-                    ? 'Все категории'
-                    : categories.find((c) => c.id === selectedType)?.label}
-                </span>
-              </>
-            )}
-          </h2>
-        </div>
-
-        {/* Error state with retry */}
-        {error && !isLoading && (
-          <div className="p-6 mb-6 rounded-2xl bg-rose-950/20 border border-rose-800/40 text-center space-y-3">
-            <div className="w-10 h-10 rounded-full bg-rose-900/30 flex items-center justify-center mx-auto text-rose-400">
-              <AlertCircle className="w-5 h-5" />
-            </div>
-            <p className="text-sm text-rose-200 font-medium">{error}</p>
-            <button
-              onClick={() => executeFetch(1, false)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition-all shadow-md shadow-rose-950/40"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Повторить попытку
-            </button>
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => handleDiscoveryTabChange(tab)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-[#151932] text-[#F8FAFC] border border-[#8B5CF6]/60 shadow-sm font-bold'
+                      : 'text-[#94A3B8] hover:text-[#CBD5E1] hover:bg-[#11152A]'
+                  }`}
+                >
+                  <TabIcon
+                    className={`w-4 h-4 ${
+                      isSelected ? 'text-[#A78BFA]' : 'text-[#64748B]'
+                    }`}
+                  />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
         )}
-
-        {/* Initial loading state skeleton */}
-        {isLoading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-            {[...Array(12)].map((_, i) => (
-              <div
-                key={i}
-                className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-2 space-y-2 animate-pulse"
-              >
-                <div className="aspect-[2/3] w-full rounded-xl bg-zinc-800/60" />
-                <div className="h-3 bg-zinc-800/80 rounded w-3/4" />
-                <div className="h-2.5 bg-zinc-800/60 rounded w-1/2" />
-              </div>
-            ))}
-          </div>
-        ) : results.length > 0 ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-            {results.map((item, idx) => (
-              <div
-                key={`${item.provider || 'db'}-${item.externalId || item.mediaId || item.id || idx}`}
-                className="group relative rounded-2xl bg-zinc-900 border border-zinc-800/80 hover:border-purple-500/50 overflow-hidden flex flex-col transition-all duration-300 hover:shadow-xl hover:shadow-purple-950/20 hover:-translate-y-1"
-              >
-                {/* Poster container */}
-                <div
-                  onClick={() => handleItemClick(item)}
-                  className="aspect-[2/3] w-full relative bg-zinc-950 overflow-hidden cursor-pointer"
-                >
-                  {item.posterUrl ? (
-                    <img
-                      src={item.posterUrl}
-                      alt={item.title}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-zinc-400 text-xs">
-                      <Film className="w-6 h-6 mb-1 text-zinc-600" />
-                      <span>Нет постера</span>
-                    </div>
-                  )}
-
-                  {/* Rating badge */}
-                  {item.rating ? (
-                    <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-lg bg-black/80 backdrop-blur-md border border-amber-500/30 text-amber-400 text-[10px] font-bold flex items-center gap-1 shadow">
-                      <Star className="w-3 h-3 fill-amber-400" />
-                      {typeof item.rating === 'number' ? item.rating.toFixed(1) : item.rating}
-                    </div>
-                  ) : null}
-
-                  {/* Provider tag */}
-                  {item.provider && (
-                    <div className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-md text-[9px] font-mono text-zinc-300 border border-zinc-700">
-                      {item.provider}
-                    </div>
-                  )}
-                </div>
-
-                {/* Info & Add Action */}
-                <div className="p-3 flex-1 flex flex-col justify-between space-y-2">
-                  <div
-                    className="cursor-pointer"
-                    onClick={() => handleItemClick(item)}
-                  >
-                    <h3 className="text-xs font-bold text-[#F3F1F8] line-clamp-1 group-hover:text-[#AC82FF] transition-colors">
-                      {item.title}
-                    </h3>
-                    <div className="flex items-center gap-1.5 mt-1 text-[11px] text-[#9A94AA]">
-                      {item.year && <span>{item.year}</span>}
-                      <span className="text-zinc-600">•</span>
-                      <span className="text-[#AC82FF] font-medium text-[10px]">{item.type}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 pt-1">
-                    <button
-                      onClick={() => setActiveModalItem(item)}
-                      className="flex-1 py-1.5 px-2 rounded-xl bg-[#9B6BFF]/15 hover:bg-[#9B6BFF] text-[#AC82FF] hover:text-white border border-[#9B6BFF]/30 hover:border-[#9B6BFF] text-xs font-medium flex items-center justify-center gap-1 transition-all shadow-sm"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Библиотека
-                    </button>
-                    <button
-                      title="Добавить в пользовательский список"
-                      onClick={() => setAddToListMedia(item)}
-                      className="p-1.5 rounded-xl bg-[#191724] hover:bg-[#9B6BFF] text-[#9A94AA] hover:text-white border border-[#252233] hover:border-[#9B6BFF] transition-colors"
-                    >
-                      <Bookmark className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : !error ? (
-          /* Empty state */
-          <div className="py-16 text-center space-y-3 bg-zinc-900/30 rounded-2xl border border-zinc-800/60 p-8">
-            <div className="w-12 h-12 rounded-full bg-zinc-800/80 flex items-center justify-center mx-auto text-zinc-400">
-              <Film className="w-6 h-6" />
-            </div>
-            <h3 className="text-sm font-semibold text-zinc-200">Ничего не найдено</h3>
-            <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-              {isSearchOrCatalogMode
-                ? 'По вашему запросу и выбранным фильтрам ничего не найдено. Попробуйте смягчить критерии поиска или сбросить фильтры.'
-                : 'В этой категории пока нет доступных тайтлов.'}
-            </p>
-            {hasActiveFilters(filters) && (
-              <button
-                type="button"
-                onClick={handleResetFilters}
-                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 text-xs font-semibold"
-              >
-                Сбросить фильтры
-              </button>
-            )}
-          </div>
-        ) : null}
       </div>
 
-      {/* Infinite Scroll Sentinel & Load More Status */}
-      {results.length > 0 && (
-        <div ref={observerTarget} className="py-6 flex flex-col items-center justify-center text-center">
-          {isLoadingMore && (
-            <div className="flex flex-col items-center gap-2 text-zinc-400 py-2">
-              <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
-              <span className="text-xs">Загрузка следующих результатов...</span>
-            </div>
-          )}
+      {/* 4. MAIN LAYOUT: LEFT SIDEBAR FILTERS + RIGHT MEDIA GRID */}
+      <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
+        {/* LEFT: Spacious Filter Sidebar */}
+        <div className="w-full lg:w-[320px] xl:w-[340px] shrink-0 lg:sticky lg:top-4 z-10">
+          <SearchFilterPanel
+            type={selectedType}
+            filters={filters}
+            sort={sort}
+            onFilterChange={setFilters}
+            onSortChange={setSort}
+            onReset={handleResetFilters}
+            resultCount={results.length}
+            isOpen={isFilterPanelOpen}
+            onToggleOpen={() => setIsFilterPanelOpen((prev) => !prev)}
+          />
+        </div>
 
-          {/* Load More Error with Retry */}
-          {loadMoreError && !isLoadingMore && (
-            <div className="flex flex-col items-center gap-2 text-rose-400 py-2">
-              <span className="text-xs">{loadMoreError}</span>
+        {/* RIGHT: Media Catalog Grid */}
+        <div className="flex-1 min-w-0 space-y-6">
+          {/* Active search summary */}
+          <div className="flex items-center justify-between text-xs sm:text-sm text-[#94A3B8] px-1 font-mono">
+            <div className="flex items-center gap-2.5">
               <button
-                onClick={handleLoadMore}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/40 text-rose-200 border border-rose-500/30 text-xs font-semibold transition-all"
+                type="button"
+                onClick={() => setIsFilterPanelOpen(true)}
+                className="lg:hidden inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#151932] hover:bg-[#191D38] border border-[#1E2442] text-xs font-sans font-semibold text-[#CBD5E1] hover:text-white transition-colors cursor-pointer"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Повторить
+                <SlidersHorizontal className="w-4 h-4 text-[#8B5CF6]" />
+                <span>Фильтры</span>
+                {hasActiveFilters(filters) && (
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#8B5CF6]" />
+                )}
               </button>
+              <span>
+                {isLoading
+                  ? 'Поиск тайтлов в каталоге...'
+                  : `Найдено ${results.length} ${
+                      results.length === 1
+                        ? 'тайтл'
+                        : results.length < 5
+                        ? 'тайтла'
+                        : 'тайтлов'
+                    }`}
+              </span>
+            </div>
+
+            {isLoading && (
+              <span className="flex items-center gap-2 text-[#A78BFA]">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Загрузка</span>
+              </span>
+            )}
+          </div>
+
+          {/* Results Grid: generous card sizes across 1024, 1280, 1440, 1920 resolutions */}
+          {results.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 sm:gap-5">
+              {results.map((item, idx) => {
+                const itemKey = `${item.provider || 'm'}-${item.externalId || item.mediaId || item.id || idx}`;
+                const dodikRating = item.dodikRating ?? (item.provider === 'DODIK_DB' ? item.rating : null);
+                const dodikVotes = item.dodikRatingCount || 0;
+                const userRating = item.userRating;
+
+                return (
+                  <div
+                    key={itemKey}
+                    className="group relative rounded-2xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#8B5CF6]/50 overflow-hidden flex flex-col justify-between transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:shadow-[#7C3AED]/15 cursor-pointer"
+                  >
+                    {/* Poster Thumbnail */}
+                    <div
+                      onClick={() => handleItemClick(item)}
+                      className="relative aspect-[2/3] w-full bg-[#11152A] overflow-hidden"
+                    >
+                      {item.posterUrl ? (
+                        <img
+                          src={item.posterUrl}
+                          alt={item.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-xs text-[#64748B]">
+                          <Film className="w-8 h-8 text-[#8B5CF6]/40 mb-1.5" />
+                          <span className="line-clamp-2 text-xs">{item.title}</span>
+                        </div>
+                      )}
+
+                      {/* Category Badge (Top-left) */}
+                      <div className="absolute top-2 left-2 z-10">
+                        <CategoryBadge type={item.type || selectedType} size="sm" />
+                      </div>
+
+                      {/* External Rating Badge (Top-right) */}
+                      {item.rating ? (
+                        <div className="absolute top-2 right-2 z-10">
+                          <RatingBadge rating={item.rating} size="sm" />
+                        </div>
+                      ) : null}
+
+                      {/* Hover Action Overlay */}
+                      <div className="absolute inset-0 bg-[#080A18]/85 backdrop-blur-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-2.5 z-20">
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveModalItem(item);
+                            }}
+                            className="w-full py-2 px-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>В библиотеку</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAddToListMedia(item);
+                            }}
+                            className="w-full py-2 px-2.5 rounded-xl bg-[#151932] hover:bg-[#191D38] text-[#CBD5E1] hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 border border-[#1E2442] transition-colors cursor-pointer"
+                          >
+                            <Bookmark className="w-3.5 h-3.5 text-[#A78BFA]" />
+                            <span>В список</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card Meta & Ratings Block */}
+                    <div
+                      onClick={() => handleItemClick(item)}
+                      className="p-3 space-y-2 bg-[#0B0D20] flex-1 flex flex-col justify-between"
+                    >
+                      <div>
+                        <h3
+                          className="font-bold text-sm text-[#F8FAFC] group-hover:text-[#A78BFA] transition-colors line-clamp-2 min-h-[2.5rem] leading-snug"
+                          title={item.title}
+                        >
+                          {item.title}
+                        </h3>
+
+                        <div className="flex items-center justify-between text-xs text-[#94A3B8] font-mono mt-1.5">
+                          <span>{item.year || '—'}</span>
+                          {item.genres && item.genres[0] && (
+                            <span className="truncate max-w-[90px] text-[#64748B]">
+                              {item.genres[0]}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Dodik Tracker Rating & User Rating Display */}
+                      <div className="pt-2 border-t border-[#1E2442]/60 space-y-1.5">
+                        {/* Dodik Tracker Rating (⭐ 8.7 124 оценки) */}
+                        {dodikRating && dodikRating > 0 ? (
+                          <div className="flex items-center justify-between text-xs font-mono text-[#CBD5E1]">
+                            <span className="text-amber-400 font-bold flex items-center gap-1">
+                              ⭐ {typeof dodikRating === 'number' ? dodikRating.toFixed(1) : dodikRating}
+                            </span>
+                            {dodikVotes > 0 && (
+                              <span className="text-[10px] text-[#64748B]">
+                                {dodikVotes} {dodikVotes === 1 ? 'оценка' : dodikVotes < 5 ? 'оценки' : 'оценок'}
+                              </span>
+                            )}
+                          </div>
+                        ) : null}
+
+                        {/* My Rating / Rate Action */}
+                        <div>
+                          {userRating ? (
+                            <div className="w-full py-1 px-2 rounded-lg bg-amber-400/10 border border-amber-400/30 text-xs font-mono font-bold text-amber-300 flex items-center justify-between">
+                              <span>Моя оценка:</span>
+                              <span className="text-amber-400">{userRating}/10</span>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setQuickRateItem(item);
+                              }}
+                              className="w-full py-1.5 rounded-lg bg-[#151932] hover:bg-[#1E2442] text-xs font-semibold text-[#A78BFA] hover:text-white border border-[#1E2442] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Star className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Оценить</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : !isLoading && (
+            <EmptyState
+              icon={<Search className="w-8 h-8 text-[#8B5CF6]" />}
+              title="Ничего не найдено в каталоге"
+              description="Попробуйте изменить поисковый запрос, сбросить фильтры или выбрать другую категорию."
+              actionText="Сбросить фильтры"
+              onAction={handleResetFilters}
+            />
+          )}
+
+          {/* Infinite Scroll trigger element */}
+          <div ref={observerTarget} className="h-6 w-full" />
+
+          {/* Loading More Indicator */}
+          {isLoadingMore && (
+            <div className="py-6 flex items-center justify-center gap-2 text-xs text-[#94A3B8] font-mono">
+              <Loader2 className="w-4 h-4 text-[#8B5CF6] animate-spin" />
+              <span>Загрузка следующей страницы...</span>
             </div>
           )}
 
-          {/* Manual load more fallback button if user prefers */}
-          {hasMore && !isLoadingMore && !isLoading && !loadMoreError && (
-            <button
-              type="button"
-              onClick={handleLoadMore}
-              className="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 text-xs font-semibold transition-all shadow-sm"
-            >
-              Загрузить ещё
-            </button>
-          )}
-
-          {/* End of results message */}
-          {!hasMore && !isLoadingMore && !isLoading && !loadMoreError && (
-            <div className="flex items-center gap-2 text-xs text-zinc-500 font-medium py-3">
-              <CheckCircle2 className="w-4 h-4 text-emerald-500/70" />
-              <span>Вы просмотрели все доступные результаты</span>
+          {/* Manual Load More Button fallback */}
+          {hasMore && !isLoading && !isLoadingMore && (
+            <div className="pt-4 flex justify-center">
+              <SecondaryButton
+                onClick={() => executeFetch(page + 1, true)}
+                size="md"
+                icon={<Plus className="w-4 h-4 text-[#A78BFA]" />}
+              >
+                Загрузить ещё тайтлы
+              </SecondaryButton>
             </div>
           )}
         </div>
-      )}
+      </div>
 
-      {/* Modal: Add to Library */}
+      {/* Add To Library Modal */}
       {activeModalItem && (
         <AddToLibraryModal
           mediaItem={activeModalItem}
           onClose={() => setActiveModalItem(null)}
-          onAdded={() => {
-            // Optional callback
-          }}
         />
       )}
 
-      {/* Modal: Add to List */}
+      {/* Add To Custom List Modal */}
       {addToListMedia && (
         <AddToListModal
-          media={addToListMedia}
+          media={{
+            id: addToListMedia.mediaId || addToListMedia.id,
+            mediaId: addToListMedia.mediaId || addToListMedia.id,
+            title: addToListMedia.title,
+            type: addToListMedia.type || selectedType,
+            posterUrl: addToListMedia.posterUrl,
+            year: addToListMedia.year,
+            rating: addToListMedia.rating,
+            provider: addToListMedia.provider,
+            externalId: addToListMedia.externalId,
+          }}
           onClose={() => setAddToListMedia(null)}
+          onAdded={() => setAddToListMedia(null)}
+        />
+      )}
+
+      {/* Quick Rating Modal */}
+      {quickRateItem && (
+        <QuickRatingModal
+          mediaItem={quickRateItem}
+          onClose={() => setQuickRateItem(null)}
+          onSuccess={(rating, dodikData) => handleRatingSuccess(quickRateItem, rating, dodikData)}
         />
       )}
     </div>

@@ -94,10 +94,10 @@ export const AnnouncementBanner: React.FC = () => {
             key={ann.id}
             className={`relative overflow-hidden rounded-2xl border transition-all shadow-lg ${
               isCritical
-                ? 'bg-gradient-to-r from-rose-950/60 via-[#181116] to-[#120F14] border-rose-500/50 shadow-rose-950/30'
+                ? 'bg-gradient-to-r from-rose-950/60 via-[#181116] to-[#0B0D20] border-rose-500/50 shadow-rose-950/30'
                 : isImportant
-                ? 'bg-gradient-to-r from-amber-950/50 via-[#191512] to-[#131110] border-amber-500/40 shadow-amber-950/20'
-                : 'bg-gradient-to-r from-[#1B1728]/90 via-[#14121C] to-[#100F14] border-[#9B6BFF]/40 shadow-purple-950/20'
+                ? 'bg-gradient-to-r from-amber-950/50 via-[#191512] to-[#0B0D20] border-amber-500/40 shadow-amber-950/20'
+                : 'bg-gradient-to-r from-[#181436]/90 via-[#11152A] to-[#0B0D20] border-[#8B5CF6]/40 shadow-md'
             }`}
           >
             {/* Ambient accent light */}
@@ -107,7 +107,7 @@ export const AnnouncementBanner: React.FC = () => {
                   ? 'bg-rose-500'
                   : isImportant
                   ? 'bg-amber-500'
-                  : 'bg-[#9B6BFF]'
+                  : 'bg-[#8B5CF6]'
               }`}
             />
 
@@ -121,7 +121,7 @@ export const AnnouncementBanner: React.FC = () => {
                         ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                         : isImportant
                         ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                        : 'bg-[#9B6BFF]/20 text-[#C9A9FF] border border-[#9B6BFF]/30'
+                        : 'bg-[#8B5CF6]/20 text-[#A78BFA] border border-[#8B5CF6]/30'
                     }`}
                   >
                     {isCritical ? (
@@ -129,19 +129,19 @@ export const AnnouncementBanner: React.FC = () => {
                     ) : isImportant ? (
                       <AlertTriangle className="w-4 h-4 text-amber-400" />
                     ) : (
-                      <Megaphone className="w-4 h-4 text-[#9B6BFF]" />
+                      <Megaphone className="w-4 h-4 text-[#8B5CF6]" />
                     )}
                   </div>
 
                   <div className="space-y-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
-                        className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                        className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md font-mono ${
                           isCritical
                             ? 'bg-rose-500/30 text-rose-200 border border-rose-500/40'
                             : isImportant
                             ? 'bg-amber-500/30 text-amber-200 border border-amber-500/40'
-                            : 'bg-[#9B6BFF]/30 text-[#E2D4FF] border border-[#9B6BFF]/40'
+                            : 'bg-[#8B5CF6]/25 text-[#A78BFA] border border-[#8B5CF6]/40'
                         }`}
                       >
                         {isCritical
@@ -150,7 +150,7 @@ export const AnnouncementBanner: React.FC = () => {
                           ? 'Важное объявление'
                           : 'Системное объявление'}
                       </span>
-                      <span className="text-[11px] text-[#7E7890] flex items-center gap-1">
+                      <span className="text-[11px] text-[#64748B] flex items-center gap-1 font-mono">
                         <Clock className="w-3 h-3" />
                         {new Date(ann.publishedAt || ann.createdAt).toLocaleDateString('ru-RU', {
                           day: 'numeric',
@@ -198,7 +198,7 @@ export const AnnouncementBanner: React.FC = () => {
                 {isLongText && (
                   <button
                     onClick={() => setExpandedId(isExpanded ? null : ann.id)}
-                    className="mt-1 text-xs font-semibold text-[#AC82FF] hover:underline flex items-center gap-1"
+                    className="mt-1 text-xs font-semibold text-[#A78BFA] hover:underline flex items-center gap-1 cursor-pointer"
                   >
                     {isExpanded ? (
                       <>
@@ -217,10 +217,10 @@ export const AnnouncementBanner: React.FC = () => {
 
               {/* Author footer if expanded */}
               {isExpanded && ann.author?.username && (
-                <div className="pt-2 mt-1 border-t border-white/10 flex items-center gap-2 pl-1 sm:pl-11 text-[11px] text-[#8E88A0]">
-                  <User className="w-3 h-3 text-[#9B6BFF]" />
+                <div className="pt-2 mt-1 border-t border-[#1E2442] flex items-center gap-2 pl-1 sm:pl-11 text-[11px] text-[#94A3B8]">
+                  <User className="w-3 h-3 text-[#8B5CF6]" />
                   <span>
-                    Администрация: <strong className="text-[#F3F1F8]">@{ann.author.username}</strong>
+                    Администрация: <strong className="text-[#F8FAFC]">@{ann.author.username}</strong>
                   </span>
                 </div>
               )}

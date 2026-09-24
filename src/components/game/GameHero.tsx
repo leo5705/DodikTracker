@@ -17,6 +17,7 @@ import {
 import { UnifiedGame } from '../../types/unifiedGame.ts';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { normalizeAgeRating } from '../../utils/ageRating.ts';
 
 interface GameHeroProps {
   game: UnifiedGame;
@@ -120,11 +121,15 @@ export const GameHero: React.FC<GameHeroProps> = ({
             )}
 
             {/* Age Rating Badge */}
-            {game.ageRating && (
-              <div className="absolute top-3 right-3 px-2 py-1 rounded-lg bg-black/80 backdrop-blur-md border border-zinc-700 text-[10px] font-bold text-zinc-200 tracking-wider">
-                {game.ageRating}
-              </div>
-            )}
+            {(() => {
+              const norm = normalizeAgeRating(game.ageRating, (game as any).provider || 'RAWG');
+              if (!norm) return null;
+              return (
+                <div className="absolute top-3 right-3 px-2.5 py-1 rounded-lg bg-[#080A18]/90 backdrop-blur-md border border-[#1E2442] text-[10px] font-bold text-[#F8FAFC] tracking-wider font-mono shadow-md">
+                  {norm.displayText}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Source Badges */}
@@ -187,7 +192,7 @@ export const GameHero: React.FC<GameHeroProps> = ({
             </div>
 
             {/* Ratings Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 pt-2">
               {/* RAWG / Global Rating */}
               {game.rating !== undefined && (
                 <div className="p-3 rounded-2xl bg-zinc-950/70 border border-zinc-800 flex items-center gap-3">
@@ -195,16 +200,36 @@ export const GameHero: React.FC<GameHeroProps> = ({
                     <Star className="w-5 h-5 fill-purple-400/20" />
                   </div>
                   <div>
-                    <div className="text-lg font-bold text-zinc-100 flex items-baseline gap-1">
+                    <div className="text-lg font-bold text-zinc-100 flex items-baseline gap-1 font-mono">
                       <span>{game.rating.toFixed(1)}</span>
                       <span className="text-[10px] text-zinc-500 font-normal">/ 10</span>
                     </div>
                     <div className="text-[10px] text-zinc-400">
-                      {game.ratingCount ? `${game.ratingCount} оценок` : 'Рейтинг базы'}
+                      {game.ratingCount ? `${game.ratingCount} оценок RAWG` : 'Рейтинг RAWG'}
                     </div>
                   </div>
                 </div>
               )}
+
+              {/* Dodik Tracker Community Rating (1-10) */}
+              {((game as any).dodikRating !== undefined && (game as any).dodikRating !== null) ? (
+                <div className="p-3 rounded-2xl bg-gradient-to-br from-purple-950/60 to-indigo-950/60 border border-purple-500/40 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-300 shrink-0">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-amber-300 flex items-baseline gap-1 font-mono">
+                      <span>{Number((game as any).dodikRating).toFixed(1)}</span>
+                      <span className="text-[10px] text-purple-300/70 font-normal">/ 10</span>
+                    </div>
+                    <div className="text-[10px] text-purple-300/80">
+                      {(game as any).dodikRatingCount
+                        ? `${(game as any).dodikRatingCount} оценок DT`
+                        : 'Dodik Tracker'}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               {/* Metacritic Score */}
               {game.metacritic !== null && game.metacritic !== undefined && (
@@ -233,18 +258,20 @@ export const GameHero: React.FC<GameHeroProps> = ({
                   <Award className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="text-lg font-bold text-zinc-100">
+                  <div className="text-lg font-bold text-zinc-100 font-mono">
                     {currentScore ? (
-                      <span className="text-amber-400">{currentScore} / 10</span>
+                      <span className="text-amber-400">
+                        {currentScore > 10 ? Math.round(currentScore / 10) : currentScore} / 10
+                      </span>
                     ) : (
-                      <span className="text-zinc-500 text-xs">Не оценено</span>
+                      <span className="text-zinc-500 text-xs font-sans">Не оценено</span>
                     )}
                   </div>
                   <button
                     onClick={onOpenRatingModal}
-                    className="text-[10px] text-purple-400 hover:underline text-left block"
+                    className="text-[10px] text-purple-400 hover:underline text-left block cursor-pointer"
                   >
-                    {currentScore ? 'Изменить оценку' : 'Оценить игру'}
+                    {currentScore ? 'Изменить оценку' : 'Оценить (1–10)'}
                   </button>
                 </div>
               </div>

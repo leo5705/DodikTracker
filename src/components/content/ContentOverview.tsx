@@ -40,21 +40,21 @@ export const ContentOverview: React.FC<ContentOverviewProps> = ({ item }) => {
   const displayText = expanded || !isLong ? description : description.slice(0, 450) + '...';
 
   return (
-    <div className="p-6 md:p-8 rounded-3xl bg-zinc-900/80 border border-zinc-800 space-y-4">
+    <div className="p-6 md:p-8 rounded-3xl bg-[#11152A] border border-[#1E2442] space-y-4">
       {/* Header */}
-      <div className="flex items-center gap-2.5 border-b border-zinc-800/80 pb-4">
-        <div className="p-2 rounded-xl bg-purple-950/40 border border-purple-800/40 text-purple-400">
+      <div className="flex items-center gap-2.5 border-b border-[#1E2442] pb-4">
+        <div className="p-2 rounded-xl bg-[#151932] border border-[#8B5CF6]/30 text-[#A78BFA]">
           <Icon className="w-5 h-5" />
         </div>
         <div>
-          <h2 className="text-lg font-bold text-zinc-100">{heading.title}</h2>
-          <p className="text-xs text-zinc-400">Сюжет, синопсис и основная идея</p>
+          <h2 className="text-base font-bold text-[#F8FAFC]">{heading.title}</h2>
+          <p className="text-xs text-[#94A3B8]">Сюжет, синопсис и основная идея</p>
         </div>
       </div>
 
       {/* Tagline if available */}
       {item.tagline && (
-        <blockquote className="text-sm font-medium text-purple-300 italic border-l-2 border-purple-500/60 pl-3 py-0.5">
+        <blockquote className="text-sm font-medium text-[#A78BFA] italic border-l-2 border-[#8B5CF6] pl-3 py-0.5">
           «{item.tagline}»
         </blockquote>
       )}
@@ -62,14 +62,14 @@ export const ContentOverview: React.FC<ContentOverviewProps> = ({ item }) => {
       {/* Body text */}
       {description && (
         <div className="space-y-3">
-          <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed whitespace-pre-line font-sans">
+          <p className="text-xs sm:text-sm text-[#CBD5E1] leading-relaxed whitespace-pre-line font-sans">
             {displayText}
           </p>
 
           {isLong && (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-400 hover:text-purple-300 transition-colors pt-1"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#A78BFA] hover:text-white transition-colors pt-1 cursor-pointer"
             >
               <span>{expanded ? 'Свернуть' : 'Читать полностью'}</span>
               {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}

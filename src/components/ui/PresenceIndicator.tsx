@@ -15,25 +15,24 @@ export const PresenceIndicator: React.FC<PresenceIndicatorProps> = ({
   className = ''
 }) => {
   const isOnline = presence?.status === 'online';
-  const statusColor = isOnline ? 'bg-green-500' : 'bg-gray-400';
+  const statusColor = isOnline ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-zinc-500';
   
   const sizeClasses = {
     sm: 'w-2 h-2',
-    md: 'w-3 h-3',
-    lg: 'w-4 h-4'
+    md: 'w-2.5 h-2.5',
+    lg: 'w-3 h-3'
   };
 
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
-      <span className="relative flex items-center justify-center">
-        {isOnline && (
-          <span className={`absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75 animate-ping`} />
-        )}
-        <span className={`relative inline-flex rounded-full ${sizeClasses[size]} ${statusColor} border-2 border-white dark:border-gray-800`} />
+    <div className={`inline-flex items-center gap-1.5 ${className}`}>
+      <span className="relative inline-flex items-center justify-center">
+        <span
+          className={`inline-block rounded-full ${sizeClasses[size]} ${statusColor} ring-2 ring-[#0B0D20]`}
+        />
       </span>
-      {showText && presence?.statusText && (
-        <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-          {presence.statusText}
+      {showText && (
+        <span className="text-[11px] text-[#94A3B8] font-medium leading-none">
+          {isOnline ? 'В сети' : presence?.statusText || 'Не в сети'}
         </span>
       )}
     </div>

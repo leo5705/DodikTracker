@@ -138,6 +138,17 @@ export interface UnifiedGame {
   ageRating?: string | null;
   isAdult?: boolean;
   posterUrl?: string;
+  dodikRating?: {
+    averageRating: number | null;
+    ratingCount: number;
+    distribution?: Record<string, number>;
+    userRating?: number | null;
+  };
+  externalRatings?: Array<{
+    source: string;
+    score: number;
+    max?: number;
+  }>;
   backdropUrl?: string;
   coverUrl?: string;
   website?: string | null;
@@ -212,7 +223,7 @@ export interface GameCatalogFilters {
   metacriticFrom?: number;
   metacriticTo?: number;
   multiplayer?: boolean;
-  sortBy?: 'popularity' | 'rating' | 'metacritic' | 'release_date' | 'name';
+  sortBy?: 'trending' | 'popularity' | 'rating' | 'metacritic' | 'release_date' | 'name';
   sortOrder?: 'asc' | 'desc';
   page?: number;
   limit?: number;

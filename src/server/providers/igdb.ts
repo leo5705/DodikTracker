@@ -251,7 +251,7 @@ export class IGDBProvider implements MediaProvider {
     if (!token || !resolvedClientId) return null;
 
     try {
-      const body = `fields id, name, summary, storyline, rating, first_release_date, cover.image_id, artworks.image_id, screenshots.image_id, genres.name, platforms.name, involved_companies.company.name, involved_companies.developer, involved_companies.publisher, videos.video_id, videos.name, websites.url, alternative_names.name; where id = ${externalId};`;
+      const body = `fields id, name, summary, storyline, rating, first_release_date, cover.image_id, artworks.image_id, screenshots.image_id, genres.name, platforms.name, involved_companies.company.name, involved_companies.developer, involved_companies.publisher, videos.video_id, videos.name, websites.url, alternative_names.name, age_ratings.category, age_ratings.rating; where id = ${externalId};`;
 
       const res = await fetch('https://api.igdb.com/v4/games', {
         method: 'POST',
@@ -323,6 +323,34 @@ export class IGDBProvider implements MediaProvider {
         alternates,
       });
 
+      const esrbMap: Record<number, string> = {
+        8: 'Everyone',
+        9: 'Everyone 10+',
+        10: 'Teen',
+        11: 'Mature 17+',
+        12: 'Adults Only 18+',
+      };
+      const pegiMap: Record<number, string> = {
+        1: 'PEGI 3',
+        2: 'PEGI 7',
+        3: 'PEGI 12',
+        4: 'PEGI 16',
+        5: 'PEGI 18',
+      };
+
+      let ageRating: string | undefined;
+      if (Array.isArray(game.age_ratings)) {
+        const esrbRating = game.age_ratings.find((r: any) => r.category === 1);
+        const pegiRating = game.age_ratings.find((r: any) => r.category === 2);
+        if (esrbRating && esrbMap[esrbRating.rating]) {
+          ageRating = esrbMap[esrbRating.rating];
+        } else if (pegiRating && pegiMap[pegiRating.rating]) {
+          ageRating = pegiMap[pegiRating.rating];
+        } else if (game.age_ratings[0]?.rating) {
+          ageRating = esrbMap[game.age_ratings[0].rating] || pegiMap[game.age_ratings[0].rating];
+        }
+      }
+
       return {
         provider: 'IGDB',
         externalId: String(game.id),
@@ -343,6 +371,7 @@ export class IGDBProvider implements MediaProvider {
         videos: videos.length > 0 ? videos : undefined,
         trailerUrl: videos[0]?.url,
         rating: game.rating ? Math.round(game.rating) / 10 : undefined,
+        ageRating,
         website: game.websites?.[0]?.url,
         statusText: year ? `Вышла в ${year}` : 'Выпущена',
         sourceText: 'IGDB',
@@ -364,7 +393,11 @@ export class IGDBProvider implements MediaProvider {
 
     try {
       const offset = Math.max((page - 1) * limit, 0);
-      const body = `fields id, name, summary, rating, first_release_date, cover.image_id, genres.name, platforms.name, alternative_names.name; where rating_count > 15 & rating != null; sort rating desc; offset ${offset}; limit ${limit};`;
+      const nowUnix = Math.floor(Date.now() / 1000);
+      const oneYearAgoUnix = nowUnix - 365 * 24 * 60 * 60;
+      const sixMonthsAheadUnix = nowUnix + 180 * 24 * 60 * 60;
+
+      const body = `fields id, name, summary, rating, total_rating_count, rating_count, first_release_date, cover.image_id, genres.name, platforms.name, alternative_names.name; where first_release_date >= ${oneYearAgoUnix} & first_release_date <= ${sixMonthsAheadUnix}; sort total_rating_count desc; offset ${offset}; limit ${limit};`;
 
       const res = await fetch('https://api.igdb.com/v4/games', {
         method: 'POST',

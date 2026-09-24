@@ -49,7 +49,7 @@ export const MiniMessenger: React.FC = () => {
   const userIdsForPresence = activeChatId ? [activeChatId] : dialogs.map(d => d.otherUserId);
   const presenceMap = usePresence(userIdsForPresence);
 
-  // Expose a global method to open chat with a specific user
+  // Expose a global method to open chat with a specific user or toggle messenger
   useEffect(() => {
     const handleOpenChat = (e: Event) => {
       const customEvent = e as CustomEvent<{ id: number, username: string, avatar: string | null }>;
@@ -57,8 +57,15 @@ export const MiniMessenger: React.FC = () => {
       setIsOpen(true);
       openChat(user);
     };
+    const handleToggleMessenger = () => {
+      setIsOpen(prev => !prev);
+    };
     window.addEventListener('open_chat', handleOpenChat);
-    return () => window.removeEventListener('open_chat', handleOpenChat);
+    window.addEventListener('toggle_messenger', handleToggleMessenger);
+    return () => {
+      window.removeEventListener('open_chat', handleOpenChat);
+      window.removeEventListener('toggle_messenger', handleToggleMessenger);
+    };
   }, []);
 
   // Initial fetch of dialogs to show unread badge
@@ -239,13 +246,13 @@ export const MiniMessenger: React.FC = () => {
     >
       {/* Messenger Panel */}
       {isOpen && (
-        <div className="pointer-events-auto w-[calc(100vw-2rem)] max-w-[22rem] sm:max-w-sm md:w-96 h-[480px] max-h-[calc(100dvh-5rem-env(safe-area-inset-bottom,0px)-4rem)] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden mb-3 animate-in slide-in-from-bottom-5 duration-200">
+        <div className="pointer-events-auto w-[calc(100vw-2rem)] max-w-[22rem] sm:max-w-sm md:w-96 h-[490px] max-h-[calc(100dvh-5rem-env(safe-area-inset-bottom,0px)-4rem)] bg-[#0B0D20]/95 backdrop-blur-xl border border-[#1E2442] rounded-2xl shadow-2xl shadow-black/80 flex flex-col overflow-hidden mb-3 animate-in slide-in-from-bottom-5 duration-200">
           
           {/* Header */}
-          <div className="h-14 bg-zinc-900 border-b border-zinc-800 px-4 flex items-center justify-between shrink-0">
+          <div className="h-14 bg-[#11152A] border-b border-[#1E2442] px-4 flex items-center justify-between shrink-0">
             {activeChatUser ? (
               <div className="flex items-center gap-3">
-                <button onClick={closeChat} className="p-1.5 -ml-1.5 hover:bg-zinc-800 rounded-lg text-zinc-400 transition-colors">
+                <button onClick={closeChat} className="p-1.5 -ml-1.5 hover:bg-[#151932] rounded-lg text-[#94A3B8] transition-colors">
                   <ChevronLeft className="w-5 h-5" />
                 </button>
                 <div 
@@ -257,46 +264,58 @@ export const MiniMessenger: React.FC = () => {
                 >
                   <div className="relative">
                     {activeChatUser.avatar ? (
-                      <img src={activeChatUser.avatar} alt="avatar" className="w-8 h-8 rounded-full object-cover" />
+                      <img src={activeChatUser.avatar} alt="avatar" className="w-8 h-8 rounded-full object-cover border border-[#1E2442]" />
                     ) : (
-                      <div className="w-8 h-8 rounded-full bg-purple-900/80 flex items-center justify-center text-xs font-bold text-white">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#7C3AED] to-[#6366F1] flex items-center justify-center text-xs font-bold text-white">
                         {activeChatUser.username.charAt(0).toUpperCase()}
                       </div>
                     )}
                     <PresenceIndicator presence={presenceMap[activeChatUser.id]} className="absolute -bottom-0.5 -right-0.5" size="sm" />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm font-bold text-zinc-100 leading-tight">@{activeChatUser.username}</span>
-                    <span className="text-[10px] text-zinc-400 leading-tight">
+                    <span className="text-sm font-bold text-[#F8FAFC] leading-tight">@{activeChatUser.username}</span>
+                    <span className="text-[10px] text-[#94A3B8] leading-tight">
                       {presenceMap[activeChatUser.id]?.statusText || 'offline'}
                     </span>
                   </div>
                 </div>
               </div>
             ) : (
-              <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
-                <MessageCircle className="w-4 h-4 text-purple-400" />
-                Мессенджер
+              <h3 className="text-sm font-bold text-[#F8FAFC] flex items-center gap-2">
+                <MessageCircle className="w-4 h-4 text-[#8B5CF6]" />
+                <span>Мессенджер</span>
               </h3>
             )}
-            <button
-              onClick={() => setIsOpen(false)}
-              className="p-1.5 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 transition-colors"
-              title="Закрыть мессенджер"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  navigate(activeChatUser ? `/messages/${activeChatUser.id}` : '/messages');
+                }}
+                className="p-1.5 hover:bg-[#151932] rounded-lg text-[#94A3B8] hover:text-[#F8FAFC] transition-colors"
+                title="Развернуть на весь экран"
+              >
+                <span className="text-xs font-mono">⤢</span>
+              </button>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="p-1.5 hover:bg-[#151932] rounded-lg text-[#94A3B8] hover:text-[#F8FAFC] transition-colors"
+                title="Закрыть мессенджер"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {/* Body */}
-          <div className="flex-1 overflow-hidden relative flex flex-col bg-zinc-950/50">
+          <div className="flex-1 overflow-hidden relative flex flex-col bg-[#080A18]/50">
             {!activeChatId ? (
               /* Dialogs List */
-              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                 {loadingDialogs ? (
-                  <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-purple-500" /></div>
+                  <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-[#8B5CF6]" /></div>
                 ) : dialogs.length === 0 ? (
-                  <div className="text-center py-10 text-zinc-500 text-xs">
+                  <div className="text-center py-10 text-[#64748B] text-xs">
                     Нет активных диалогов.<br/>Перейдите в профиль друга, чтобы начать общение.
                   </div>
                 ) : (
@@ -304,13 +323,13 @@ export const MiniMessenger: React.FC = () => {
                     <div
                       key={dialog.otherUserId}
                       onClick={() => openChat({ id: dialog.otherUserId, username: dialog.username, avatar: dialog.avatar })}
-                      className="flex items-center gap-3 p-3 rounded-xl hover:bg-zinc-900 cursor-pointer transition-colors"
+                      className="flex items-center gap-3 p-3 rounded-xl hover:bg-[#11152A] cursor-pointer transition-colors border border-transparent hover:border-[#1E2442]"
                     >
                       <div className="relative shrink-0">
                         {dialog.avatar ? (
-                          <img src={dialog.avatar} alt={dialog.username} className="w-12 h-12 rounded-full object-cover ring-1 ring-zinc-800" />
+                          <img src={dialog.avatar} alt={dialog.username} className="w-12 h-12 rounded-full object-cover ring-1 ring-[#1E2442]" />
                         ) : (
-                          <div className="w-12 h-12 rounded-full bg-purple-900/60 flex items-center justify-center text-sm font-bold text-white ring-1 ring-zinc-800">
+                          <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#7C3AED]/40 to-[#6366F1]/40 border border-[#8B5CF6]/30 flex items-center justify-center text-sm font-bold text-white">
                             {dialog.username.charAt(0).toUpperCase()}
                           </div>
                         )}
@@ -318,18 +337,18 @@ export const MiniMessenger: React.FC = () => {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-baseline mb-0.5">
-                          <h4 className="text-sm font-bold text-zinc-100 truncate">@{dialog.username}</h4>
-                          <span className="text-[10px] text-zinc-500 shrink-0">
+                          <h4 className="text-sm font-bold text-[#F8FAFC] truncate">@{dialog.username}</h4>
+                          <span className="text-[10px] text-[#64748B] shrink-0 font-mono">
                             {new Date(dialog.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
                         <div className="flex justify-between items-center gap-2">
-                          <p className={`text-xs truncate ${dialog.unreadCount > 0 ? 'text-zinc-200 font-semibold' : 'text-zinc-400'}`}>
-                            {dialog.senderId === dbUser.id && <span className="text-purple-400 mr-1">Вы:</span>}
+                          <p className={`text-xs truncate ${dialog.unreadCount > 0 ? 'text-[#F8FAFC] font-semibold' : 'text-[#94A3B8]'}`}>
+                            {dialog.senderId === dbUser.id && <span className="text-[#8B5CF6] mr-1">Вы:</span>}
                             {dialog.content}
                           </p>
                           {dialog.unreadCount > 0 && (
-                            <span className="shrink-0 bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center">
+                            <span className="shrink-0 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center shadow-sm">
                               {dialog.unreadCount}
                             </span>
                           )}
@@ -345,11 +364,11 @@ export const MiniMessenger: React.FC = () => {
                 <div 
                   ref={scrollContainerRef}
                   onScroll={handleScroll}
-                  className="flex-1 overflow-y-auto p-4 space-y-4"
+                  className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar"
                 >
-                  {loadingMore && <div className="flex justify-center py-2"><Loader2 className="w-4 h-4 animate-spin text-purple-500" /></div>}
+                  {loadingMore && <div className="flex justify-center py-2"><Loader2 className="w-4 h-4 animate-spin text-[#8B5CF6]" /></div>}
                   {loadingMessages ? (
-                    <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-purple-500" /></div>
+                    <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-[#8B5CF6]" /></div>
                   ) : (
                     messages.map((msg, idx) => {
                       const isMe = msg.senderId === dbUser.id;
@@ -362,7 +381,7 @@ export const MiniMessenger: React.FC = () => {
                               {showAvatar && activeChatUser?.avatar ? (
                                 <img src={activeChatUser.avatar} alt="" className="w-6 h-6 rounded-full object-cover" />
                               ) : showAvatar ? (
-                                <div className="w-6 h-6 rounded-full bg-purple-900/60 flex items-center justify-center text-[10px] font-bold text-white">
+                                <div className="w-6 h-6 rounded-full bg-violet-900/60 flex items-center justify-center text-[10px] font-bold text-white">
                                   {activeChatUser?.username.charAt(0).toUpperCase()}
                                 </div>
                               ) : null}
@@ -370,12 +389,12 @@ export const MiniMessenger: React.FC = () => {
                           )}
                           <div className={`group relative max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${
                             isMe 
-                              ? 'bg-purple-600 text-white rounded-br-sm' 
-                              : 'bg-zinc-800 text-zinc-100 rounded-bl-sm'
+                              ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-br-sm shadow-md shadow-violet-950/30' 
+                              : 'bg-[#151932] text-[#F8FAFC] rounded-bl-sm border border-[#1E2442]'
                           }`}>
                             <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-                            <div className={`text-[9px] mt-1 flex items-center gap-1 ${isMe ? 'text-purple-200 justify-end' : 'text-zinc-400'}`}>
-                              {new Date(msg.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                            <div className={`text-[9px] mt-1 flex items-center gap-1 ${isMe ? 'text-violet-200 justify-end' : 'text-[#94A3B8]'}`}>
+                              <span className="font-mono">{new Date(msg.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
                               {isMe && (
                                 <span className="ml-1">
                                   {msg.isRead ? '✓✓' : '✓'}
@@ -387,7 +406,7 @@ export const MiniMessenger: React.FC = () => {
                             {isMe && (
                               <button 
                                 onClick={() => deleteMessage(msg.id)}
-                                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-zinc-800 text-zinc-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shadow-sm"
+                                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-[#11152A] text-[#94A3B8] hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all shadow-sm border border-[#1E2442]"
                                 title="Удалить"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -402,13 +421,13 @@ export const MiniMessenger: React.FC = () => {
                 </div>
                 
                 {/* Input Area */}
-                <div className="p-3 bg-zinc-900 border-t border-zinc-800 shrink-0">
+                <div className="p-3 bg-[#11152A] border-t border-[#1E2442] shrink-0">
                   <form onSubmit={sendMessage} className="relative flex items-end gap-2">
                     <textarea
                       value={newMessage}
                       onChange={(e) => setNewMessage(e.target.value)}
                       placeholder="Сообщение..."
-                      className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500 resize-none max-h-32 min-h-[44px]"
+                      className="flex-1 bg-[#080A18] border border-[#1E2442] rounded-xl px-3 py-2.5 text-sm text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] resize-none max-h-32 min-h-[44px]"
                       rows={1}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey) {
@@ -420,7 +439,7 @@ export const MiniMessenger: React.FC = () => {
                     <button
                       type="submit"
                       disabled={!newMessage.trim() || sending}
-                      className="p-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white disabled:opacity-50 disabled:hover:bg-purple-600 transition-colors shrink-0 flex items-center justify-center h-[44px] w-[44px]"
+                      className="p-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white disabled:opacity-50 transition-all shrink-0 flex items-center justify-center h-[44px] w-[44px] shadow-md shadow-violet-950/40"
                     >
                       {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                     </button>
@@ -436,14 +455,14 @@ export const MiniMessenger: React.FC = () => {
       <button
         id="mini-messenger-toggle-btn"
         onClick={() => setIsOpen(!isOpen)}
-        className="pointer-events-auto relative w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-purple-600 hover:bg-purple-500 shadow-xl shadow-purple-900/40 text-white flex items-center justify-center transition-transform hover:scale-105 active:scale-95 touch-manipulation focus:outline-none ring-2 ring-[#0F0E12]"
+        className="pointer-events-auto relative w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 shadow-xl shadow-violet-950/50 text-white flex items-center justify-center transition-transform hover:scale-105 active:scale-95 touch-manipulation focus:outline-none ring-2 ring-[#080A18] border border-violet-400/30"
         title={isOpen ? 'Скрыть мессенджер' : 'Открыть мессенджер'}
       >
         <MessageCircle className="w-5 h-5 sm:w-6 sm:h-6" />
         
         {/* Total Unread Badge */}
         {!isOpen && dialogs.reduce((sum, d) => sum + d.unreadCount, 0) > 0 && (
-          <div className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center border-2 border-[#0F0E12]">
+          <div className="absolute -top-1 -right-1 bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center border-2 border-[#080A18] shadow-sm">
             {dialogs.reduce((sum, d) => sum + d.unreadCount, 0)}
           </div>
         )}
