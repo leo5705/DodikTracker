@@ -12,6 +12,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# Ensure PATH includes common binary directories for Node, PM2, and PostgreSQL
+NODE_CUR_VER=$(node -v 2>/dev/null || echo "")
+export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${HOME:-/root}/.nvm/versions/node/${NODE_CUR_VER}/bin:${HOME:-/root}/.npm-global/bin"
+
 # 2. Acquire update lock (prevent concurrent update runs)
 LOCK_FILE="/var/lock/dodik-tracker-update.lock"
 if ! touch "$LOCK_FILE" 2>/dev/null; then
@@ -48,20 +52,20 @@ log() {
   fi
 }
 
-log "INFO" "=================================================="
-log "INFO" "    🚀 Dodik Tracker - Safe Update Engine         "
-log "INFO" "=================================================="
-log "INFO" "Update process started."
+CURRENT_STAGE="init"
+log "INFO" "[STAGE: init] =================================================="
+log "INFO" "[STAGE: init]     🚀 Dodik Tracker - Safe Update Engine         "
+log "INFO" "[STAGE: init] =================================================="
+log "INFO" "[STAGE: init] Update process started."
 
 # Trap for unexpected errors to log failure and current stage
-CURRENT_STAGE="Initialization"
 trap 'catch_error $? $LINENO' ERR
 
 catch_error() {
   local exit_code="$1"
   local line_no="$2"
   log "ERROR" "=================================================="
-  log "ERROR" "❌ UPDATE FAILED at stage: '$CURRENT_STAGE' (Line $line_no, exit code $exit_code)"
+  log "ERROR" "[STAGE: ${CURRENT_STAGE}] ❌ UPDATE FAILED at stage '${CURRENT_STAGE}' (Line $line_no, exit code $exit_code)"
   if command -v git &>/dev/null && [ -d ".git" ]; then
     log "ERROR" "Current Git commit: $(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
   fi
@@ -71,152 +75,164 @@ catch_error() {
 }
 
 # 4. Load environment variables safely
-CURRENT_STAGE="Loading environment"
+CURRENT_STAGE="env_check"
+log "INFO" "[STAGE: env_check] Loading environment configuration..."
 if [ -f .env ]; then
   set -a
   source .env
   set +a
-  log "INFO" "Loaded .env configuration successfully."
+  log "INFO" "[STAGE: env_check] Loaded .env configuration successfully."
 else
-  log "WARN" "Notice: .env file not found. System environment variables will be used."
+  log "WARN" "[STAGE: env_check] Notice: .env file not found. System environment variables will be used."
 fi
 
 # 5. Verify required host tools
-CURRENT_STAGE="Verifying required tools"
-for tool in git npm node pg_dump pm2 curl; do
+log "INFO" "[STAGE: env_check] Verifying required tools..."
+for tool in git npm node curl; do
   if ! command -v "$tool" &>/dev/null; then
-    log "ERROR" "❌ Required tool '$tool' is not installed or not in PATH."
-    log "ERROR" "Please install missing prerequisites before updating."
+    log "ERROR" "[STAGE: env_check] ❌ Required tool '$tool' is not installed or not in PATH."
+    log "ERROR" "[STAGE: env_check] Please install missing prerequisites before updating."
     exit 1
   fi
 done
-log "INFO" "All required tools verified (git, npm, node, pg_dump, pm2, curl)."
+log "INFO" "[STAGE: env_check] Core tools verified (git, npm, node, curl)."
+
+# Check PM2
+if ! command -v pm2 &>/dev/null; then
+  log "WARN" "[STAGE: env_check] ⚠️ Notice: pm2 not found in default PATH. Trying global lookup..."
+fi
 
 # 6. Node.js version diagnostics
-CURRENT_STAGE="Node version verification"
 NODE_VER=$(node -v 2>/dev/null || echo "unknown")
-log "INFO" "Current Node version: $NODE_VER"
+log "INFO" "[STAGE: env_check] Current Node version: $NODE_VER"
 NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo "0")
-if [ "$NODE_MAJOR" -lt 22 ]; then
-  log "WARN" "⚠️ Warning: Node version is $NODE_VER. Note: Some dependencies (such as firebase-admin) may recommend Node >=22. Node upgrade is managed separately."
+if [ "$NODE_MAJOR" -lt 20 ]; then
+  log "WARN" "[STAGE: env_check] ⚠️ Warning: Node version is $NODE_VER. Recommended Node >=20 LTS."
 fi
 
 # 7. Check Git repository and uncommitted changes
-CURRENT_STAGE="Checking Git repository"
+CURRENT_STAGE="git_check"
+log "INFO" "[STAGE: git_check] Verifying Git repository status..."
 if [ ! -d ".git" ]; then
-  log "ERROR" "❌ Git repository (.git) not found in $PROJECT_ROOT."
+  log "ERROR" "[STAGE: git_check] ❌ Git repository (.git) not found in $PROJECT_ROOT."
   exit 1
 fi
 
 GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-CURRENT_COMMIT=$(git rev-parse HEAD)
-CURRENT_COMMIT_SHORT=$(git rev-parse --short HEAD)
-log "INFO" "Current branch: $GIT_BRANCH"
-log "INFO" "Current commit: $CURRENT_COMMIT ($CURRENT_COMMIT_SHORT)"
+CURRENT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+CURRENT_COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+log "INFO" "[STAGE: git_check] Current branch: $GIT_BRANCH ($CURRENT_COMMIT_SHORT)"
 
 UNCOMMITTED_CHANGES=$(git status --porcelain)
 if [ -n "$UNCOMMITTED_CHANGES" ]; then
-  log "ERROR" "❌ Uncommitted local changes detected in repository:"
+  log "ERROR" "[STAGE: git_check] ❌ Uncommitted local code modifications detected in repository:"
   echo "$UNCOMMITTED_CHANGES" >&2
-  log "ERROR" "Update halted to preserve your changes. Please commit or stash local modifications before updating."
+  log "ERROR" "[STAGE: git_check] Update halted to preserve your changes. Please commit or stash modifications."
   exit 1
 fi
-log "INFO" "Working tree is clean. No uncommitted modifications."
+log "INFO" "[STAGE: git_check] Working tree is clean."
 
 # 8. Database backup BEFORE any code modification
-CURRENT_STAGE="Database backup"
-log "INFO" "[1/6] Performing database backup before code updates..."
+CURRENT_STAGE="backup"
+log "INFO" "[STAGE: backup] [1/6] Performing database backup before code updates..."
 if [ ! -f "scripts/backup.sh" ]; then
-  log "ERROR" "❌ scripts/backup.sh not found! UPDATE MUST STOP to prevent data loss."
+  log "ERROR" "[STAGE: backup] ❌ scripts/backup.sh not found! UPDATE MUST STOP to prevent data loss."
   exit 1
 fi
 
-if ! bash scripts/backup.sh >> "$LOG_FILE" 2>&1; then
-  log "ERROR" "❌ Database backup failed! UPDATE MUST STOP to prevent data loss."
+if ! bash scripts/backup.sh create >> "$LOG_FILE" 2>&1; then
+  log "ERROR" "[STAGE: backup] ❌ Database backup failed! UPDATE MUST STOP to prevent data loss."
   exit 1
 fi
-log "INFO" "Backup successfully created in backups/ directory."
+log "INFO" "[STAGE: backup] Database backup successfully created and validated in backups/ directory."
 
 # 9. Fetch remote changes and check if update is needed
-CURRENT_STAGE="Fetching remote changes"
-log "INFO" "[2/6] Fetching latest changes from remote (origin main)..."
+CURRENT_STAGE="git_pull"
+log "INFO" "[STAGE: git_pull] [2/6] Fetching latest changes from remote (origin main)..."
 if ! git fetch origin main >> "$LOG_FILE" 2>&1; then
-  log "ERROR" "❌ Failed to fetch from origin main. Check network connection and Git remote settings."
+  log "ERROR" "[STAGE: git_pull] ❌ Failed to fetch from origin main. Check network connection and Git remote settings."
   exit 1
 fi
 
-REMOTE_COMMIT=$(git rev-parse origin/main)
-REMOTE_COMMIT_SHORT=$(git rev-parse --short origin/main)
-log "INFO" "Target remote commit: $REMOTE_COMMIT ($REMOTE_COMMIT_SHORT)"
+REMOTE_COMMIT=$(git rev-parse origin/main 2>/dev/null || echo "$CURRENT_COMMIT")
+REMOTE_COMMIT_SHORT=$(git rev-parse --short origin/main 2>/dev/null || echo "$CURRENT_COMMIT_SHORT")
+log "INFO" "[STAGE: git_pull] Target remote commit: $REMOTE_COMMIT ($REMOTE_COMMIT_SHORT)"
 
 if [ "$CURRENT_COMMIT" = "$REMOTE_COMMIT" ]; then
-  log "INFO" "✅ Dodik Tracker is already up to date at commit $CURRENT_COMMIT_SHORT. No update needed."
-  log "INFO" "Final status: UP_TO_DATE"
+  log "INFO" "[STAGE: completed] ✅ Dodik Tracker is already up to date at commit $CURRENT_COMMIT_SHORT. No update needed."
+  log "INFO" "[STAGE: completed] Final status: UP_TO_DATE"
   exit 0
 fi
 
 # 10. Fast-forward pull
-CURRENT_STAGE="Git pull"
-log "INFO" "[3/6] Pulling updates (git pull --ff-only origin main)..."
+log "INFO" "[STAGE: git_pull] [3/6] Pulling updates (git pull --ff-only origin main)..."
 if ! git pull --ff-only origin main >> "$LOG_FILE" 2>&1; then
-  log "ERROR" "❌ Fast-forward pull failed! Local and remote branches have diverged."
-  log "ERROR" "Automatic merge is disabled for safety. Current commit remains: $(git rev-parse --short HEAD)"
+  log "ERROR" "[STAGE: git_pull] ❌ Fast-forward pull failed! Local and remote branches have diverged."
+  log "ERROR" "[STAGE: git_pull] Automatic merge is disabled for safety. Current commit remains: $(git rev-parse --short HEAD)"
   exit 1
 fi
 NEW_COMMIT=$(git rev-parse HEAD)
 NEW_COMMIT_SHORT=$(git rev-parse --short HEAD)
-log "INFO" "Codebase updated to commit: $NEW_COMMIT ($NEW_COMMIT_SHORT)."
+log "INFO" "[STAGE: git_pull] Codebase updated to commit: $NEW_COMMIT ($NEW_COMMIT_SHORT)."
 
 # 11. Install dependencies
-CURRENT_STAGE="Installing npm dependencies"
-log "INFO" "[4/6] Installing npm dependencies..."
+CURRENT_STAGE="install"
+log "INFO" "[STAGE: install] [4/6] Installing npm dependencies..."
 if ! npm install >> "$LOG_FILE" 2>&1; then
-  log "ERROR" "❌ npm install failed! Check logs in logs/update.log."
+  log "ERROR" "[STAGE: install] ❌ npm install failed! Check logs in logs/update.log."
   exit 1
 fi
-log "INFO" "Dependencies installed successfully."
+log "INFO" "[STAGE: install] Dependencies installed successfully."
 
 # 12. Run database migrations via existing project mechanism
-CURRENT_STAGE="Database migrations"
-log "INFO" "[5/6] Executing database migrations (npm run db:migrate)..."
+CURRENT_STAGE="migration"
+log "INFO" "[STAGE: migration] [5/6] Executing database migrations (npm run db:migrate)..."
 if ! npm run db:migrate >> "$LOG_FILE" 2>&1; then
-  log "ERROR" "❌ Database migration failed! Current commit: $(git rev-parse --short HEAD)."
-  log "ERROR" "Database can be restored to the pre-update state using: ./scripts/restore.sh"
+  log "ERROR" "[STAGE: migration] ❌ Database migration failed! Current commit: $(git rev-parse --short HEAD)."
+  log "ERROR" "[STAGE: migration] Database can be restored to the pre-update state using: ./scripts/restore.sh"
   exit 1
 fi
-log "INFO" "Database migrations successfully applied."
+log "INFO" "[STAGE: migration] Database migrations successfully applied."
 
 # 13. Build production bundle and verify dist/server.cjs
-CURRENT_STAGE="Production build"
-log "INFO" "[6/6] Building production application (npm run build)..."
+CURRENT_STAGE="build"
+log "INFO" "[STAGE: build] [6/6] Building production application (npm run build)..."
 if ! npm run build >> "$LOG_FILE" 2>&1; then
-  log "ERROR" "❌ Production build failed! Check logs in logs/update.log."
+  log "ERROR" "[STAGE: build] ❌ Production build failed! Check logs in logs/update.log."
   exit 1
 fi
 
 if [ ! -f "$PROJECT_ROOT/dist/server.cjs" ]; then
-  log "ERROR" "❌ Build artifact missing: dist/server.cjs was not found!"
+  log "ERROR" "[STAGE: build] ❌ Build artifact missing: dist/server.cjs was not found!"
   exit 1
 fi
-log "INFO" "Production bundle verified: dist/server.cjs exists."
+log "INFO" "[STAGE: build] Production bundle verified: dist/server.cjs exists."
 
 # 14. PM2 Restart & Health Verification
-CURRENT_STAGE="PM2 restart and health check"
-log "INFO" "Restarting PM2 process 'dodik-tracker'..."
-if ! pm2 restart dodik-tracker >> "$LOG_FILE" 2>&1; then
-  log "ERROR" "❌ Failed to restart PM2 process 'dodik-tracker'!"
-  pm2 status dodik-tracker 2>&1 | tee -a "$LOG_FILE" || true
-  exit 1
+CURRENT_STAGE="restart"
+log "INFO" "[STAGE: restart] Restarting PM2 process 'dodik-tracker'..."
+PM2_BIN="pm2"
+if ! command -v pm2 &>/dev/null; then
+  if [ -x "/usr/local/bin/pm2" ]; then
+    PM2_BIN="/usr/local/bin/pm2"
+  fi
 fi
 
-log "INFO" "Waiting for application to start..."
+if command -v "$PM2_BIN" &>/dev/null; then
+  if ! "$PM2_BIN" restart dodik-tracker >> "$LOG_FILE" 2>&1; then
+    log "WARN" "[STAGE: restart] Notice: pm2 restart dodik-tracker returned non-zero code. Checking if service runs..."
+  fi
+fi
+
+CURRENT_STAGE="healthcheck"
+log "INFO" "[STAGE: healthcheck] Waiting for application to start..."
 sleep 3
 
 HEALTH_URL="http://localhost:3000/api/health"
 HEALTH_SUCCESS=0
 HEALTH_BODY=""
 
-for attempt in {1..6}; do
+for attempt in {1..8}; do
   HEALTH_BODY=$(curl -fsS "$HEALTH_URL" 2>/dev/null || echo "")
   if [[ "$HEALTH_BODY" =~ \"status\"[[:space:]]*:[[:space:]]*\"UP\" ]]; then
     HEALTH_SUCCESS=1
@@ -225,23 +241,23 @@ for attempt in {1..6}; do
   sleep 2
 done
 
+CURRENT_STAGE="completed"
 if [ $HEALTH_SUCCESS -eq 1 ]; then
-  CURRENT_VER=$(node -p "require('./package.json').version" 2>/dev/null || echo "1.0.0")
-  log "INFO" "Live Health Check: OK ($HEALTH_BODY)"
-  log "INFO" "=================================================="
-  log "INFO" "  ✅ SUCCESS: Dodik Tracker updated to v${CURRENT_VER} ($NEW_COMMIT_SHORT)"
-  log "INFO" "=================================================="
-  log "INFO" "Final status: SUCCESS"
+  CURRENT_VER="1.0.0"
+  if [ -f "package.json" ]; then
+    CURRENT_VER=$(node -p "try{require('./package.json').version}catch{process.env.npm_package_version||'1.0.0'}" 2>/dev/null || echo "1.0.0")
+  fi
+  log "INFO" "[STAGE: completed] Live Health Check: OK ($HEALTH_BODY)"
+  log "INFO" "[STAGE: completed] =================================================="
+  log "INFO" "[STAGE: completed]   ✅ SUCCESS: Dodik Tracker updated to v${CURRENT_VER} ($NEW_COMMIT_SHORT)"
+  log "INFO" "[STAGE: completed] =================================================="
+  log "INFO" "[STAGE: completed] Final status: SUCCESS"
   exit 0
 else
-  log "ERROR" "=================================================="
-  log "ERROR" "  ❌ FAILURE: Health check failed for $HEALTH_URL after update!"
-  log "ERROR" "  Response received: ${HEALTH_BODY:-'<empty or connection refused>'}"
-  log "ERROR" "  PM2 Status:"
-  pm2 status dodik-tracker 2>&1 | tee -a "$LOG_FILE" || true
-  log "ERROR" "  Recent PM2 logs:"
-  pm2 logs dodik-tracker --lines 40 --nostream 2>&1 | tee -a "$LOG_FILE" || true
-  log "ERROR" "=================================================="
-  log "ERROR" "Final status: FAILURE"
+  log "ERROR" "[STAGE: healthcheck] =================================================="
+  log "ERROR" "[STAGE: healthcheck]   ❌ FAILURE: Health check failed for $HEALTH_URL after update!"
+  log "ERROR" "[STAGE: healthcheck]   Response received: ${HEALTH_BODY:-'<empty or connection refused>'}"
+  log "ERROR" "[STAGE: healthcheck] =================================================="
+  log "ERROR" "[STAGE: healthcheck] Final status: FAILURE"
   exit 1
 fi

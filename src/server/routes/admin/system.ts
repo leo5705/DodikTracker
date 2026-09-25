@@ -31,8 +31,11 @@ systemRouter.use(requireAuth, requireAdminAccess);
 // -----------------------------------------------------------------------------
 export type UpdateStage =
   | 'idle'
+  | 'init'
+  | 'env_check'
+  | 'git_check'
   | 'backup'
-  | 'git'
+  | 'git_pull'
   | 'install'
   | 'migration'
   | 'build'
@@ -388,11 +391,11 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
     activeUpdateJob = {
       id: jobId,
       state: 'running',
-      stage: 'backup',
-      progress: 10,
+      stage: 'init',
+      progress: 5,
       startTime: new Date().toISOString(),
       endTime: null,
-      logSummary: ['Запуск единого механизма обновления Dodik Tracker...'],
+      logSummary: ['[STAGE: init] Запуск единого механизма обновления Dodik Tracker...'],
       error: null,
       triggeredBy: {
         id: req.dbUser!.id,
@@ -424,35 +427,37 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
         }
 
         // Stage & Progress parsing
-        if (line.includes('[1/6]') || line.includes('Performing database backup')) {
-          activeUpdateJob.stage = 'backup';
+        if (line.includes('[STAGE: init]') || line.includes('Update process started')) {
+          activeUpdateJob.stage = 'init';
+          activeUpdateJob.progress = 5;
+        } else if (line.includes('[STAGE: env_check]') || line.includes('Verifying required tools') || line.includes('Loading environment')) {
+          activeUpdateJob.stage = 'env_check';
+          activeUpdateJob.progress = 10;
+        } else if (line.includes('[STAGE: git_check]') || line.includes('Verifying Git repository status')) {
+          activeUpdateJob.stage = 'git_check';
           activeUpdateJob.progress = 15;
-        } else if (line.includes('[2/6]') || line.includes('Fetching latest changes')) {
-          activeUpdateJob.stage = 'git';
+        } else if (line.includes('[STAGE: backup]') || line.includes('Performing database backup')) {
+          activeUpdateJob.stage = 'backup';
           activeUpdateJob.progress = 25;
-        } else if (line.includes('already up to date')) {
-          activeUpdateJob.stage = 'completed';
-          activeUpdateJob.state = 'success';
-          activeUpdateJob.progress = 100;
-        } else if (line.includes('[3/6]') || line.includes('Pulling updates')) {
-          activeUpdateJob.stage = 'git';
-          activeUpdateJob.progress = 35;
-        } else if (line.includes('[4/6]') || line.includes('Installing npm dependencies')) {
+        } else if (line.includes('[STAGE: git_pull]') || line.includes('Fetching latest changes') || line.includes('Pulling updates')) {
+          activeUpdateJob.stage = 'git_pull';
+          activeUpdateJob.progress = 40;
+        } else if (line.includes('[STAGE: install]') || line.includes('Installing npm dependencies')) {
           activeUpdateJob.stage = 'install';
-          activeUpdateJob.progress = 50;
-        } else if (line.includes('[5/6]') || line.includes('Executing database migrations')) {
+          activeUpdateJob.progress = 55;
+        } else if (line.includes('[STAGE: migration]') || line.includes('Executing database migrations')) {
           activeUpdateJob.stage = 'migration';
-          activeUpdateJob.progress = 65;
-        } else if (line.includes('[6/6]') || line.includes('Building production application')) {
+          activeUpdateJob.progress = 70;
+        } else if (line.includes('[STAGE: build]') || line.includes('Building production application')) {
           activeUpdateJob.stage = 'build';
-          activeUpdateJob.progress = 80;
-        } else if (line.includes('Restarting PM2 process')) {
+          activeUpdateJob.progress = 85;
+        } else if (line.includes('[STAGE: restart]') || line.includes('Restarting PM2 process')) {
           activeUpdateJob.stage = 'restart';
-          activeUpdateJob.progress = 90;
-        } else if (line.includes('Waiting for application') || line.includes('Live Health Check')) {
+          activeUpdateJob.progress = 92;
+        } else if (line.includes('[STAGE: healthcheck]') || line.includes('Waiting for application') || line.includes('Live Health Check')) {
           activeUpdateJob.stage = 'healthcheck';
-          activeUpdateJob.progress = 95;
-        } else if (line.includes('SUCCESS: Dodik Tracker successfully updated')) {
+          activeUpdateJob.progress = 96;
+        } else if (line.includes('[STAGE: completed]') || line.includes('SUCCESS: Dodik Tracker updated') || line.includes('already up to date')) {
           activeUpdateJob.stage = 'completed';
           activeUpdateJob.state = 'success';
           activeUpdateJob.progress = 100;

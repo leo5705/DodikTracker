@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Dodik Tracker - Unified PostgreSQL Backup Manager
+# Safe, atomic, and resilient backup engine
 # Used by:
 #   1. `npm run backup` (CLI manual execution)
 #   2. `npm run update` / `scripts/update.sh` (Pre-update automated backup)
-#   3. Future Admin Panel Backend API (via script invocation or `backup:list`)
+#   3. Admin Panel Backend API (`/api/admin/system/backups`)
 # ==============================================================================
 
 set -euo pipefail
@@ -46,6 +47,21 @@ if ! [[ "$RETENTION_COUNT" =~ ^[0-9]+$ ]] || [ "$RETENTION_COUNT" -lt 1 ]; then
   RETENTION_COUNT=10
 fi
 
+# Helper to find pg_dump in standard and Ubuntu postgres package paths
+find_pg_dump() {
+  if command -v pg_dump &>/dev/null; then
+    command -v pg_dump
+    return 0
+  fi
+  for p in /usr/lib/postgresql/*/bin/pg_dump /usr/local/bin/pg_dump /usr/bin/pg_dump; do
+    if [ -x "$p" ]; then
+      echo "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # ------------------------------------------------------------------------------
 # Action: List Backups
 # ------------------------------------------------------------------------------
@@ -57,7 +73,7 @@ list_backups() {
 
   local files=()
   while IFS= read -r file; do
-    [ -n "$file" ] && files+=("$file")
+    [ -n "$file" ] && [ -f "$file" ] && files+=("$file")
   done < <(ls -1t "$BACKUP_DIR"/dodik_tracker_backup_*.sql 2>/dev/null || true)
 
   if [ $json_mode -eq 1 ]; then
@@ -109,18 +125,17 @@ list_backups() {
     local git_commit=""
 
     if [ -f "$meta_file" ]; then
-      created_at=$(grep -o '"createdAt":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4)
-      size_human=$(grep -o '"sizeHuman":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4)
-      db_name=$(grep -o '"database":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4)
-      git_commit=$(grep -o '"gitCommit":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4)
+      created_at=$(grep -o '"createdAt":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+      size_human=$(grep -o '"sizeHuman":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+      db_name=$(grep -o '"database":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+      git_commit=$(grep -o '"gitCommit":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
     fi
 
     [ -z "$created_at" ] && created_at=$(date -r "$f" -u +"%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown")
-    [ -z "$size_human" ] && size_human=$(ls -lh "$f" | awk '{print $5}')
+    [ -z "$size_human" ] && size_human=$(ls -lh "$f" 2>/dev/null | awk '{print $5}' || echo "0B")
     [ -z "$db_name" ] && db_name="$(get_db_name)"
     [ -z "$git_commit" ] && git_commit="—"
 
-    # Format created_at to clean 19 chars
     created_at="${created_at:0:19}"
     printf "%-40s | %-19s | %-9s | %-12s | %-7s\n" "$fname" "$created_at" "$size_human" "$db_name" "$git_commit"
   done
@@ -134,7 +149,7 @@ list_backups() {
 apply_retention() {
   local files=()
   while IFS= read -r file; do
-    [ -n "$file" ] && files+=("$file")
+    [ -n "$file" ] && [ -f "$file" ] && files+=("$file")
   done < <(ls -1t "$BACKUP_DIR"/dodik_tracker_backup_*.sql 2>/dev/null || true)
 
   local total=${#files[@]}
@@ -151,27 +166,31 @@ apply_retention() {
   local to_remove=("${files[@]:$RETENTION_COUNT}")
   for old_file in "${to_remove[@]}"; do
     # Safety check: double check count before each removal
-    local remaining
-    remaining=$(ls -1 "$BACKUP_DIR"/dodik_tracker_backup_*.sql 2>/dev/null | wc -l)
+    local remaining=0
+    for f in "$BACKUP_DIR"/dodik_tracker_backup_*.sql; do
+      [ -f "$f" ] && ((remaining++)) || true
+    done
+
     if [ "$remaining" -le 1 ]; then
       echo "[Retention] Safety threshold reached: keeping last backup ($old_file)."
       break
     fi
 
     echo "[Retention] Pruning old backup: $(basename "$old_file")"
-    rm -f "$old_file"
-    rm -f "${old_file}.meta.json"
+    rm -f "$old_file" "${old_file}.meta.json" || true
   done
 }
 
 # ------------------------------------------------------------------------------
-# Action: Create Backup
+# Action: Create Backup (Atomic & Resilient)
 # ------------------------------------------------------------------------------
 create_backup() {
   local timestamp
   timestamp=$(date +"%Y%m%d_%H%M%S")
-  local backup_file="$BACKUP_DIR/dodik_tracker_backup_${timestamp}.sql"
-  local meta_file="${backup_file}.meta.json"
+  local final_backup_file="$BACKUP_DIR/dodik_tracker_backup_${timestamp}.sql"
+  local temp_backup_file="$BACKUP_DIR/dodik_tracker_backup_${timestamp}.sql.tmp"
+  local meta_file="${final_backup_file}.meta.json"
+  local err_log_file="/tmp/dodik_backup_err_${timestamp}.log"
 
   local db_name
   db_name="$(get_db_name)"
@@ -183,82 +202,91 @@ create_backup() {
   echo "=================================================="
   echo "  Dodik Tracker - PostgreSQL Backup Manager"
   echo "  Database: $db_name"
-  echo "  Target:   $(basename "$backup_file")"
+  echo "  Target:   $(basename "$final_backup_file")"
   echo "=================================================="
 
   local backup_success=0
+  local pg_dump_bin=""
 
   # 1. Native pg_dump (preferred)
-  if command -v pg_dump &>/dev/null; then
-    echo "[Backup] Executing native pg_dump..."
+  if pg_dump_bin=$(find_pg_dump); then
+    echo "[Backup] Executing native pg_dump ($pg_dump_bin)..."
     if [ -n "${DATABASE_URL:-}" ]; then
-      if pg_dump "$DATABASE_URL" -f "$backup_file" 2>/dev/null; then
+      if "$pg_dump_bin" "$DATABASE_URL" -f "$temp_backup_file" 2>"$err_log_file"; then
         backup_success=1
       fi
     else
-      if PGPASSWORD="$db_pass" pg_dump -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" -f "$backup_file" 2>/dev/null; then
+      if PGPASSWORD="$db_pass" "$pg_dump_bin" -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" -f "$temp_backup_file" 2>"$err_log_file"; then
         backup_success=1
       fi
     fi
   fi
 
-  # 2. Docker Compose fallback if native pg_dump not on host or failed
+  # 2. Node.js Drizzle SQL Dumper fallback if pg_dump failed or is unavailable
+  if [ $backup_success -eq 0 ]; then
+    echo "[Backup] Trying Node.js database dumper engine (fallback)..."
+    if npx tsx src/scripts/dumpDb.ts "$temp_backup_file" 2>"$err_log_file"; then
+      backup_success=1
+    fi
+  fi
+
+  # 3. Docker Compose fallback if still needed
   if [ $backup_success -eq 0 ]; then
     if command -v docker &>/dev/null && docker compose ps &>/dev/null; then
       if docker compose ps --services --filter "status=running" 2>/dev/null | grep -qE "^(postgres|db)$"; then
         local service_name
         service_name=$(docker compose ps --services --filter "status=running" | grep -E "^(postgres|db)$" | head -n 1)
         echo "[Backup] Executing pg_dump via Docker Compose service '$service_name'..."
-        if docker compose exec -T "$service_name" pg_dump -U "$db_user" "$db_name" > "$backup_file" 2>/dev/null; then
-          backup_success=1
-        fi
-      fi
-    elif command -v docker-compose &>/dev/null && docker-compose ps &>/dev/null; then
-      if docker-compose ps --services 2>/dev/null | grep -qE "^(postgres|db)$"; then
-        local service_name
-        service_name=$(docker-compose ps --services | grep -E "^(postgres|db)$" | head -n 1)
-        echo "[Backup] Executing pg_dump via docker-compose service '$service_name'..."
-        if docker-compose exec -T "$service_name" pg_dump -U "$db_user" "$db_name" > "$backup_file" 2>/dev/null; then
+        if docker compose exec -T "$service_name" pg_dump -U "$db_user" "$db_name" > "$temp_backup_file" 2>"$err_log_file"; then
           backup_success=1
         fi
       fi
     fi
   fi
 
-  # 3. Comprehensive Backup Validation
+  # 4. Comprehensive Backup Validation on Temporary File
   local is_valid=0
-  if [ $backup_success -eq 1 ] && [ -f "$backup_file" ] && [ -s "$backup_file" ]; then
+  if [ $backup_success -eq 1 ] && [ -f "$temp_backup_file" ] && [ -s "$temp_backup_file" ]; then
     local file_size_bytes
-    file_size_bytes=$(stat -c%s "$backup_file" 2>/dev/null || stat -f%z "$backup_file" 2>/dev/null || echo 0)
+    file_size_bytes=$(stat -c%s "$temp_backup_file" 2>/dev/null || stat -f%z "$temp_backup_file" 2>/dev/null || echo 0)
     
-    # Must be > 100 bytes and contain PostgreSQL header markers
-    if [ "$file_size_bytes" -gt 100 ] && head -n 50 "$backup_file" | grep -q -iE "PostgreSQL|pg_dump"; then
+    # Must be > 100 bytes and contain PostgreSQL header markers or SQL statements
+    if [ "$file_size_bytes" -gt 100 ] && head -n 50 "$temp_backup_file" | grep -q -iE "PostgreSQL|pg_dump|SET|INSERT INTO|CREATE TABLE"; then
       is_valid=1
     fi
   fi
 
   if [ $is_valid -eq 1 ]; then
+    # Atomic promotion from .tmp to final target
+    mv "$temp_backup_file" "$final_backup_file"
+    rm -f "$err_log_file"
+
+    local final_size_bytes
+    final_size_bytes=$(stat -c%s "$final_backup_file" 2>/dev/null || stat -f%z "$final_backup_file" 2>/dev/null || echo 0)
     local size_human
-    size_human=$(ls -lh "$backup_file" | awk '{print $5}')
+    size_human=$(ls -lh "$final_backup_file" 2>/dev/null | awk '{print $5}' || echo "0B")
+
     local git_commit_full="unknown"
     local git_commit_short="unknown"
     if command -v git &>/dev/null && [ -d "$PROJECT_ROOT/.git" ]; then
       git_commit_full=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
       git_commit_short=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     fi
+
     local app_ver="1.0.0"
     if [ -f "$PROJECT_ROOT/package.json" ]; then
-      app_ver=$(node -p "require('./package.json').version" 2>/dev/null || echo "1.0.0")
+      app_ver=$(node -p "try{require('./package.json').version}catch{process.env.npm_package_version||'1.0.0'}" 2>/dev/null || echo "1.0.0")
     fi
+
     local created_iso
     created_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     # Generate metadata JSON (safe: no passwords, no full connection string)
     cat <<EOF > "$meta_file"
 {
-  "filename": "$(basename "$backup_file")",
+  "filename": "$(basename "$final_backup_file")",
   "createdAt": "$created_iso",
-  "sizeBytes": $file_size_bytes,
+  "sizeBytes": $final_size_bytes,
   "sizeHuman": "$size_human",
   "database": "$db_name",
   "gitCommit": "$git_commit_short",
@@ -270,19 +298,25 @@ create_backup() {
 EOF
 
     echo "✅ Backup successfully created and validated!"
-    echo "   File:     $backup_file ($size_human)"
+    echo "   File:     $final_backup_file ($size_human)"
     echo "   Metadata: $meta_file"
     echo "   Database: $db_name | Commit: $git_commit_short | Version: v$app_ver"
 
-    # 4. Prune old backups according to retention policy
+    # 5. Prune old backups according to retention policy
     apply_retention
 
     echo "=================================================="
     exit 0
   else
+    local err_msg="Unknown error"
+    if [ -f "$err_log_file" ]; then
+      err_msg=$(cat "$err_log_file" | tr '\n' ' ' | sed 's/password=[^ ]*/password=****/g')
+      rm -f "$err_log_file"
+    fi
+
     echo "❌ Error: Backup creation or validation failed!" >&2
-    echo "   pg_dump was unable to produce a valid PostgreSQL dump file." >&2
-    rm -f "$backup_file" "$meta_file"
+    echo "   Details: $err_msg" >&2
+    rm -f "$temp_backup_file"
     echo "==================================================" >&2
     exit 1
   fi

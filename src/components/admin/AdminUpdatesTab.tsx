@@ -115,8 +115,11 @@ interface BackupsResponse {
 }
 
 const STAGES_LIST: { id: string; label: string; desc: string }[] = [
+  { id: 'init', label: 'Инициализация', desc: 'Блокировка и подготовка окружения' },
+  { id: 'env_check', label: 'Проверка окружения', desc: 'Проверка системных утилит' },
+  { id: 'git_check', label: 'Проверка Git', desc: 'Проверка чистоты рабочей копии' },
   { id: 'backup', label: 'Резервная копия', desc: 'Создание безопасного дампа PostgreSQL' },
-  { id: 'git', label: 'Проверка и pull Git', desc: 'Fast-forward обновление репозитория' },
+  { id: 'git_pull', label: 'Pull Git', desc: 'Fast-forward обновление репозитория' },
   { id: 'install', label: 'Зависимости', desc: 'Установка npm пакетов' },
   { id: 'migration', label: 'Миграции БД', desc: 'Применение схемы Drizzle ORM' },
   { id: 'build', label: 'Сборка', desc: 'Vite клиент и esbuild сервер' },
@@ -772,7 +775,11 @@ export function AdminUpdatesTab() {
                 <div>
                   <h4 className="text-base font-bold text-white">Обновление не завершено</h4>
                   <p className="text-xs text-rose-300/80">
-                    На этапе '{job?.stage || 'unknown'}' произошла ошибка. База данных сохранена в бэкапе.
+                    {job?.stage === 'backup'
+                      ? 'Ошибка произошла на этапе создания резервной копии базы данных. Обновление остановлено.'
+                      : ['git_pull', 'install', 'migration', 'build', 'restart', 'healthcheck'].includes(job?.stage || '')
+                      ? `На этапе '${STAGES_LIST.find((s) => s.id === job?.stage)?.label || job?.stage}' произошла ошибка. База данных предварительно сохранена в бэкапе.`
+                      : `На этапе '${STAGES_LIST.find((s) => s.id === job?.stage)?.label || job?.stage}' произошла ошибка. База данных не изменялась.`}
                   </p>
                 </div>
               </div>
