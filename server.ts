@@ -13,8 +13,10 @@ import { sql } from 'drizzle-orm';
 import { telegramBot } from './src/server/telegram.ts';
 import { initDbSettings } from './src/server/init.ts';
 import { startMessageCleanupCron } from './src/server/services/messageCleanup.ts';
+import { PUBLIC_UPLOADS_DIR, ensureUploadDirsExist } from './src/server/routes/upload.ts';
 
 async function startServer() {
+  ensureUploadDirsExist();
   await initDbSettings();
 
   // Start background services
@@ -87,7 +89,7 @@ async function startServer() {
   });
 
   // Serve uploaded files statically
-  app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
+  app.use('/uploads', express.static(PUBLIC_UPLOADS_DIR));
 
   // Mount API router
   app.use('/api', apiRouter);

@@ -7,15 +7,23 @@ import { requireAuth, AuthRequest, isAdminRole } from '../../middleware/auth.ts'
 export const uploadRouter = Router();
 
 // Ensure upload directories exist
-const PUBLIC_UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
-const COVERS_DIR = path.join(PUBLIC_UPLOADS_DIR, 'covers');
-const AUDIO_DIR = path.join(PUBLIC_UPLOADS_DIR, 'audio');
+const UPLOADS_ROOT = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.resolve(process.cwd(), 'public', 'uploads');
 
-[PUBLIC_UPLOADS_DIR, COVERS_DIR, AUDIO_DIR].forEach((dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
+export const PUBLIC_UPLOADS_DIR = UPLOADS_ROOT;
+export const COVERS_DIR = path.join(PUBLIC_UPLOADS_DIR, 'covers');
+export const AUDIO_DIR = path.join(PUBLIC_UPLOADS_DIR, 'audio');
+
+export function ensureUploadDirsExist() {
+  [PUBLIC_UPLOADS_DIR, COVERS_DIR, AUDIO_DIR].forEach((dir) => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  });
+}
+
+ensureUploadDirsExist();
 
 // Multer Storage Engine
 const storage = multer.diskStorage({

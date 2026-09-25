@@ -1158,24 +1158,67 @@ musicRouter.put('/releases/:id', requireAuth, async (req: AuthRequest, res: Resp
 
       // Update tracks if provided (from release editor)
       if (Array.isArray(tracks)) {
-        await tx.delete(musicTracks).where(eq(musicTracks.releaseId, releaseId));
+        const existingTracks = await tx
+          .select()
+          .from(musicTracks)
+          .where(eq(musicTracks.releaseId, releaseId));
+
+        const existingMap = new Map(existingTracks.map((t) => [t.id, t]));
+        const updatedTrackIds = new Set<number>();
+
         for (let idx = 0; idx < tracks.length; idx++) {
           const trk = tracks[idx];
           if (trk.title && trk.audioFile) {
-            await tx.insert(musicTracks).values({
-              releaseId,
-              artistId: release.artistId,
-              title: String(trk.title).trim(),
-              slug: slugify(String(trk.title)),
-              trackNumber: trk.trackNumber ? Number(trk.trackNumber) : (idx + 1),
-              audioFile: String(trk.audioFile).trim(),
-              duration: trk.duration ? Number(trk.duration) : null,
-              lyrics: trk.lyrics ? String(trk.lyrics).trim() : null,
-              authorNote: trk.authorNote ? String(trk.authorNote).trim() : null,
-              explicit: Boolean(trk.explicit),
-              status: 'PUBLISHED',
-            });
+            const trkId = trk.id ? Number(trk.id) : null;
+            if (trkId && existingMap.has(trkId)) {
+              // Update existing track without changing its primary key
+              await tx
+                .update(musicTracks)
+                .set({
+                  title: String(trk.title).trim(),
+                  slug: slugify(String(trk.title)),
+                  trackNumber: trk.trackNumber ? Number(trk.trackNumber) : (idx + 1),
+                  audioFile: String(trk.audioFile).trim(),
+                  duration: trk.duration ? Number(trk.duration) : null,
+                  lyrics: trk.lyrics ? String(trk.lyrics).trim() : null,
+                  authorNote: trk.authorNote ? String(trk.authorNote).trim() : null,
+                  explicit: Boolean(trk.explicit),
+                  updatedAt: new Date(),
+                })
+                .where(eq(musicTracks.id, trkId));
+              updatedTrackIds.add(trkId);
+            } else {
+              // Insert new track
+              const [newTrk] = await tx
+                .insert(musicTracks)
+                .values({
+                  releaseId,
+                  artistId: release.artistId,
+                  title: String(trk.title).trim(),
+                  slug: slugify(String(trk.title)),
+                  trackNumber: trk.trackNumber ? Number(trk.trackNumber) : (idx + 1),
+                  audioFile: String(trk.audioFile).trim(),
+                  duration: trk.duration ? Number(trk.duration) : null,
+                  lyrics: trk.lyrics ? String(trk.lyrics).trim() : null,
+                  authorNote: trk.authorNote ? String(trk.authorNote).trim() : null,
+                  explicit: Boolean(trk.explicit),
+                  status: 'PUBLISHED',
+                })
+                .returning({ id: musicTracks.id });
+              if (newTrk) updatedTrackIds.add(newTrk.id);
+            }
           }
+        }
+
+        // Delete only tracks that were explicitly removed from the tracklist
+        const removedTrackIds = existingTracks
+          .filter((t) => !updatedTrackIds.has(t.id))
+          .map((t) => t.id);
+
+        if (removedTrackIds.length > 0) {
+          await tx
+            .delete(musicTracks)
+            .where(inArray(musicTracks.id, removedTrackIds));
         }
       }
 

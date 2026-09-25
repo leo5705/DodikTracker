@@ -8,3 +8,10 @@ coverage/
 !.env.example
 backups/
 logs/
+public/uploads/*
+!public/uploads/audio/
+public/uploads/audio/*
+!public/uploads/audio/.gitkeep
+!public/uploads/covers/
+public/uploads/covers/*
+!public/uploads/covers/.gitkeep

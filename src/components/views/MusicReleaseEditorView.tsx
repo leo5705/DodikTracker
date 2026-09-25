@@ -462,6 +462,7 @@ export const MusicReleaseEditorView: React.FC<MusicReleaseEditorProps> = ({
         status: targetStatus,
         genreIds: selectedGenreIds,
         tracks: tracks.map((t) => ({
+          id: t.id,
           title: t.title.trim(),
           trackNumber: t.trackNumber,
           audioFile: t.audioFile.trim(),
