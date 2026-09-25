@@ -2,16 +2,23 @@
 # ==============================================================================
 # Dodik Tracker - Database Restoration Script
 # Safely restores a PostgreSQL database from a SQL backup file
+# Supports interactive confirmation (CLI) and explicit non-interactive token (Admin API)
 # ==============================================================================
 
-set -eo pipefail
+set -euo pipefail
 
-BACKUP_DIR="./backups"
-BACKUP_FILE="$1"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
 
-# Read environment variables if .env exists
+BACKUP_DIR="$PROJECT_ROOT/backups"
+BACKUP_FILE="${1:-}"
+
+# Read environment variables safely
 if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs -0 2>/dev/null) || true
+  set -a
+  source .env
+  set +a
 fi
 
 DB_NAME="${SQL_DB_NAME:-${PGDATABASE:-dodik_tracker}}"
@@ -24,62 +31,91 @@ echo "=================================================="
 echo "  Dodik Tracker - Database Restore Tool"
 echo "=================================================="
 
-# If no backup file provided, show list of available backups
+# If no backup file provided, show list of available backups using the manager
 if [ -z "$BACKUP_FILE" ]; then
-  if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A "$BACKUP_DIR"/*.sql 2>/dev/null)" ]; then
-    echo "❌ No backup files found in $BACKUP_DIR/"
-    echo "Usage: ./scripts/restore.sh <path_to_backup.sql>"
-    exit 1
+  if [ -f "$PROJECT_ROOT/scripts/backup.sh" ]; then
+    bash "$PROJECT_ROOT/scripts/backup.sh" list
+  else
+    echo "Available backups in $BACKUP_DIR/:"
+    ls -1t "$BACKUP_DIR"/*.sql 2>/dev/null || echo "No backups found."
   fi
-
-  echo "Available backups in $BACKUP_DIR/:"
-  ls -1t "$BACKUP_DIR"/*.sql
   echo ""
   echo "Please specify a backup file to restore."
-  echo "Usage: ./scripts/restore.sh $BACKUP_DIR/dodik_tracker_backup_YYYYMMDD_HHMMSS.sql"
+  echo "Usage: ./scripts/restore.sh <path_to_backup.sql> [--confirm]"
   exit 1
 fi
 
 if [ ! -f "$BACKUP_FILE" ]; then
-  echo "❌ Error: Backup file '$BACKUP_FILE' does not exist."
+  echo "❌ Error: Backup file '$BACKUP_FILE' does not exist." >&2
   exit 1
 fi
 
 echo "Target Database: $DB_NAME"
 echo "Backup File:     $BACKUP_FILE"
 echo ""
-echo "⚠️  WARNING: Restoring will overwrite existing data with the contents of the backup!"
-read -p "Are you sure you want to proceed with database restore? (type 'yes' to confirm): " CONFIRM
 
-if [ "$CONFIRM" != "yes" ]; then
-  echo "Restoration cancelled by user."
-  exit 0
+# Explicit confirmation detection (interactive prompt or explicit admin token)
+CONFIRMED=0
+for arg in "$@"; do
+  if [ "$arg" = "--confirm" ] || [ "$arg" = "--yes" ] || [ "$arg" = "-y" ]; then
+    CONFIRMED=1
+  fi
+done
+
+if [ "${CONFIRM_RESTORE:-}" = "yes" ] || [ "${FORCE:-0}" = "1" ]; then
+  CONFIRMED=1
 fi
 
-echo ""
+if [ $CONFIRMED -ne 1 ]; then
+  if [ -t 0 ]; then
+    echo "⚠️  WARNING: Restoring will overwrite existing data with the contents of the backup!"
+    read -r -p "Are you sure you want to proceed with database restore? (type 'yes' to confirm): " USER_INPUT
+    if [ "$USER_INPUT" != "yes" ]; then
+      echo "Restoration cancelled by user."
+      exit 0
+    fi
+  else
+    echo "❌ Error: Database restore in non-interactive environment requires explicit confirmation." >&2
+    echo "Pass '--confirm' or set 'CONFIRM_RESTORE=yes' to execute." >&2
+    exit 1
+  fi
+fi
+
 echo "[Restore] Starting database restore..."
 
 RESTORE_SUCCESS=0
 
-# 1. Try Docker Compose if running
-if command -v docker &>/dev/null && docker compose ps &>/dev/null; then
-  if docker compose ps --services --filter "status=running" 2>/dev/null | grep -qE "^(postgres|db)$"; then
-    SERVICE_NAME=$(docker compose ps --services --filter "status=running" | grep -E "^(postgres|db)$" | head -n 1)
-    echo "[Restore] Restoring through Docker Compose service: '$SERVICE_NAME'..."
-    if docker compose exec -T "$SERVICE_NAME" psql -U "$DB_USER" -d "$DB_NAME" < "$BACKUP_FILE"; then
+# 1. Native psql (preferred)
+if command -v psql &>/dev/null; then
+  echo "[Restore] Using native psql..."
+  if [ -n "${DATABASE_URL:-}" ]; then
+    if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 < "$BACKUP_FILE"; then
+      RESTORE_SUCCESS=1
+    fi
+  else
+    if PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$BACKUP_FILE"; then
       RESTORE_SUCCESS=1
     fi
   fi
 fi
 
-# 2. Fallback to native psql
+# 2. Docker Compose fallback if native psql is unavailable or failed
 if [ $RESTORE_SUCCESS -eq 0 ]; then
-  if command -v psql &>/dev/null; then
-    echo "[Restore] Using native psql..."
-    if [ -n "$DATABASE_URL" ]; then
-      psql "$DATABASE_URL" < "$BACKUP_FILE" && RESTORE_SUCCESS=1
-    else
-      PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" < "$BACKUP_FILE" && RESTORE_SUCCESS=1
+  if command -v docker &>/dev/null && docker compose ps &>/dev/null; then
+    if docker compose ps --services --filter "status=running" 2>/dev/null | grep -qE "^(postgres|db)$"; then
+      SERVICE_NAME=$(docker compose ps --services --filter "status=running" | grep -E "^(postgres|db)$" | head -n 1)
+      echo "[Restore] Restoring through Docker Compose service: '$SERVICE_NAME'..."
+      if docker compose exec -T "$SERVICE_NAME" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$BACKUP_FILE"; then
+        RESTORE_SUCCESS=1
+      fi
+    fi
+  elif command -v docker-compose &>/dev/null && docker-compose ps &>/dev/null; then
+    if docker-compose ps --services 2>/dev/null | grep -qE "^(postgres|db)$"; then
+      SERVICE_NAME=$(docker-compose ps --services | grep -E "^(postgres|db)$" | head -n 1)
+      echo "[Restore] Restoring through docker-compose service: '$SERVICE_NAME'..."
+      if docker-compose exec -T "$SERVICE_NAME" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$BACKUP_FILE"; then
+        RESTORE_SUCCESS=1
+      fi
     fi
   fi
 fi
@@ -91,7 +127,7 @@ if [ $RESTORE_SUCCESS -eq 1 ]; then
   exit 0
 else
   echo ""
-  echo "❌ Database restore failed! Check database credentials and connection."
-  echo "=================================================="
+  echo "❌ Error: Database restore failed! Check database credentials and connection." >&2
+  echo "==================================================" >&2
   exit 1
 fi

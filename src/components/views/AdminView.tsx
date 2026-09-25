@@ -267,10 +267,10 @@ export const AdminView: React.FC = () => {
       },
       {
         id: 'updates',
-        label: 'Обновления',
-        icon: Zap,
+        label: 'Обслуживание и система',
+        icon: Server,
         canAccess: isAdmin,
-        group: 'tools',
+        group: 'system',
       },
     ];
   }, [isStaff, isModerator, isContentManager, isNewsEditor, isAdmin, pendingReportsCount, pendingMusicCount]);
@@ -504,7 +504,7 @@ export const AdminView: React.FC = () => {
                   {activeTabDef?.id === 'settings' && 'Глобальная конфигурация'}
                   {activeTabDef?.id === 'notifications' && 'Системная рассылка'}
                   {activeTabDef?.id === 'analytics' && 'Глубокая аналитика платформы'}
-                  {activeTabDef?.id === 'updates' && 'Журнал обновлений'}
+                  {activeTabDef?.id === 'updates' && 'Обслуживание и обновление системы'}
                 </h1>
               </div>
             </div>
