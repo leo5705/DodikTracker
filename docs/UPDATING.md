@@ -1,42 +1,76 @@
 # Инструкция по обновлению Dodik Tracker
 
-Руководство по процедуре безопасного обновления Dodik Tracker в рабочей среде.
+Руководство по процедуре безопасного обновления Dodik Tracker в рабочей среде с гарантией 100% сохранности базы данных и пользовательских файлов (Audio & Covers).
 
 ---
 
-## 1. Единый цикл обновления (Unified Update Engine)
+## 1. Архитектура изоляции данных (Zero-Data-Loss Architecture)
 
-Процесс обновления спроектирован по принципу абсолютной сохранности пользовательских данных:
+В проекте Dodik Tracker данные строго разделены по уровням владения:
 
 ```text
-Admin / SSH (npm run update)
-  ↓
-Update Lock (/var/lock/dodik-tracker-update.lock)
-  ↓
-Проверка окружения (Git, Node, PM2, pg_dump, curl)
-  ↓
-Резервная копия PostgreSQL (backups/dodik_tracker_backup_*.sql)
-  ↓
-Git fetch origin main
-  ↓
-Git pull --ff-only origin main
-  ↓
-npm install
-  ↓
-Миграции базы данных (npm run db:migrate)
-  ↓
-Production сборка (npm run build)
-  ↓
-Перезапуск PM2 (pm2 restart dodik-tracker)
-  ↓
-Health Check (/api/health -> "status":"UP")
-  ↓
-Итоговый статус (SUCCESS / FAILURE)
+┌───────────────────────────────┐
+│     Git Repository (GitHub)   │ -> ИСКЛЮЧИТЕЛЬНО исходный код приложения
+│     leo5705/DodikTracker      │    (public/uploads/* игнорируются, в Git только .gitkeep)
+└──────────────┬────────────────┘
+               │  git pull --ff-only
+               ▼
+┌───────────────────────────────┐
+│    Production Deployment      │ -> /var/www/dodik-tracker
+└──────────────┬────────────────┘
+               │
+       ┌───────┴───────────────────────────────┐
+       ▼                                       ▼
+┌───────────────────────────────┐   ┌─────────────────────────────────────────┐
+│     PostgreSQL Database       │   │       Persistent User Uploads           │
+│     (dodik_tracker)           │   │       /public/uploads/                  │
+│  - Пользователи, Музыка       │   │       ├── audio/ (*.mp3, *.wav, etc.)   │
+│  - Отзывы, Оценки 0-100       │   │       └── covers/ (*.jpg, *.webp, etc.) │
+└───────────────────────────────┘   └─────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Способы обновления
+## 2. Единый цикл безопасного обновления (Safe Update Engine)
+
+Процесс обновления спроектирован по принципу абсолютной защиты данных:
+
+```text
+Admin Web UI / SSH CLI (npm run update)
+  ↓
+1. Update Lock (/var/lock/dodik-tracker-update.lock)
+  ↓
+2. Preflight: проверка окружения (Git, Node, PM2, tar, curl, pg_dump)
+  ↓
+3. Git Safety Guard: проверка .gitignore и отсутствия реальных media-файлов в Git-индексе
+  ↓
+4. Резервная копия PostgreSQL: backups/db/dodik_tracker_backup_*.sql
+  ↓
+5. Снимок Uploads: манифест (SHA-256, размер) + архив backups/uploads/dodik_tracker_uploads_*.tar.gz
+  ↓
+6. Git fetch origin main & Git pull --ff-only origin main
+  ↓
+7. Установка зависимостей: npm install
+  ↓
+8. Миграции базы данных: npm run db:migrate (Drizzle ORM)
+  ↓
+9. Production сборка: npm run build (Vite + esbuild -> dist/server.cjs)
+  ↓
+10. Перезапуск PM2: pm2 restart dodik-tracker
+  ↓
+11. Health Check: опрос /api/health (до 20 сек, статус HTTP 200 UP)
+  ↓
+12. Контроль целостности Uploads: пофайловая сверка с pre-update снимком (SHA-256 + размер)
+    └─ При обнаружении пропажи: АВТОМАТИЧЕСКОЕ ВОССТАНОВЛЕНИЕ из архива
+  ↓
+13. Диагностика БД ↔ Filesystem (проверка битых ссылок и orphan-файлов)
+  ↓
+14. Итоговый статус (SUCCESS / FAILURE / RECOVERED)
+```
+
+---
+
+## 3. Способы обновления
 
 ### Способ А: Через Web UI в Панели администратора (Рекомендуется)
 1. Авторизуйтесь под учетной записью с ролью `ADMIN` или `SUPER_ADMIN`.
@@ -51,15 +85,27 @@ cd /var/www/dodik-tracker
 npm run update
 ```
 
-Команда автоматически выполнит создание бэкапа, fast-forward pull, миграции, сборку, перезапуск PM2 и верификацию работоспособности.
+Команда автоматически выполнит создание снимка uploads, бэкапа БД, fast-forward pull, миграции, сборку, перезапуск PM2, верификацию целостности и диагностику.
 
 ---
 
-## 3. Резервные копии и восстановление
+## 4. Резервные копии и восстановление
 
-### Создание резервной копии:
+### Создание резервной копии базы данных (PostgreSQL):
 ```bash
+npm run backup:db
+# или просто:
 npm run backup
+```
+
+### Создание архива пользовательских файлов (Audio & Covers):
+```bash
+npm run backup:uploads
+```
+
+### Создание полного бэкапа (БД + Uploads):
+```bash
+npm run backup:all
 ```
 
 ### Просмотр списка существующих копий:
@@ -67,28 +113,40 @@ npm run backup
 npm run backup:list
 ```
 
-### Восстановление при необходимости отката:
+### Восстановление:
 ```bash
-npm run restore backups/dodik_tracker_backup_YYYYMMDD_HHMMSS.sql
-# или для скриптов:
-bash scripts/restore.sh backups/dodik_tracker_backup_YYYYMMDD_HHMMSS.sql --confirm
+# Восстановление базы данных:
+npm run restore backups/db/dodik_tracker_backup_YYYYMMDD_HHMMSS.sql
+# или для скрипта:
+bash scripts/restore.sh backups/db/dodik_tracker_backup_YYYYMMDD_HHMMSS.sql --confirm
+
+# Восстановление файлов uploads:
+npm run restore backups/uploads/dodik_tracker_uploads_YYYYMMDD_HHMMSS.tar.gz --confirm
 ```
 
 ---
 
-## 4. Что делать при сбое обновления
+## 5. Диагностика базы данных и файлов (DB ↔ Filesystem)
 
-Если обновление завершилось ошибкой:
-1. База данных сохранена в пред-обновленческом состоянии благодаря обязательному предварительному дампу в каталоге `backups/`.
-2. Изучите причины ошибки:
-   ```bash
-   cat logs/update.log | tail -n 50
-   pm2 logs dodik-tracker --lines 40 --nostream
-   ```
-3. При необходимости вернитесь на предыдущую версию кода:
-   ```bash
-   git checkout <предыдущий_коммит>
-   npm run restore backups/dodik_tracker_backup_ПРЕДЫДУЩИЙ.sql
-   npm install && npm run build
-   pm2 restart dodik-tracker
-   ```
+Для проверки соответствия ссылок в БД реальным файлам на диске:
+
+```bash
+npm run db:verify-files
+# или с выводом в формате JSON:
+npx tsx src/scripts/verifyUploads.ts --json
+```
+
+Диагностика проверяет:
+- **Broken DB references**: ссылки в таблицах `music_tracks`, `music_releases`, `artist_profiles`, `users`, `news`, `lists`, файлы которых отсутствуют на диске.
+- **Orphan files**: файлы в `public/uploads/audio` и `public/uploads/covers`, на которые нет ссылок в БД (выводятся информационно, **никогда не удаляются автоматически**).
+- **HTTP accessibility**: проверяет отдачу файлов через Express (`HTTP 200`).
+
+---
+
+## 6. Тестирование защищенности обновлений (E2E Test)
+
+Для проведения автономного изолированного теста сохранности файлов:
+
+```bash
+npm run test:safety
+```

@@ -1,3 +1,4 @@
+# Dependencies & Build Output
 node_modules/
 build/
 dist/
@@ -6,8 +7,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Backups & Execution Logs
 backups/
 logs/
+
+# User Persistent Uploads Protection (Git NEVER tracks real uploaded media)
 public/uploads/*
 !public/uploads/audio/
 public/uploads/audio/*
@@ -15,3 +20,17 @@ public/uploads/audio/*
 !public/uploads/covers/
 public/uploads/covers/*
 !public/uploads/covers/.gitkeep
+
+# Explicit media ignore inside uploads
+public/uploads/**/*.mp3
+public/uploads/**/*.wav
+public/uploads/**/*.flac
+public/uploads/**/*.aac
+public/uploads/**/*.ogg
+public/uploads/**/*.m4a
+public/uploads/**/*.jpg
+public/uploads/**/*.jpeg
+public/uploads/**/*.png
+public/uploads/**/*.webp
+public/uploads/**/*.tmp
+public/uploads/**/*.tar.gz

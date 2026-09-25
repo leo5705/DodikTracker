@@ -15,12 +15,17 @@
     "preview": "vite preview",
     "update": "bash scripts/update.sh",
     "backup": "bash scripts/backup.sh",
+    "backup:db": "bash scripts/backup.sh db",
+    "backup:uploads": "bash scripts/backup.sh uploads",
+    "backup:all": "bash scripts/backup.sh all",
     "backup:list": "bash scripts/backup.sh list",
     "restore": "bash scripts/restore.sh",
+    "db:verify-files": "tsx src/scripts/verifyUploads.ts",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "tsx src/server/tests/notificationLogic.ts",
-    "test:music": "tsx src/server/tests/musicReleaseTransaction.ts"
+    "test:music": "tsx src/server/tests/musicReleaseTransaction.ts",
+    "test:safety": "tsx src/scripts/testUpdateSafety.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

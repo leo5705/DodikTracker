@@ -1,14 +1,14 @@
 import { Router, Response, NextFunction } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { spawn, exec, execFile } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
 import { requireAuth, isAdminRole, AuthRequest } from '../../../middleware/auth.ts';
 import { db } from '../../../db/index.ts';
 import { sql } from 'drizzle-orm';
 import { logAdminAction } from './auditHelper.ts';
+import { verifyUploadsAndDatabase } from '../../../scripts/verifyUploads.ts';
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 export const systemRouter = Router();
@@ -32,15 +32,18 @@ systemRouter.use(requireAuth, requireAdminAccess);
 export type UpdateStage =
   | 'idle'
   | 'init'
-  | 'env_check'
-  | 'git_check'
-  | 'backup'
+  | 'preflight'
+  | 'git_safety'
+  | 'database_backup'
+  | 'uploads_snapshot'
   | 'git_pull'
-  | 'install'
-  | 'migration'
+  | 'dependencies'
+  | 'migrations'
   | 'build'
   | 'restart'
   | 'healthcheck'
+  | 'uploads_integrity'
+  | 'database_integrity'
   | 'completed';
 
 export type UpdateState = 'idle' | 'queued' | 'running' | 'success' | 'failed';
@@ -182,34 +185,74 @@ async function getDatabaseStatus(): Promise<{ status: 'connected' | 'disconnecte
 }
 
 function getLastBackupMetadata() {
-  const backupDir = path.resolve('backups');
-  if (!fs.existsSync(backupDir)) return null;
+  const candidatesDirs = [path.resolve('backups/db'), path.resolve('backups')];
+  const allFiles: { dir: string; filename: string; mtimeMs: number }[] = [];
+
+  for (const dir of candidatesDirs) {
+    if (fs.existsSync(dir)) {
+      try {
+        const files = fs.readdirSync(dir).filter(f => f.startsWith('dodik_tracker_backup_') && f.endsWith('.sql'));
+        for (const f of files) {
+          const stat = fs.statSync(path.join(dir, f));
+          allFiles.push({ dir, filename: f, mtimeMs: stat.mtimeMs });
+        }
+      } catch {}
+    }
+  }
+
+  if (allFiles.length === 0) return null;
+  allFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  const latest = allFiles[0];
+  const fullSqlPath = path.join(latest.dir, latest.filename);
+  const metaPath = path.join(latest.dir, `${latest.filename}.meta.json`);
+
+  if (fs.existsSync(metaPath)) {
+    try {
+      return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    } catch {}
+  }
+
+  const stat = fs.statSync(fullSqlPath);
+  return {
+    filename: latest.filename,
+    createdAt: stat.mtime.toISOString(),
+    sizeBytes: stat.size,
+    sizeHuman: formatBytes(stat.size),
+    format: 'plain_sql',
+    status: 'VALID',
+  };
+}
+
+function getLastUploadsBackupMetadata() {
+  const uploadsBackupDir = path.resolve('backups/uploads');
+  if (!fs.existsSync(uploadsBackupDir)) return null;
 
   try {
-    const files = fs.readdirSync(backupDir).filter(f => f.startsWith('dodik_tracker_backup_') && f.endsWith('.sql'));
+    const files = fs.readdirSync(uploadsBackupDir).filter(f => f.startsWith('dodik_tracker_uploads_') && f.endsWith('.tar.gz'));
     if (files.length === 0) return null;
 
     files.sort((a, b) => {
-      const statA = fs.statSync(path.join(backupDir, a));
-      const statB = fs.statSync(path.join(backupDir, b));
+      const statA = fs.statSync(path.join(uploadsBackupDir, a));
+      const statB = fs.statSync(path.join(uploadsBackupDir, b));
       return statB.mtimeMs - statA.mtimeMs;
     });
 
     const latest = files[0];
-    const metaPath = path.join(backupDir, `${latest}.meta.json`);
+    const metaPath = path.join(uploadsBackupDir, `${latest}.meta.json`);
     if (fs.existsSync(metaPath)) {
       try {
         return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
       } catch {}
     }
 
-    const stat = fs.statSync(path.join(backupDir, latest));
+    const stat = fs.statSync(path.join(uploadsBackupDir, latest));
     return {
       filename: latest,
       createdAt: stat.mtime.toISOString(),
       sizeBytes: stat.size,
       sizeHuman: formatBytes(stat.size),
-      format: 'plain_sql',
+      format: 'tar.gz',
       status: 'VALID',
     };
   } catch {
@@ -255,6 +298,7 @@ systemRouter.get('/system/update/status', async (_req: AuthRequest, res: Respons
     ]);
 
     const lastBackup = getLastBackupMetadata();
+    const lastUploadsBackup = getLastUploadsBackupMetadata();
     const updateInProgress = isUpdateJobActive();
     const resolvedLastResult = activeUpdateJob
       ? {
@@ -263,6 +307,24 @@ systemRouter.get('/system/update/status', async (_req: AuthRequest, res: Respons
           timestamp: activeUpdateJob.endTime || activeUpdateJob.startTime || undefined,
         }
       : (lastUpdateResult || getLastUpdateResultFromLog());
+
+    // Count physical uploads
+    const uploadsRoot = process.env.UPLOADS_DIR
+      ? path.resolve(process.env.UPLOADS_DIR)
+      : path.resolve(process.cwd(), 'public', 'uploads');
+    const audioDir = path.join(uploadsRoot, 'audio');
+    const coversDir = path.join(uploadsRoot, 'covers');
+
+    let audioCount = 0;
+    let coversCount = 0;
+    try {
+      if (fs.existsSync(audioDir)) {
+        audioCount = fs.readdirSync(audioDir).filter(f => f !== '.gitkeep' && !f.startsWith('.')).length;
+      }
+      if (fs.existsSync(coversDir)) {
+        coversCount = fs.readdirSync(coversDir).filter(f => f !== '.gitkeep' && !f.startsWith('.')).length;
+      }
+    } catch {}
 
     res.json({
       currentCommit: gitInfo.currentCommit,
@@ -277,6 +339,13 @@ systemRouter.get('/system/update/status', async (_req: AuthRequest, res: Respons
       pm2Status,
       databaseStatus: dbStatus,
       lastBackup,
+      lastUploadsBackup,
+      uploadsStats: {
+        audioCount,
+        coversCount,
+        totalFiles: audioCount + coversCount,
+        storageDirectory: uploadsRoot,
+      },
       updateInProgress,
       lastUpdateResult: resolvedLastResult,
       job: activeUpdateJob || {
@@ -314,7 +383,6 @@ systemRouter.post('/system/update/check', async (req: AuthRequest, res: Response
       });
     }
 
-    // Safely run git fetch origin main
     try {
       await execFileAsync('git', ['fetch', 'origin', 'main'], { cwd: process.cwd(), timeout: 15000 });
     } catch (fetchErr: any) {
@@ -395,7 +463,7 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
       progress: 5,
       startTime: new Date().toISOString(),
       endTime: null,
-      logSummary: ['[STAGE: init] Запуск единого механизма обновления Dodik Tracker...'],
+      logSummary: ['[STAGE: init] Запуск единого безопасного механизма обновления Dodik Tracker...'],
       error: null,
       triggeredBy: {
         id: req.dbUser!.id,
@@ -422,42 +490,51 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
 
       if (activeUpdateJob) {
         activeUpdateJob.logSummary.push(line);
-        if (activeUpdateJob.logSummary.length > 60) {
+        if (activeUpdateJob.logSummary.length > 80) {
           activeUpdateJob.logSummary.shift();
         }
 
-        // Stage & Progress parsing
-        if (line.includes('[STAGE: init]') || line.includes('Update process started')) {
+        // Comprehensive Stage & Progress parsing
+        if (line.includes('[STAGE: init]')) {
           activeUpdateJob.stage = 'init';
           activeUpdateJob.progress = 5;
-        } else if (line.includes('[STAGE: env_check]') || line.includes('Verifying required tools') || line.includes('Loading environment')) {
-          activeUpdateJob.stage = 'env_check';
+        } else if (line.includes('[STAGE: preflight]')) {
+          activeUpdateJob.stage = 'preflight';
           activeUpdateJob.progress = 10;
-        } else if (line.includes('[STAGE: git_check]') || line.includes('Verifying Git repository status')) {
-          activeUpdateJob.stage = 'git_check';
-          activeUpdateJob.progress = 15;
-        } else if (line.includes('[STAGE: backup]') || line.includes('Performing database backup')) {
-          activeUpdateJob.stage = 'backup';
-          activeUpdateJob.progress = 25;
-        } else if (line.includes('[STAGE: git_pull]') || line.includes('Fetching latest changes') || line.includes('Pulling updates')) {
+        } else if (line.includes('[STAGE: git_safety]')) {
+          activeUpdateJob.stage = 'git_safety';
+          activeUpdateJob.progress = 18;
+        } else if (line.includes('[STAGE: database_backup]')) {
+          activeUpdateJob.stage = 'database_backup';
+          activeUpdateJob.progress = 28;
+        } else if (line.includes('[STAGE: uploads_snapshot]')) {
+          activeUpdateJob.stage = 'uploads_snapshot';
+          activeUpdateJob.progress = 38;
+        } else if (line.includes('[STAGE: git_pull]')) {
           activeUpdateJob.stage = 'git_pull';
-          activeUpdateJob.progress = 40;
-        } else if (line.includes('[STAGE: install]') || line.includes('Installing npm dependencies')) {
-          activeUpdateJob.stage = 'install';
-          activeUpdateJob.progress = 55;
-        } else if (line.includes('[STAGE: migration]') || line.includes('Executing database migrations')) {
-          activeUpdateJob.stage = 'migration';
-          activeUpdateJob.progress = 70;
-        } else if (line.includes('[STAGE: build]') || line.includes('Building production application')) {
+          activeUpdateJob.progress = 48;
+        } else if (line.includes('[STAGE: dependencies]')) {
+          activeUpdateJob.stage = 'dependencies';
+          activeUpdateJob.progress = 58;
+        } else if (line.includes('[STAGE: migrations]')) {
+          activeUpdateJob.stage = 'migrations';
+          activeUpdateJob.progress = 68;
+        } else if (line.includes('[STAGE: build]')) {
           activeUpdateJob.stage = 'build';
-          activeUpdateJob.progress = 85;
-        } else if (line.includes('[STAGE: restart]') || line.includes('Restarting PM2 process')) {
+          activeUpdateJob.progress = 80;
+        } else if (line.includes('[STAGE: restart]')) {
           activeUpdateJob.stage = 'restart';
-          activeUpdateJob.progress = 92;
-        } else if (line.includes('[STAGE: healthcheck]') || line.includes('Waiting for application') || line.includes('Live Health Check')) {
+          activeUpdateJob.progress = 88;
+        } else if (line.includes('[STAGE: healthcheck]')) {
           activeUpdateJob.stage = 'healthcheck';
+          activeUpdateJob.progress = 92;
+        } else if (line.includes('[STAGE: uploads_integrity]')) {
+          activeUpdateJob.stage = 'uploads_integrity';
           activeUpdateJob.progress = 96;
-        } else if (line.includes('[STAGE: completed]') || line.includes('SUCCESS: Dodik Tracker updated') || line.includes('already up to date')) {
+        } else if (line.includes('[STAGE: database_integrity]')) {
+          activeUpdateJob.stage = 'database_integrity';
+          activeUpdateJob.progress = 98;
+        } else if (line.includes('[STAGE: completed]') || line.includes('SUCCESS: Dodik Tracker updated')) {
           activeUpdateJob.stage = 'completed';
           activeUpdateJob.state = 'success';
           activeUpdateJob.progress = 100;
@@ -500,7 +577,7 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
           activeUpdateJob.progress = 100;
           lastUpdateResult = {
             status: 'SUCCESS',
-            details: 'Update completed successfully',
+            details: 'Update completed successfully with verified database & uploads integrity',
             timestamp: activeUpdateJob.endTime,
           };
         } else {
@@ -517,7 +594,6 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
       }
     });
 
-    // Respond immediately with HTTP 202 Accepted
     res.status(202).json({
       success: true,
       message: 'Процесс обновления запущен в фоновом режиме',
@@ -530,58 +606,62 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
 });
 
 // =============================================================================
-// 4. GET /api/admin/system/backups
+// 4. GET /api/admin/system/backups (Database Backups)
 // =============================================================================
 systemRouter.get('/system/backups', async (_req: AuthRequest, res: Response) => {
   try {
-    const backupDir = path.resolve('backups');
-    if (!fs.existsSync(backupDir)) {
-      fs.mkdirSync(backupDir, { recursive: true });
+    const candidatesDirs = [path.resolve('backups/db'), path.resolve('backups')];
+    const seenFiles = new Set<string>();
+    const backups: any[] = [];
+
+    for (const dir of candidatesDirs) {
+      if (fs.existsSync(dir)) {
+        const files = fs.readdirSync(dir).filter(f => f.startsWith('dodik_tracker_backup_') && f.endsWith('.sql'));
+        for (const filename of files) {
+          if (seenFiles.has(filename)) continue;
+          seenFiles.add(filename);
+
+          const fullSqlPath = path.join(dir, filename);
+          const metaPath = path.join(dir, `${filename}.meta.json`);
+          const stat = fs.statSync(fullSqlPath);
+
+          if (fs.existsSync(metaPath)) {
+            try {
+              const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+              backups.push({
+                ...meta,
+                filename,
+                sizeBytes: meta.sizeBytes || stat.size,
+                sizeHuman: meta.sizeHuman || formatBytes(stat.size),
+                createdAt: meta.createdAt || stat.mtime.toISOString(),
+              });
+              continue;
+            } catch {}
+          }
+
+          backups.push({
+            filename,
+            createdAt: stat.mtime.toISOString(),
+            sizeBytes: stat.size,
+            sizeHuman: formatBytes(stat.size),
+            database: process.env.SQL_DB_NAME || 'dodik_tracker',
+            gitCommit: '—',
+            appVersion: getAppVersion(),
+            format: 'plain_sql',
+            status: 'VALID',
+          });
+        }
+      }
     }
 
-    const files = fs.readdirSync(backupDir).filter(f => f.startsWith('dodik_tracker_backup_') && f.endsWith('.sql'));
-
-    const backups = files.map((filename) => {
-      const fullSqlPath = path.join(backupDir, filename);
-      const metaPath = path.join(backupDir, `${filename}.meta.json`);
-      const stat = fs.statSync(fullSqlPath);
-
-      if (fs.existsSync(metaPath)) {
-        try {
-          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-          return {
-            ...meta,
-            filename,
-            sizeBytes: meta.sizeBytes || stat.size,
-            sizeHuman: meta.sizeHuman || formatBytes(stat.size),
-            createdAt: meta.createdAt || stat.mtime.toISOString(),
-          };
-        } catch {}
-      }
-
-      return {
-        filename,
-        createdAt: stat.mtime.toISOString(),
-        sizeBytes: stat.size,
-        sizeHuman: formatBytes(stat.size),
-        database: process.env.SQL_DB_NAME || 'dodik_tracker',
-        gitCommit: '—',
-        appVersion: getAppVersion(),
-        format: 'plain_sql',
-        status: 'VALID',
-      };
-    });
-
-    // Sort newest first
     backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
     const retentionCount = parseInt(process.env.BACKUP_RETENTION_COUNT || '10', 10);
 
     res.json({
       backups,
       total: backups.length,
       retentionCount: isNaN(retentionCount) ? 10 : retentionCount,
-      storageDirectory: 'backups/',
+      storageDirectory: 'backups/db/',
     });
   } catch (err: any) {
     console.error('[AdminSystem] Error listing backups:', err);
@@ -590,7 +670,7 @@ systemRouter.get('/system/backups', async (_req: AuthRequest, res: Response) => 
 });
 
 // =============================================================================
-// 5. POST /api/admin/system/backups
+// 5. POST /api/admin/system/backups (Create DB Backup)
 // =============================================================================
 systemRouter.post('/system/backups', async (req: AuthRequest, res: Response) => {
   try {
@@ -599,9 +679,9 @@ systemRouter.post('/system/backups', async (req: AuthRequest, res: Response) => 
       return res.status(500).json({ error: 'Скрипт scripts/backup.sh не найден' });
     }
 
-    const { stdout, stderr } = await execFileAsync('bash', [scriptPath, 'create'], {
+    const { stdout } = await execFileAsync('bash', [scriptPath, 'db'], {
       cwd: process.cwd(),
-      timeout: 120000, // 2 minutes max
+      timeout: 120000,
     });
 
     const latestBackup = getLastBackupMetadata();
@@ -635,28 +715,32 @@ systemRouter.delete('/system/backups/:filename', async (req: AuthRequest, res: R
   try {
     const { filename } = req.params;
 
-    // Strict security validation against Path Traversal & Injection
     if (!filename || !/^dodik_tracker_backup_[0-9]{8}_[0-9]{6}\.sql$/.test(filename)) {
       return res.status(400).json({
         error: 'Некорректное имя файла. Разрешены только файлы вида dodik_tracker_backup_YYYYMMDD_HHMMSS.sql',
       });
     }
 
-    const backupDir = path.resolve('backups');
-    const targetFile = path.resolve(backupDir, filename);
+    const possibleDirs = [path.resolve('backups/db'), path.resolve('backups')];
+    let targetFile: string | null = null;
+    let targetDir: string | null = null;
 
-    // Path traversal check
-    if (!targetFile.startsWith(backupDir + path.sep)) {
-      return res.status(400).json({ error: 'Недопустимый путь к файлу' });
+    for (const d of possibleDirs) {
+      const f = path.resolve(d, filename);
+      if (fs.existsSync(f)) {
+        targetFile = f;
+        targetDir = d;
+        break;
+      }
     }
 
-    if (!fs.existsSync(targetFile)) {
+    if (!targetFile || !targetDir) {
       return res.status(404).json({ error: 'Файл резервной копии не найден' });
     }
 
-    // Safety rule: Never delete the only remaining backup
-    const existing = fs.readdirSync(backupDir).filter(f => f.startsWith('dodik_tracker_backup_') && f.endsWith('.sql'));
-    if (existing.length <= 1) {
+    // Safety rule: Never delete the only remaining backup across both folders
+    const allDbBackups = possibleDirs.flatMap(d => fs.existsSync(d) ? fs.readdirSync(d).filter(f => f.startsWith('dodik_tracker_backup_') && f.endsWith('.sql')) : []);
+    if (allDbBackups.length <= 1) {
       return res.status(400).json({ error: 'Запрещено удалять единственный существующий бэкап' });
     }
 
@@ -691,22 +775,24 @@ systemRouter.get('/system/backups/:filename/download', async (req: AuthRequest, 
   try {
     const { filename } = req.params;
 
-    // Strict security validation against Path Traversal & Injection
     if (!filename || !/^dodik_tracker_backup_[0-9]{8}_[0-9]{6}\.sql$/.test(filename)) {
       return res.status(400).json({
         error: 'Некорректное имя файла. Разрешены только файлы вида dodik_tracker_backup_YYYYMMDD_HHMMSS.sql',
       });
     }
 
-    const backupDir = path.resolve('backups');
-    const targetFile = path.resolve(backupDir, filename);
+    const possibleDirs = [path.resolve('backups/db'), path.resolve('backups')];
+    let targetFile: string | null = null;
 
-    // Path traversal check
-    if (!targetFile.startsWith(backupDir + path.sep)) {
-      return res.status(400).json({ error: 'Недопустимый путь к файлу' });
+    for (const d of possibleDirs) {
+      const f = path.resolve(d, filename);
+      if (fs.existsSync(f)) {
+        targetFile = f;
+        break;
+      }
     }
 
-    if (!fs.existsSync(targetFile)) {
+    if (!targetFile) {
       return res.status(404).json({ error: 'Файл резервной копии не найден' });
     }
 
@@ -726,5 +812,233 @@ systemRouter.get('/system/backups/:filename/download', async (req: AuthRequest, 
   } catch (err: any) {
     console.error('[AdminSystem] Error downloading backup:', err);
     res.status(500).json({ error: 'Ошибка при скачивании резервной копии', details: err.message });
+  }
+});
+
+// =============================================================================
+// 8. Uploads Management & Verification Endpoints
+// =============================================================================
+
+// GET /api/admin/system/uploads/status
+systemRouter.get('/system/uploads/status', async (_req: AuthRequest, res: Response) => {
+  try {
+    const uploadsRoot = process.env.UPLOADS_DIR
+      ? path.resolve(process.env.UPLOADS_DIR)
+      : path.resolve(process.cwd(), 'public', 'uploads');
+    const audioDir = path.join(uploadsRoot, 'audio');
+    const coversDir = path.join(uploadsRoot, 'covers');
+
+    let audioCount = 0;
+    let coversCount = 0;
+    let totalBytes = 0;
+
+    const countFiles = (dir: string) => {
+      if (!fs.existsSync(dir)) return;
+      for (const item of fs.readdirSync(dir)) {
+        if (item === '.gitkeep' || item.startsWith('.')) continue;
+        const full = path.join(dir, item);
+        try {
+          const stat = fs.statSync(full);
+          if (stat.isFile()) {
+            totalBytes += stat.size;
+            if (dir === audioDir) audioCount++;
+            if (dir === coversDir) coversCount++;
+          }
+        } catch {}
+      }
+    };
+
+    countFiles(audioDir);
+    countFiles(coversDir);
+
+    const lastUploadsBackup = getLastUploadsBackupMetadata();
+
+    res.json({
+      uploadsRoot,
+      audioCount,
+      coversCount,
+      totalFiles: audioCount + coversCount,
+      totalBytes,
+      totalSizeHuman: formatBytes(totalBytes),
+      lastUploadsBackup,
+    });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error getting uploads status:', err);
+    res.status(500).json({ error: 'Не удалось получить статус загрузок', details: err.message });
+  }
+});
+
+// POST /api/admin/system/uploads/verify (Diagnostic Cross-Check DB <-> Filesystem)
+systemRouter.post('/system/uploads/verify', async (req: AuthRequest, res: Response) => {
+  try {
+    const report = await verifyUploadsAndDatabase({ checkHttp: true });
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: 'UPLOADS_VERIFIED',
+      details: `Uploads verified: ${report.summary.totalPhysicalFiles} files, ${report.summary.brokenDbReferencesCount} broken references, ${report.summary.orphanFilesCount} orphan files. Status: ${report.summary.status}`,
+      ip: req.ip,
+    });
+
+    res.json(report);
+  } catch (err: any) {
+    console.error('[AdminSystem] Error verifying uploads:', err);
+    res.status(500).json({ error: 'Ошибка диагностики файлов загрузок', details: err.message });
+  }
+});
+
+// POST /api/admin/system/uploads/backup (Create Uploads Archive Backup)
+systemRouter.post('/system/uploads/backup', async (req: AuthRequest, res: Response) => {
+  try {
+    const scriptPath = path.resolve('scripts/backup.sh');
+    if (!fs.existsSync(scriptPath)) {
+      return res.status(500).json({ error: 'Скрипт scripts/backup.sh не найден' });
+    }
+
+    const { stdout } = await execFileAsync('bash', [scriptPath, 'uploads'], {
+      cwd: process.cwd(),
+      timeout: 180000,
+    });
+
+    const latestUploadsBackup = getLastUploadsBackupMetadata();
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: 'UPLOADS_BACKUP_CREATED',
+      details: `Created uploads archive backup: ${latestUploadsBackup?.filename || 'unknown'}`,
+      ip: req.ip,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Резервная копия пользовательских файлов успешно создана',
+      backup: latestUploadsBackup,
+      output: stdout.trim(),
+    });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error creating uploads backup:', err);
+    res.status(500).json({
+      error: 'Ошибка создания резервной копии файлов',
+      details: err.stderr || err.stdout || err.message,
+    });
+  }
+});
+
+// GET /api/admin/system/backups/uploads (List Uploads Backups)
+systemRouter.get('/system/backups/uploads', async (_req: AuthRequest, res: Response) => {
+  try {
+    const uploadsBackupDir = path.resolve('backups/uploads');
+    if (!fs.existsSync(uploadsBackupDir)) {
+      fs.mkdirSync(uploadsBackupDir, { recursive: true });
+    }
+
+    const files = fs.readdirSync(uploadsBackupDir).filter(f => f.startsWith('dodik_tracker_uploads_') && f.endsWith('.tar.gz'));
+    const backups = files.map((filename) => {
+      const fullPath = path.join(uploadsBackupDir, filename);
+      const metaPath = path.join(uploadsBackupDir, `${filename}.meta.json`);
+      const stat = fs.statSync(fullPath);
+
+      if (fs.existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+          return {
+            ...meta,
+            filename,
+            sizeBytes: meta.sizeBytes || stat.size,
+            sizeHuman: meta.sizeHuman || formatBytes(stat.size),
+            createdAt: meta.createdAt || stat.mtime.toISOString(),
+          };
+        } catch {}
+      }
+
+      return {
+        filename,
+        createdAt: stat.mtime.toISOString(),
+        sizeBytes: stat.size,
+        sizeHuman: formatBytes(stat.size),
+        format: 'tar.gz',
+        status: 'VALID',
+      };
+    });
+
+    backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    res.json({
+      backups,
+      total: backups.length,
+      storageDirectory: 'backups/uploads/',
+    });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error listing uploads backups:', err);
+    res.status(500).json({ error: 'Не удалось получить список архивов загрузок', details: err.message });
+  }
+});
+
+// GET /api/admin/system/backups/uploads/:filename/download
+systemRouter.get('/system/backups/uploads/:filename/download', async (req: AuthRequest, res: Response) => {
+  try {
+    const { filename } = req.params;
+    if (!filename || !/^dodik_tracker_uploads_[0-9]{8}_[0-9]{6}\.tar\.gz$/.test(filename)) {
+      return res.status(400).json({ error: 'Некорректное имя файла' });
+    }
+
+    const uploadsBackupDir = path.resolve('backups/uploads');
+    const targetFile = path.resolve(uploadsBackupDir, filename);
+
+    if (!targetFile.startsWith(uploadsBackupDir + path.sep) || !fs.existsSync(targetFile)) {
+      return res.status(404).json({ error: 'Файл архива не найден' });
+    }
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: 'UPLOADS_BACKUP_DOWNLOADED',
+      details: `Downloaded uploads archive: ${filename}`,
+      ip: req.ip,
+    });
+
+    res.download(targetFile, filename, (err) => {
+      if (err && !res.headersSent) {
+        console.error('[AdminSystem] Error transmitting archive file:', err);
+        res.status(500).json({ error: 'Ошибка передачи файла' });
+      }
+    });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error downloading uploads archive:', err);
+    res.status(500).json({ error: 'Ошибка при скачивании архива', details: err.message });
+  }
+});
+
+// DELETE /api/admin/system/backups/uploads/:filename
+systemRouter.delete('/system/backups/uploads/:filename', async (req: AuthRequest, res: Response) => {
+  try {
+    const { filename } = req.params;
+    if (!filename || !/^dodik_tracker_uploads_[0-9]{8}_[0-9]{6}\.tar\.gz$/.test(filename)) {
+      return res.status(400).json({ error: 'Некорректное имя файла' });
+    }
+
+    const uploadsBackupDir = path.resolve('backups/uploads');
+    const targetFile = path.resolve(uploadsBackupDir, filename);
+
+    if (!targetFile.startsWith(uploadsBackupDir + path.sep) || !fs.existsSync(targetFile)) {
+      return res.status(404).json({ error: 'Файл архива не найден' });
+    }
+
+    fs.unlinkSync(targetFile);
+    const metaFile = `${targetFile}.meta.json`;
+    if (fs.existsSync(metaFile)) {
+      fs.unlinkSync(metaFile);
+    }
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: 'UPLOADS_BACKUP_DELETED',
+      details: `Deleted uploads archive: ${filename}`,
+      ip: req.ip,
+    });
+
+    res.json({ success: true, message: `Архив ${filename} успешно удален` });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error deleting uploads archive:', err);
+    res.status(500).json({ error: 'Не удалось удалить архив', details: err.message });
   }
 });

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Dodik Tracker - Unified PostgreSQL Backup Manager
+# Dodik Tracker - Unified Backup Manager (Database & Uploads)
 # Safe, atomic, and resilient backup engine
+# Supports:
+#   1. Database Backup (PostgreSQL plain SQL dump)
+#   2. Uploads Backup (Persistent user audio & covers archive)
+#   3. Full Combined Backup
 # Used by:
-#   1. `npm run backup` (CLI manual execution)
-#   2. `npm run update` / `scripts/update.sh` (Pre-update automated backup)
-#   3. Admin Panel Backend API (`/api/admin/system/backups`)
+#   - `npm run backup` (CLI manual execution)
+#   - `npm run update` / `scripts/update.sh` (Pre-update automated backup)
+#   - Admin Panel Backend API (`/api/admin/system/backups`)
 # ==============================================================================
 
 set -euo pipefail
@@ -15,7 +19,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 BACKUP_DIR="$PROJECT_ROOT/backups"
-mkdir -p "$BACKUP_DIR"
+DB_BACKUP_DIR="$BACKUP_DIR/db"
+UPLOADS_BACKUP_DIR="${UPLOADS_BACKUP_DIR:-$BACKUP_DIR/uploads}"
+SNAPSHOTS_DIR="$BACKUP_DIR/snapshots"
+
+mkdir -p "$DB_BACKUP_DIR" "$UPLOADS_BACKUP_DIR" "$SNAPSHOTS_DIR"
 
 # 1. Load environment variables safely
 if [ -f .env ]; then
@@ -23,6 +31,9 @@ if [ -f .env ]; then
   source .env
   set +a
 fi
+
+# Uploads directory location
+UPLOADS_DIR="${UPLOADS_DIR:-$PROJECT_ROOT/public/uploads}"
 
 # 2. Extract sanitized database name without exposing credentials
 get_db_name() {
@@ -47,6 +58,18 @@ if ! [[ "$RETENTION_COUNT" =~ ^[0-9]+$ ]] || [ "$RETENTION_COUNT" -lt 1 ]; then
   RETENTION_COUNT=10
 fi
 
+# Helper to calculate sha256 checksum safely
+calc_sha256() {
+  local target="$1"
+  if command -v sha256sum &>/dev/null; then
+    sha256sum "$target" | awk '{print $1}'
+  elif command -v shasum &>/dev/null; then
+    shasum -a 256 "$target" | awk '{print $1}'
+  else
+    echo "unknown"
+  fi
+}
+
 # Helper to find pg_dump in standard and Ubuntu postgres package paths
 find_pg_dump() {
   if command -v pg_dump &>/dev/null; then
@@ -63,132 +86,50 @@ find_pg_dump() {
 }
 
 # ------------------------------------------------------------------------------
-# Action: List Backups
-# ------------------------------------------------------------------------------
-list_backups() {
-  local json_mode=0
-  if [ "${1:-}" = "--json" ] || [ "${2:-}" = "--json" ]; then
-    json_mode=1
-  fi
-
-  local files=()
-  while IFS= read -r file; do
-    [ -n "$file" ] && [ -f "$file" ] && files+=("$file")
-  done < <(ls -1t "$BACKUP_DIR"/dodik_tracker_backup_*.sql 2>/dev/null || true)
-
-  if [ $json_mode -eq 1 ]; then
-    echo "["
-    local first=1
-    for f in "${files[@]}"; do
-      local meta_file="${f}.meta.json"
-      if [ -f "$meta_file" ]; then
-        [ $first -eq 0 ] && echo ","
-        cat "$meta_file"
-        first=0
-      else
-        local fname
-        fname=$(basename "$f")
-        local fsize
-        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
-        local fdate
-        fdate=$(date -r "$f" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
-        [ $first -eq 0 ] && echo ","
-        echo -n "{\"filename\":\"$fname\",\"createdAt\":\"$fdate\",\"sizeBytes\":$fsize,\"database\":\"$(get_db_name)\",\"format\":\"plain_sql\"}"
-        first=0
-      fi
-    done
-    echo ""
-    echo "]"
-    return 0
-  fi
-
-  echo "================================================================================"
-  echo "  Dodik Tracker - Available PostgreSQL Backups"
-  echo "  Storage Location: $BACKUP_DIR"
-  echo "  Retention Policy: $RETENTION_COUNT latest backups retained"
-  echo "================================================================================"
-  
-  if [ ${#files[@]} -eq 0 ]; then
-    echo "No backups found in $BACKUP_DIR/"
-    return 0
-  fi
-
-  printf "%-40s | %-19s | %-9s | %-12s | %-7s\n" "FILENAME" "CREATED AT (UTC)" "SIZE" "DB NAME" "COMMIT"
-  echo "--------------------------------------------------------------------------------"
-  for f in "${files[@]}"; do
-    local fname
-    fname=$(basename "$f")
-    local meta_file="${f}.meta.json"
-    local created_at=""
-    local size_human=""
-    local db_name=""
-    local git_commit=""
-
-    if [ -f "$meta_file" ]; then
-      created_at=$(grep -o '"createdAt":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
-      size_human=$(grep -o '"sizeHuman":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
-      db_name=$(grep -o '"database":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
-      git_commit=$(grep -o '"gitCommit":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
-    fi
-
-    [ -z "$created_at" ] && created_at=$(date -r "$f" -u +"%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown")
-    [ -z "$size_human" ] && size_human=$(ls -lh "$f" 2>/dev/null | awk '{print $5}' || echo "0B")
-    [ -z "$db_name" ] && db_name="$(get_db_name)"
-    [ -z "$git_commit" ] && git_commit="—"
-
-    created_at="${created_at:0:19}"
-    printf "%-40s | %-19s | %-9s | %-12s | %-7s\n" "$fname" "$created_at" "$size_human" "$db_name" "$git_commit"
-  done
-  echo "================================================================================"
-  echo "Total backups: ${#files[@]}"
-}
-
-# ------------------------------------------------------------------------------
-# Action: Retention Cleanup
+# Action: Retention Cleanup for DB and Uploads
 # ------------------------------------------------------------------------------
 apply_retention() {
-  local files=()
+  # 1. DB retention
+  local db_files=()
   while IFS= read -r file; do
-    [ -n "$file" ] && [ -f "$file" ] && files+=("$file")
-  done < <(ls -1t "$BACKUP_DIR"/dodik_tracker_backup_*.sql 2>/dev/null || true)
+    [ -n "$file" ] && [ -f "$file" ] && db_files+=("$file")
+  done < <(ls -1t "$DB_BACKUP_DIR"/dodik_tracker_backup_*.sql "$BACKUP_DIR"/dodik_tracker_backup_*.sql 2>/dev/null || true)
 
-  local total=${#files[@]}
-  if [ "$total" -le "$RETENTION_COUNT" ]; then
-    return 0
-  fi
-
-  # Never delete the only backup
-  if [ "$total" -le 1 ]; then
-    return 0
-  fi
-
-  echo "[Retention] Total backups ($total) exceeds retention limit ($RETENTION_COUNT)."
-  local to_remove=("${files[@]:$RETENTION_COUNT}")
-  for old_file in "${to_remove[@]}"; do
-    # Safety check: double check count before each removal
-    local remaining=0
-    for f in "$BACKUP_DIR"/dodik_tracker_backup_*.sql; do
-      [ -f "$f" ] && ((remaining++)) || true
+  local db_total=${#db_files[@]}
+  if [ "$db_total" -gt "$RETENTION_COUNT" ] && [ "$db_total" -gt 1 ]; then
+    echo "[Retention:DB] Total database backups ($db_total) exceeds retention limit ($RETENTION_COUNT)."
+    local db_to_remove=("${db_files[@]:$RETENTION_COUNT}")
+    for old_file in "${db_to_remove[@]}"; do
+      echo "[Retention:DB] Pruning old database backup: $(basename "$old_file")"
+      rm -f "$old_file" "${old_file}.meta.json" || true
     done
+  fi
 
-    if [ "$remaining" -le 1 ]; then
-      echo "[Retention] Safety threshold reached: keeping last backup ($old_file)."
-      break
-    fi
+  # 2. Uploads retention
+  local uploads_files=()
+  while IFS= read -r file; do
+    [ -n "$file" ] && [ -f "$file" ] && uploads_files+=("$file")
+  done < <(ls -1t "$UPLOADS_BACKUP_DIR"/dodik_tracker_uploads_*.tar.gz 2>/dev/null || true)
 
-    echo "[Retention] Pruning old backup: $(basename "$old_file")"
-    rm -f "$old_file" "${old_file}.meta.json" || true
-  done
+  local uploads_total=${#uploads_files[@]}
+  if [ "$uploads_total" -gt "$RETENTION_COUNT" ] && [ "$uploads_total" -gt 1 ]; then
+    echo "[Retention:Uploads] Total uploads backups ($uploads_total) exceeds retention limit ($RETENTION_COUNT)."
+    local uploads_to_remove=("${uploads_files[@]:$RETENTION_COUNT}")
+    for old_file in "${uploads_to_remove[@]}"; do
+      echo "[Retention:Uploads] Pruning old uploads backup: $(basename "$old_file")"
+      rm -f "$old_file" "${old_file}.meta.json" || true
+    done
+  fi
 }
 
 # ------------------------------------------------------------------------------
-# Action: Create Backup (Atomic & Resilient)
+# Action: Create Database Backup (Atomic & Resilient)
 # ------------------------------------------------------------------------------
-create_backup() {
+create_db_backup() {
   local timestamp
   timestamp=$(date +"%Y%m%d_%H%M%S")
-  local final_backup_file="$BACKUP_DIR/dodik_tracker_backup_${timestamp}.sql"
-  local temp_backup_file="$BACKUP_DIR/dodik_tracker_backup_${timestamp}.sql.tmp"
+  local final_backup_file="$DB_BACKUP_DIR/dodik_tracker_backup_${timestamp}.sql"
+  local temp_backup_file="$DB_BACKUP_DIR/dodik_tracker_backup_${timestamp}.sql.tmp"
   local meta_file="${final_backup_file}.meta.json"
   local err_log_file="/tmp/dodik_backup_err_${timestamp}.log"
 
@@ -200,7 +141,7 @@ create_backup() {
   local db_pass="${SQL_ADMIN_PASSWORD:-${SQL_PASSWORD:-${PGPASSWORD:-}}}"
 
   echo "=================================================="
-  echo "  Dodik Tracker - PostgreSQL Backup Manager"
+  echo "  Dodik Tracker - PostgreSQL Database Backup"
   echo "  Database: $db_name"
   echo "  Target:   $(basename "$final_backup_file")"
   echo "=================================================="
@@ -210,7 +151,7 @@ create_backup() {
 
   # 1. Native pg_dump (preferred)
   if pg_dump_bin=$(find_pg_dump); then
-    echo "[Backup] Executing native pg_dump ($pg_dump_bin)..."
+    echo "[Backup:DB] Executing native pg_dump ($pg_dump_bin)..."
     if [ -n "${DATABASE_URL:-}" ]; then
       if "$pg_dump_bin" "$DATABASE_URL" -f "$temp_backup_file" 2>"$err_log_file"; then
         backup_success=1
@@ -222,21 +163,21 @@ create_backup() {
     fi
   fi
 
-  # 2. Node.js Drizzle SQL Dumper fallback if pg_dump failed or is unavailable
+  # 2. Node.js Drizzle SQL Dumper fallback
   if [ $backup_success -eq 0 ]; then
-    echo "[Backup] Trying Node.js database dumper engine (fallback)..."
+    echo "[Backup:DB] Trying Node.js database dumper engine (fallback)..."
     if npx tsx src/scripts/dumpDb.ts "$temp_backup_file" 2>"$err_log_file"; then
       backup_success=1
     fi
   fi
 
-  # 3. Docker Compose fallback if still needed
+  # 3. Docker Compose fallback if needed
   if [ $backup_success -eq 0 ]; then
     if command -v docker &>/dev/null && docker compose ps &>/dev/null; then
       if docker compose ps --services --filter "status=running" 2>/dev/null | grep -qE "^(postgres|db)$"; then
         local service_name
         service_name=$(docker compose ps --services --filter "status=running" | grep -E "^(postgres|db)$" | head -n 1)
-        echo "[Backup] Executing pg_dump via Docker Compose service '$service_name'..."
+        echo "[Backup:DB] Executing pg_dump via Docker Compose service '$service_name'..."
         if docker compose exec -T "$service_name" pg_dump -U "$db_user" "$db_name" > "$temp_backup_file" 2>"$err_log_file"; then
           backup_success=1
         fi
@@ -244,20 +185,18 @@ create_backup() {
     fi
   fi
 
-  # 4. Comprehensive Backup Validation on Temporary File
+  # 4. Validation
   local is_valid=0
   if [ $backup_success -eq 1 ] && [ -f "$temp_backup_file" ] && [ -s "$temp_backup_file" ]; then
     local file_size_bytes
     file_size_bytes=$(stat -c%s "$temp_backup_file" 2>/dev/null || stat -f%z "$temp_backup_file" 2>/dev/null || echo 0)
     
-    # Must be > 100 bytes and contain PostgreSQL header markers or SQL statements
     if [ "$file_size_bytes" -gt 100 ] && head -n 50 "$temp_backup_file" | grep -q -iE "PostgreSQL|pg_dump|SET|INSERT INTO|CREATE TABLE"; then
       is_valid=1
     fi
   fi
 
   if [ $is_valid -eq 1 ]; then
-    # Atomic promotion from .tmp to final target
     mv "$temp_backup_file" "$final_backup_file"
     rm -f "$err_log_file"
 
@@ -265,6 +204,8 @@ create_backup() {
     final_size_bytes=$(stat -c%s "$final_backup_file" 2>/dev/null || stat -f%z "$final_backup_file" 2>/dev/null || echo 0)
     local size_human
     size_human=$(ls -lh "$final_backup_file" 2>/dev/null | awk '{print $5}' || echo "0B")
+    local checksum
+    checksum=$(calc_sha256 "$final_backup_file")
 
     local git_commit_full="unknown"
     local git_commit_short="unknown"
@@ -281,13 +222,14 @@ create_backup() {
     local created_iso
     created_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-    # Generate metadata JSON (safe: no passwords, no full connection string)
     cat <<EOF > "$meta_file"
 {
   "filename": "$(basename "$final_backup_file")",
+  "type": "database",
   "createdAt": "$created_iso",
   "sizeBytes": $final_size_bytes,
   "sizeHuman": "$size_human",
+  "sha256": "$checksum",
   "database": "$db_name",
   "gitCommit": "$git_commit_short",
   "gitCommitFull": "$git_commit_full",
@@ -297,29 +239,237 @@ create_backup() {
 }
 EOF
 
-    echo "✅ Backup successfully created and validated!"
+    echo "✅ Database backup successfully created and validated!"
     echo "   File:     $final_backup_file ($size_human)"
+    echo "   SHA-256:  $checksum"
     echo "   Metadata: $meta_file"
-    echo "   Database: $db_name | Commit: $git_commit_short | Version: v$app_ver"
 
-    # 5. Prune old backups according to retention policy
     apply_retention
-
     echo "=================================================="
-    exit 0
+    return 0
   else
     local err_msg="Unknown error"
     if [ -f "$err_log_file" ]; then
       err_msg=$(cat "$err_log_file" | tr '\n' ' ' | sed 's/password=[^ ]*/password=****/g')
       rm -f "$err_log_file"
     fi
-
-    echo "❌ Error: Backup creation or validation failed!" >&2
+    echo "❌ Error: Database backup failed or validation failed!" >&2
     echo "   Details: $err_msg" >&2
     rm -f "$temp_backup_file"
-    echo "==================================================" >&2
-    exit 1
+    return 1
   fi
+}
+
+# ------------------------------------------------------------------------------
+# Action: Create Uploads Archive Backup (Persistent Audio & Covers)
+# ------------------------------------------------------------------------------
+create_uploads_backup() {
+  local timestamp
+  timestamp=$(date +"%Y%m%d_%H%M%S")
+  local final_archive="$UPLOADS_BACKUP_DIR/dodik_tracker_uploads_${timestamp}.tar.gz"
+  local temp_archive="$UPLOADS_BACKUP_DIR/dodik_tracker_uploads_${timestamp}.tar.gz.tmp"
+  local meta_file="${final_archive}.meta.json"
+
+  echo "=================================================="
+  echo "  Dodik Tracker - Uploads Archive Backup"
+  echo "  Source:   $UPLOADS_DIR"
+  echo "  Target:   $(basename "$final_archive")"
+  echo "=================================================="
+
+  # Ensure source directories exist
+  mkdir -p "$UPLOADS_DIR/audio" "$UPLOADS_DIR/covers"
+
+  # Count files
+  local audio_count
+  audio_count=$(find "$UPLOADS_DIR/audio" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
+  local covers_count
+  covers_count=$(find "$UPLOADS_DIR/covers" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
+  local total_files=$((audio_count + covers_count))
+
+  echo "[Backup:Uploads] Found $audio_count audio files, $covers_count cover images (Total: $total_files files)"
+
+  # Create tar.gz archive safely from uploads directory
+  if tar -czf "$temp_archive" -C "$UPLOADS_DIR" audio covers 2>/dev/null; then
+    mv "$temp_archive" "$final_archive"
+
+    local final_size_bytes
+    final_size_bytes=$(stat -c%s "$final_archive" 2>/dev/null || stat -f%z "$final_archive" 2>/dev/null || echo 0)
+    local size_human
+    size_human=$(ls -lh "$final_archive" 2>/dev/null | awk '{print $5}' || echo "0B")
+    local checksum
+    checksum=$(calc_sha256 "$final_archive")
+
+    local git_commit_short="unknown"
+    if command -v git &>/dev/null && [ -d "$PROJECT_ROOT/.git" ]; then
+      git_commit_short=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    fi
+
+    local created_iso
+    created_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    cat <<EOF > "$meta_file"
+{
+  "filename": "$(basename "$final_archive")",
+  "type": "uploads",
+  "createdAt": "$created_iso",
+  "sizeBytes": $final_size_bytes,
+  "sizeHuman": "$size_human",
+  "sha256": "$checksum",
+  "totalFiles": $total_files,
+  "audioFiles": $audio_count,
+  "coversFiles": $covers_count,
+  "gitCommit": "$git_commit_short",
+  "format": "tar.gz",
+  "status": "VALID"
+}
+EOF
+
+    echo "✅ Uploads backup successfully created!"
+    echo "   File:     $final_archive ($size_human)"
+    echo "   SHA-256:  $checksum"
+    echo "   Metadata: $meta_file"
+    echo "   Contents: $audio_count audio, $covers_count covers"
+
+    apply_retention
+    echo "=================================================="
+    return 0
+  else
+    echo "❌ Error: Failed to create uploads archive!" >&2
+    rm -f "$temp_archive"
+    return 1
+  fi
+}
+
+# ------------------------------------------------------------------------------
+# Action: List Backups (DB & Uploads)
+# ------------------------------------------------------------------------------
+list_backups() {
+  local json_mode=0
+  if [ "${1:-}" = "--json" ] || [ "${2:-}" = "--json" ]; then
+    json_mode=1
+  fi
+
+  local db_files=()
+  while IFS= read -r file; do
+    [ -n "$file" ] && [ -f "$file" ] && db_files+=("$file")
+  done < <(ls -1t "$DB_BACKUP_DIR"/dodik_tracker_backup_*.sql "$BACKUP_DIR"/dodik_tracker_backup_*.sql 2>/dev/null || true)
+
+  local uploads_files=()
+  while IFS= read -r file; do
+    [ -n "$file" ] && [ -f "$file" ] && uploads_files+=("$file")
+  done < <(ls -1t "$UPLOADS_BACKUP_DIR"/dodik_tracker_uploads_*.tar.gz 2>/dev/null || true)
+
+  if [ $json_mode -eq 1 ]; then
+    echo "{"
+    echo "  \"database\": ["
+    local first=1
+    for f in "${db_files[@]}"; do
+      local meta_file="${f}.meta.json"
+      if [ -f "$meta_file" ]; then
+        [ $first -eq 0 ] && echo ","
+        cat "$meta_file"
+        first=0
+      else
+        local fname
+        fname=$(basename "$f")
+        local fsize
+        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+        local fdate
+        fdate=$(date -r "$f" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+        [ $first -eq 0 ] && echo ","
+        echo -n "{\"filename\":\"$fname\",\"type\":\"database\",\"createdAt\":\"$fdate\",\"sizeBytes\":$fsize,\"database\":\"$(get_db_name)\",\"format\":\"plain_sql\"}"
+        first=0
+      fi
+    done
+    echo ""
+    echo "  ],"
+    echo "  \"uploads\": ["
+    first=1
+    for f in "${uploads_files[@]}"; do
+      local meta_file="${f}.meta.json"
+      if [ -f "$meta_file" ]; then
+        [ $first -eq 0 ] && echo ","
+        cat "$meta_file"
+        first=0
+      else
+        local fname
+        fname=$(basename "$f")
+        local fsize
+        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+        local fdate
+        fdate=$(date -r "$f" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+        [ $first -eq 0 ] && echo ","
+        echo -n "{\"filename\":\"$fname\",\"type\":\"uploads\",\"createdAt\":\"$fdate\",\"sizeBytes\":$fsize,\"format\":\"tar.gz\"}"
+        first=0
+      fi
+    done
+    echo ""
+    echo "  ]"
+    echo "}"
+    return 0
+  fi
+
+  echo "================================================================================"
+  echo "  Dodik Tracker - Available Backups"
+  echo "  DB Backups Location:      $DB_BACKUP_DIR"
+  echo "  Uploads Backups Location: $UPLOADS_BACKUP_DIR"
+  echo "  Retention Policy:         $RETENTION_COUNT latest retained"
+  echo "================================================================================"
+
+  echo ""
+  echo "--- 1. DATABASE BACKUPS (${#db_files[@]}) ---"
+  if [ ${#db_files[@]} -eq 0 ]; then
+    echo "No database backups found."
+  else
+    printf "%-38s | %-19s | %-8s | %-10s | %-7s\n" "FILENAME" "CREATED AT (UTC)" "SIZE" "DB" "COMMIT"
+    echo "--------------------------------------------------------------------------------"
+    for f in "${db_files[@]}"; do
+      local fname
+      fname=$(basename "$f")
+      local meta_file="${f}.meta.json"
+      local created_at="" size_human="" db_name="" git_commit=""
+      if [ -f "$meta_file" ]; then
+        created_at=$(grep -o '"createdAt":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+        size_human=$(grep -o '"sizeHuman":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+        db_name=$(grep -o '"database":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+        git_commit=$(grep -o '"gitCommit":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+      fi
+      [ -z "$created_at" ] && created_at=$(date -r "$f" -u +"%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown")
+      [ -z "$size_human" ] && size_human=$(ls -lh "$f" 2>/dev/null | awk '{print $5}' || echo "0B")
+      [ -z "$db_name" ] && db_name="$(get_db_name)"
+      [ -z "$git_commit" ] && git_commit="—"
+      created_at="${created_at:0:19}"
+      printf "%-38s | %-19s | %-8s | %-10s | %-7s\n" "$fname" "$created_at" "$size_human" "$db_name" "$git_commit"
+    done
+  fi
+
+  echo ""
+  echo "--- 2. UPLOADS BACKUPS (${#uploads_files[@]}) ---"
+  if [ ${#uploads_files[@]} -eq 0 ]; then
+    echo "No uploads backups found."
+  else
+    printf "%-38s | %-19s | %-8s | %-12s | %-7s\n" "FILENAME" "CREATED AT (UTC)" "SIZE" "FILES" "COMMIT"
+    echo "--------------------------------------------------------------------------------"
+    for f in "${uploads_files[@]}"; do
+      local fname
+      fname=$(basename "$f")
+      local meta_file="${f}.meta.json"
+      local created_at="" size_human="" total_files="" git_commit=""
+      if [ -f "$meta_file" ]; then
+        created_at=$(grep -o '"createdAt":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+        size_human=$(grep -o '"sizeHuman":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+        total_files=$(grep -o '"totalFiles":[[:space:]]*[0-9]*' "$meta_file" | head -1 | awk -F: '{print $2}' | tr -d ' ' || true)
+        git_commit=$(grep -o '"gitCommit":[[:space:]]*"[^"]*"' "$meta_file" | head -1 | cut -d'"' -f4 || true)
+      fi
+      [ -z "$created_at" ] && created_at=$(date -r "$f" -u +"%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown")
+      [ -z "$size_human" ] && size_human=$(ls -lh "$f" 2>/dev/null | awk '{print $5}' || echo "0B")
+      [ -z "$total_files" ] && total_files="—"
+      [ -z "$git_commit" ] && git_commit="—"
+      created_at="${created_at:0:19}"
+      printf "%-38s | %-19s | %-8s | %-12s | %-7s\n" "$fname" "$created_at" "$size_human" "$total_files files" "$git_commit"
+    done
+  fi
+  echo "================================================================================"
 }
 
 # ------------------------------------------------------------------------------
@@ -328,11 +478,18 @@ EOF
 CMD="${1:-create}"
 
 case "$CMD" in
+  db|create|--db|--create)
+    create_db_backup
+    ;;
+  uploads|--uploads)
+    create_uploads_backup
+    ;;
+  all|--all)
+    create_db_backup
+    create_uploads_backup
+    ;;
   list|--list|-l)
     list_backups "${2:-}"
-    ;;
-  create|--create)
-    create_backup
     ;;
   retention|--retention)
     apply_retention
@@ -341,13 +498,15 @@ case "$CMD" in
     echo "Usage: ./scripts/backup.sh [command]"
     echo ""
     echo "Commands:"
-    echo "  create        Create a new validated PostgreSQL database backup (default)"
-    echo "  list          List all available backups and metadata"
-    echo "  list --json   List all backups formatted as JSON array"
+    echo "  db / create   Create a PostgreSQL database backup (default)"
+    echo "  uploads       Create a persistent uploads archive backup (audio & covers)"
+    echo "  all           Create both database and uploads backups"
+    echo "  list          List all available database and uploads backups"
+    echo "  list --json   List all backups formatted as JSON object"
     echo "  retention     Run backup retention cleanup"
     echo "  help          Show this help text"
     ;;
   *)
-    create_backup
+    create_db_backup
     ;;
 esac
