@@ -19,7 +19,8 @@
     "restore": "bash scripts/restore.sh",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx src/server/tests/notificationLogic.ts"
+    "test": "tsx src/server/tests/notificationLogic.ts",
+    "test:music": "tsx src/server/tests/musicReleaseTransaction.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

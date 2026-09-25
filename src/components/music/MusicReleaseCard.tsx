@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, Pause, Disc, Star, Music2, Loader2 } from 'lucide-react';
+import { Play, Pause, Disc, Star, Music2, Loader2, Headphones } from 'lucide-react';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
 
@@ -16,6 +16,7 @@ export interface ReleaseCardData {
   avgScore?: number;
   reviewsCount?: number;
   tracksCount?: number;
+  listenCount?: number;
 }
 
 export interface MusicReleaseCardProps {
@@ -146,11 +147,20 @@ export const MusicReleaseCard: React.FC<MusicReleaseCardProps> = ({ release }) =
 
       {/* Footer Metadata */}
       <div className="pt-3 mt-2 border-t border-[#1E2442]/60 flex items-center justify-between text-[11px] font-mono text-[#64748B]">
-        <div className="flex items-center gap-1.5">
-          <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30 shrink-0" />
-          <span className="font-bold text-white">{release.avgScore ? `${release.avgScore}` : '—'}</span>
-          {Boolean(release.reviewsCount) && (
-            <span className="text-[#64748B]">({release.reviewsCount})</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30 shrink-0" />
+            <span className="font-bold text-white">{release.avgScore ? `${release.avgScore}` : '—'}</span>
+            {Boolean(release.reviewsCount) && (
+              <span className="text-[#64748B]">({release.reviewsCount})</span>
+            )}
+          </div>
+
+          {release.listenCount !== undefined && release.listenCount > 0 && (
+            <div className="flex items-center gap-1 text-purple-400" title="Прослушивания">
+              <Headphones className="w-3 h-3" />
+              <span>{release.listenCount.toLocaleString('ru-RU')}</span>
+            </div>
           )}
         </div>
 

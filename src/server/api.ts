@@ -37,6 +37,7 @@ import {
   mediaRatings,
   newsComments,
   newsReactions,
+  ptsTransactions,
 } from '../db/schema.ts';
 import { eq, and, or, desc, asc, sql, inArray, not, isNull, ilike, gte, lte, count } from 'drizzle-orm';
 import { providerManager } from './providers/index.ts';
@@ -1584,7 +1585,13 @@ apiRouter.get('/auth/me', requireAuth, async (req: AuthRequest, res: Response) =
         .from(userAchievements)
         .innerJoin(achievements, eq(userAchievements.achievementId, achievements.id))
         .where(eq(userAchievements.userId, user.id));
-      userPts = Number(userAchPoints[0]?.totalPoints || 0);
+
+      const userLedgerPts = await db
+        .select({ totalPoints: sql<number>`COALESCE(SUM(${ptsTransactions.amount}), 0)` })
+        .from(ptsTransactions)
+        .where(eq(ptsTransactions.userId, user.id));
+
+      userPts = Number(userAchPoints[0]?.totalPoints || 0) + Number(userLedgerPts[0]?.totalPoints || 0);
     } catch (_err) {
       userPts = 0;
     }

@@ -24,6 +24,21 @@ import {
   Sparkles,
   ExternalLink,
   ChevronRight,
+  Headphones,
+  Coins,
+  TrendingUp,
+  Award,
+  ArrowUpDown,
+  Calendar,
+  Users,
+  UserCheck,
+  UserPlus,
+  ArrowUpRight,
+  ArrowDownRight,
+  Percent,
+  Activity,
+  Info,
+  Layers,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
@@ -51,8 +66,78 @@ interface Release {
   releaseDate: string | null;
   status: 'DRAFT' | 'PENDING_REVIEW' | 'PUBLISHED' | 'REJECTED' | 'ARCHIVED';
   rejectionReason?: string | null;
+  listenCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+interface ReleaseStatItem {
+  id: number;
+  artistId: number;
+  title: string;
+  slug: string;
+  type: string;
+  cover: string | null;
+  status: string;
+  releaseDate: string | null;
+  listenCount: number;
+  tracksCount: number;
+  reviewsCount: number;
+  createdAt: string;
+  sharePct: number;
+}
+
+interface TrackStatItem {
+  id: number;
+  releaseId: number;
+  releaseTitle: string;
+  releaseCover?: string | null;
+  title: string;
+  slug: string | null;
+  trackNumber: number;
+  duration: number | null;
+  listenCount: number;
+  status: string;
+  createdAt: string;
+}
+
+interface DailyStatItem {
+  date: string;
+  label: string;
+  listens: number;
+  uniqueListeners: number;
+  newListeners: number;
+  returningListeners: number;
+}
+
+interface DayOfWeekStatItem {
+  dow: number;
+  label: string;
+  name: string;
+  listens: number;
+}
+
+interface HourlyStatItem {
+  hour: number;
+  label: string;
+  listens: number;
+}
+
+interface TopTrackItem {
+  id: number;
+  title: string;
+  releaseTitle: string;
+  listenCount: number;
+}
+
+interface PtsRewardItem {
+  id: number;
+  amount: number;
+  type: string;
+  source: string;
+  referenceId: string;
+  description: string;
+  createdAt: string;
 }
 
 interface Track {
@@ -121,8 +206,31 @@ export const MusicStudioView: React.FC = () => {
     draftsCount: 0,
     pendingCount: 0,
     publishedCount: 0,
+    totalListens: 0,
+    uniqueListeners: 0,
+    avgListensPerListener: 0,
+    periodListens: 0,
+    periodUniqueListeners: 0,
+    periodChangePct: null as number | null,
+    periodChangeLabel: 'Нет данных для сравнения',
+    ptsEarned: 0,
   });
   const [releases, setReleases] = useState<Release[]>([]);
+  const [releasesStats, setReleasesStats] = useState<ReleaseStatItem[]>([]);
+  const [tracksStats, setTracksStats] = useState<TrackStatItem[]>([]);
+  const [dailyStats, setDailyStats] = useState<DailyStatItem[]>([]);
+  const [topTrack, setTopTrack] = useState<TopTrackItem | null>(null);
+  const [newListenersCount, setNewListenersCount] = useState(0);
+  const [returningListenersCount, setReturningListenersCount] = useState(0);
+  const [peakDay, setPeakDay] = useState('Недостаточно данных');
+  const [peakHour, setPeakHour] = useState('Недостаточно данных');
+  const [dayOfWeekStats, setDayOfWeekStats] = useState<DayOfWeekStatItem[]>([]);
+  const [hourlyStats, setHourlyStats] = useState<HourlyStatItem[]>([]);
+  const [chartMetric, setChartMetric] = useState<'listens' | 'unique' | 'cohort'>('listens');
+  const [ptsRewardsHistory, setPtsRewardsHistory] = useState<PtsRewardItem[]>([]);
+  const [statsDays, setStatsDays] = useState<7 | 30 | 90>(30);
+  const [loadingChart, setLoadingChart] = useState(false);
+  const [hoveredDay, setHoveredDay] = useState<DailyStatItem | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
 
   // Release Modal
@@ -164,7 +272,7 @@ export const MusicStudioView: React.FC = () => {
   const [savingProfile, setSavingProfile] = useState(false);
 
   // Fetch Studio Data or Application Status
-  const fetchStudioData = useCallback(async () => {
+  const fetchStudioData = useCallback(async (days = 30) => {
     setLoading(true);
     try {
       // 1. Check Application
@@ -176,12 +284,39 @@ export const MusicStudioView: React.FC = () => {
       }
 
       // 2. Fetch Studio Stats & Releases
-      const statsRes = await authFetch('/api/music/studio/stats');
+      const statsRes = await authFetch(`/api/music/studio/stats?days=${days}`);
       if (statsRes.ok) {
         const data = await statsRes.json();
         setArtist(data.artist);
-        setStats(data.stats);
+        setStats(data.stats || {
+          totalReleases: 0,
+          totalTracks: 0,
+          totalReviews: 0,
+          avgOverallScore: 0,
+          draftsCount: 0,
+          pendingCount: 0,
+          publishedCount: 0,
+          totalListens: 0,
+          uniqueListeners: 0,
+          avgListensPerListener: 0,
+          periodListens: 0,
+          periodUniqueListeners: 0,
+          periodChangePct: null,
+          periodChangeLabel: 'Нет данных для сравнения',
+          ptsEarned: 0,
+        });
         setReleases(data.recentReleases || []);
+        setReleasesStats(data.releasesStats || []);
+        setTracksStats(data.tracksStats || []);
+        setDailyStats(data.dailyStats || []);
+        if (data.topTrack !== undefined) setTopTrack(data.topTrack);
+        if (data.newListenersCount !== undefined) setNewListenersCount(data.newListenersCount);
+        if (data.returningListenersCount !== undefined) setReturningListenersCount(data.returningListenersCount);
+        if (data.peakDay) setPeakDay(data.peakDay);
+        if (data.peakHour) setPeakHour(data.peakHour);
+        if (data.dayOfWeekStats) setDayOfWeekStats(data.dayOfWeekStats);
+        if (data.hourlyStats) setHourlyStats(data.hourlyStats);
+        setPtsRewardsHistory(data.ptsRewardsHistory || []);
         setReviews(data.reviews || []);
 
         if (data.artist) {
@@ -200,8 +335,34 @@ export const MusicStudioView: React.FC = () => {
     }
   }, [authFetch]);
 
+  const handleChangeStatsDays = async (days: 7 | 30 | 90) => {
+    setStatsDays(days);
+    setLoadingChart(true);
+    try {
+      const res = await authFetch(`/api/music/studio/stats?days=${days}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.stats) setStats(data.stats);
+        if (data.dailyStats) setDailyStats(data.dailyStats);
+        if (data.topTrack !== undefined) setTopTrack(data.topTrack);
+        if (data.newListenersCount !== undefined) setNewListenersCount(data.newListenersCount);
+        if (data.returningListenersCount !== undefined) setReturningListenersCount(data.returningListenersCount);
+        if (data.peakDay) setPeakDay(data.peakDay);
+        if (data.peakHour) setPeakHour(data.peakHour);
+        if (data.dayOfWeekStats) setDayOfWeekStats(data.dayOfWeekStats);
+        if (data.hourlyStats) setHourlyStats(data.hourlyStats);
+        if (data.releasesStats) setReleasesStats(data.releasesStats);
+        if (data.tracksStats) setTracksStats(data.tracksStats);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingChart(false);
+    }
+  };
+
   useEffect(() => {
-    fetchStudioData();
+    fetchStudioData(30);
   }, [fetchStudioData]);
 
   // Fetch all releases for Releases tab
@@ -645,33 +806,57 @@ export const MusicStudioView: React.FC = () => {
       {activeTab === 'overview' && (
         <div className="space-y-6">
           {/* Real Metrics Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <div className="p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
-              <span className="text-xs font-mono text-[#64748B] font-bold">Релизы</span>
-              <div className="text-2xl font-black text-white font-mono">{stats.totalReleases}</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
+              <span className="text-[11px] font-mono text-[#64748B] font-bold flex items-center gap-1">
+                <Headphones className="w-3.5 h-3.5 text-purple-400" /> Прослушивания
+              </span>
+              <div className="text-xl font-black text-white font-mono">{(stats.totalListens || 0).toLocaleString('ru-RU')}</div>
+              <span className="text-[10px] text-[#94A3B8]">квалифицированных</span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
+              <span className="text-[11px] font-mono text-[#64748B] font-bold flex items-center gap-1">
+                <Users className="w-3.5 h-3.5 text-indigo-400" /> Слушатели
+              </span>
+              <div className="text-xl font-black text-indigo-300 font-mono">{(stats.uniqueListeners || 0).toLocaleString('ru-RU')}</div>
+              <span className="text-[10px] text-[#94A3B8]">уникальных</span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
+              <span className="text-[11px] font-mono text-[#64748B] font-bold flex items-center gap-1">
+                <Activity className="w-3.5 h-3.5 text-emerald-400" /> В среднем
+              </span>
+              <div className="text-xl font-black text-emerald-400 font-mono">{stats.avgListensPerListener || 0}</div>
+              <span className="text-[10px] text-[#94A3B8]">на слушателя</span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
+              <span className="text-[11px] font-mono text-[#64748B] font-bold flex items-center gap-1">
+                <Coins className="w-3.5 h-3.5 text-amber-400" /> Награды PTS
+              </span>
+              <div className="text-xl font-black text-amber-400 font-mono">+{stats.ptsEarned || 0} PTS</div>
+              <span className="text-[10px] text-[#94A3B8]">за музыку</span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
+              <span className="text-[11px] font-mono text-[#64748B] font-bold flex items-center gap-1">
+                <Disc className="w-3.5 h-3.5 text-cyan-400" /> Релизы
+              </span>
+              <div className="text-xl font-black text-white font-mono">{stats.totalReleases}</div>
               <span className="text-[10px] text-[#94A3B8]">
                 {stats.publishedCount} опубл. / {stats.draftsCount} черн.
               </span>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
-              <span className="text-xs font-mono text-[#64748B] font-bold">Треки</span>
-              <div className="text-2xl font-black text-white font-mono">{stats.totalTracks}</div>
-              <span className="text-[10px] text-[#94A3B8]">в загруженных релизах</span>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
-              <span className="text-xs font-mono text-[#64748B] font-bold">Рецензии</span>
-              <div className="text-2xl font-black text-amber-300 font-mono">{stats.totalReviews}</div>
-              <span className="text-[10px] text-[#94A3B8]">от слушателей</span>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
-              <span className="text-xs font-mono text-[#64748B] font-bold">Ср. Оценка</span>
-              <div className="text-2xl font-black text-purple-400 font-mono">
+            <div className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-1">
+              <span className="text-[11px] font-mono text-[#64748B] font-bold flex items-center gap-1">
+                <Star className="w-3.5 h-3.5 text-amber-400" /> Ср. Оценка
+              </span>
+              <div className="text-xl font-black text-purple-400 font-mono">
                 {stats.avgOverallScore > 0 ? `${stats.avgOverallScore}/100` : '—'}
               </div>
-              <span className="text-[10px] text-[#94A3B8]">100-балльная шкала</span>
+              <span className="text-[10px] text-[#94A3B8]">{stats.totalReviews} рецензий</span>
             </div>
           </div>
 
@@ -942,26 +1127,861 @@ export const MusicStudioView: React.FC = () => {
 
       {/* TAB 5: STATS */}
       {activeTab === 'stats' && (
-        <div className="p-8 rounded-3xl bg-[#0B0D20] border border-[#1E2442] text-center space-y-4">
-          <BarChart3 className="w-12 h-12 text-purple-400 mx-auto" />
-          <h2 className="text-lg font-bold text-white font-mono">Статистика прослушиваний и оценок</h2>
-          <p className="text-xs text-[#94A3B8] max-w-md mx-auto">
-            Официальные данные базируются на реальной активности Dodik Tracker.
-          </p>
+        <div className="space-y-6">
+          {/* Header & Period Switcher */}
+          <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-purple-400" />
+                <h2 className="text-lg font-bold text-white font-mono">Расширенная аналитика музыканта</h2>
+              </div>
+              <p className="text-xs text-[#94A3B8]">
+                Реальные показатели прослушиваний из PostgreSQL. Авторские прослушивания исключены. Персональные данные слушателей защищены.
+              </p>
+            </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 max-w-xl mx-auto">
-            <div className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442]">
-              <span className="text-xs text-[#64748B] block font-mono">Всего треков</span>
-              <span className="text-xl font-bold text-white font-mono">{stats.totalTracks}</span>
+            {/* Time Period Selector */}
+            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[#11152A] border border-[#1E2442] self-start sm:self-center">
+              {[
+                { label: '7 дней', value: 7 },
+                { label: '30 дней', value: 30 },
+                { label: '90 дней', value: 90 },
+              ].map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => handleChangeStatsDays(p.value as 7 | 30 | 90)}
+                  disabled={loadingChart}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                    statsDays === p.value
+                      ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
+                      : 'text-[#94A3B8] hover:text-white'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
             </div>
-            <div className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442]">
-              <span className="text-xs text-[#64748B] block font-mono">Опубликовано</span>
-              <span className="text-xl font-bold text-emerald-400 font-mono">{stats.publishedCount}</span>
+          </div>
+
+          {/* 6 Key Metrics KPI Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {/* 1. Всего прослушиваний */}
+            <div className="p-4 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-1.5 relative overflow-hidden flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold uppercase tracking-wider">
+                  Всего прослушиваний
+                </span>
+                <div className="p-1.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400">
+                  <Headphones className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-black text-white font-mono">
+                  {(stats.totalListens || 0).toLocaleString('ru-RU')}
+                </div>
+                <div className="text-[10px] text-purple-300 font-mono">
+                  {stats.periodListens.toLocaleString('ru-RU')} за {statsDays} дн.
+                </div>
+              </div>
+              {/* Period Comparison Badge */}
+              <div className="pt-1 border-t border-[#1E2442]/60">
+                {stats.periodChangePct !== null ? (
+                  <div
+                    className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md ${
+                      stats.periodChangePct >= 0
+                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                    }`}
+                  >
+                    {stats.periodChangePct >= 0 ? (
+                      <ArrowUpRight className="w-3 h-3" />
+                    ) : (
+                      <ArrowDownRight className="w-3 h-3" />
+                    )}
+                    <span>{stats.periodChangeLabel}</span>
+                  </div>
+                ) : (
+                  <span className="text-[10px] text-[#64748B] font-mono">
+                    Нет данных для сравнения
+                  </span>
+                )}
+              </div>
             </div>
-            <div className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442]">
-              <span className="text-xs text-[#64748B] block font-mono">Всего оценок</span>
-              <span className="text-xl font-bold text-purple-400 font-mono">{stats.totalReviews}</span>
+
+            {/* 2. Уникальные слушатели */}
+            <div className="p-4 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-1.5 relative overflow-hidden flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold uppercase tracking-wider">
+                  Уникальные слушатели
+                </span>
+                <div className="p-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                  <Users className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-black text-indigo-300 font-mono">
+                  {(stats.uniqueListeners || 0).toLocaleString('ru-RU')}
+                </div>
+                <div className="text-[10px] text-indigo-300/80 font-mono">
+                  {stats.periodUniqueListeners.toLocaleString('ru-RU')} за {statsDays} дн.
+                </div>
+              </div>
+              <div className="pt-1 border-t border-[#1E2442]/60 text-[10px] text-[#64748B] font-mono truncate">
+                1 слушатель = 1 запись (все треки)
+              </div>
             </div>
+
+            {/* 3. Прослушиваний на слушателя */}
+            <div className="p-4 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-1.5 relative overflow-hidden flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold uppercase tracking-wider">
+                  В среднем на слушателя
+                </span>
+                <div className="p-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                  <Activity className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-black text-emerald-400 font-mono">
+                  {stats.avgListensPerListener || 0}
+                </div>
+                <div className="text-[10px] text-emerald-300 font-mono">
+                  треков на слушателя
+                </div>
+              </div>
+              <div className="pt-1 border-t border-[#1E2442]/60 text-[10px] text-[#64748B] font-mono truncate">
+                прослушивания ÷ слушатели
+              </div>
+            </div>
+
+            {/* 4. Самый популярный трек */}
+            <div className="p-4 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-1.5 relative overflow-hidden flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold uppercase tracking-wider">
+                  Самый популярный трек
+                </span>
+                <div className="p-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+                  <Music className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div>
+                <div className="text-sm font-bold text-white font-mono truncate" title={topTrack?.title || 'Нет данных'}>
+                  {topTrack ? topTrack.title : 'Нет данных'}
+                </div>
+                <div className="text-[10px] text-cyan-300 font-mono truncate">
+                  {topTrack ? `${topTrack.listenCount.toLocaleString('ru-RU')} просл.` : 'Нет прослушиваний'}
+                </div>
+              </div>
+              <div className="pt-1 border-t border-[#1E2442]/60 text-[10px] text-[#64748B] font-mono truncate">
+                {topTrack ? topTrack.releaseTitle : 'Каталог пуст'}
+              </div>
+            </div>
+
+            {/* 5. Заработано PTS */}
+            <div className="p-4 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-1.5 relative overflow-hidden flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold uppercase tracking-wider">
+                  Заработано PTS
+                </span>
+                <div className="p-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                  <Coins className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-black text-amber-400 font-mono">
+                  +{stats.ptsEarned || 0}
+                </div>
+                <div className="text-[10px] text-amber-300/80 font-mono">
+                  награды за музыку
+                </div>
+              </div>
+              <div className="pt-1 border-t border-[#1E2442]/60 text-[10px] text-[#64748B] font-mono truncate">
+                1 PTS за 10 прослушиваний
+              </div>
+            </div>
+
+            {/* 6. Каталог музыки */}
+            <div className="p-4 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-1.5 relative overflow-hidden flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold uppercase tracking-wider">
+                  Каталог музыки
+                </span>
+                <div className="p-1.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
+                  <Disc className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-black text-white font-mono">
+                  {stats.publishedCount} <span className="text-xs font-normal text-slate-400">релизов</span>
+                </div>
+                <div className="text-[10px] text-slate-300 font-mono">
+                  {stats.totalTracks} опубликованных треков
+                </div>
+              </div>
+              <div className="pt-1 border-t border-[#1E2442]/60 text-[10px] text-[#64748B] font-mono truncate">
+                {stats.avgOverallScore > 0 ? `Ср. оценка ${stats.avgOverallScore}/100` : 'Без рецензий'}
+              </div>
+            </div>
+          </div>
+
+          {/* New vs Returning Listeners Cohort Card */}
+          <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
+                  <UserCheck className="w-4 h-4 text-indigo-400" />
+                  <span>Структура аудитории за {statsDays} дней (Новые и возвращающиеся)</span>
+                </h3>
+                <p className="text-xs text-[#94A3B8]">
+                  Разделение слушателей по истории взаимодействий с вашим каталогом без раскрытия персональных данных.
+                </p>
+              </div>
+
+              <div className="px-3 py-1.5 rounded-xl bg-[#11152A] border border-[#1E2442] text-xs font-mono text-slate-300 self-start sm:self-center">
+                Всего активно за период: <strong className="text-white">{stats.periodUniqueListeners}</strong> слушателей
+              </div>
+            </div>
+
+            {(() => {
+              const activeCount = Math.max(1, newListenersCount + returningListenersCount);
+              const newPct = Math.round((newListenersCount / activeCount) * 100);
+              const retPct = Math.max(0, 100 - newPct);
+
+              return (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* New Listeners */}
+                    <div className="p-4 rounded-2xl bg-[#11152A] border border-indigo-500/20 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-mono font-bold text-indigo-300 flex items-center gap-1.5">
+                          <UserPlus className="w-4 h-4 text-indigo-400" />
+                          <span>Новые слушатели</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-200 text-xs font-mono font-bold">
+                          {newPct}%
+                        </span>
+                      </div>
+                      <div className="text-3xl font-black text-white font-mono">
+                        {newListenersCount.toLocaleString('ru-RU')}
+                      </div>
+                      <p className="text-[11px] text-[#94A3B8] font-mono">
+                        Впервые прослушали треки данного автора за последние {statsDays} дней.
+                      </p>
+                    </div>
+
+                    {/* Returning Listeners */}
+                    <div className="p-4 rounded-2xl bg-[#11152A] border border-emerald-500/20 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-mono font-bold text-emerald-300 flex items-center gap-1.5">
+                          <UserCheck className="w-4 h-4 text-emerald-400" />
+                          <span>Возвращающиеся слушатели</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-200 text-xs font-mono font-bold">
+                          {retPct}%
+                        </span>
+                      </div>
+                      <div className="text-3xl font-black text-white font-mono">
+                        {returningListenersCount.toLocaleString('ru-RU')}
+                      </div>
+                      <p className="text-[11px] text-[#94A3B8] font-mono">
+                        Слушали музыку автора до текущего периода и вернулись в последние {statsDays} дней.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Segmented Dual Bar */}
+                  <div className="space-y-1.5">
+                    <div className="w-full h-3 rounded-full bg-[#080915] overflow-hidden flex border border-[#1E2442]">
+                      <div
+                        style={{ width: `${newPct}%` }}
+                        className="bg-indigo-500 h-full transition-all"
+                        title={`Новые: ${newPct}%`}
+                      />
+                      <div
+                        style={{ width: `${retPct}%` }}
+                        className="bg-emerald-500 h-full transition-all"
+                        title={`Возвращающиеся: ${retPct}%`}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] font-mono text-[#64748B]">
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" />
+                        <span>Новые: {newListenersCount} ({newPct}%)</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                        <span>Возвращающиеся: {returningListenersCount} ({retPct}%)</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Transparency Notice */}
+                  <div className="p-3 rounded-xl bg-[#080915]/60 border border-[#1E2442] flex items-start gap-2.5 text-[11px] text-[#94A3B8] font-mono">
+                    <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                    <span>
+                      Определение новых и возвращающихся слушателей основано на зафиксированных qualifying сессиях прослушивания. Пользователи идентифицируются по аккаунту или анонимной гостевой сессии, исключая автора.
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Interactive Dynamic Listening Chart with 3 Modes */}
+          <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-purple-400" />
+                  <span>
+                    Динамика за {statsDays} дней:{' '}
+                    {chartMetric === 'listens'
+                      ? 'Прослушивания'
+                      : chartMetric === 'unique'
+                      ? 'Уникальные слушатели'
+                      : 'Новые и возвращающиеся'}
+                  </span>
+                </h3>
+                <p className="text-xs text-[#94A3B8]">
+                  Реальные данные за каждый календарный день. Дни без активности отображаются с нулевым значением.
+                </p>
+              </div>
+
+              {/* Chart Metric Mode Switcher */}
+              <div className="flex items-center gap-1 p-1 rounded-xl bg-[#11152A] border border-[#1E2442] self-start sm:self-center">
+                <button
+                  onClick={() => setChartMetric('listens')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                    chartMetric === 'listens'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-[#94A3B8] hover:text-white'
+                  }`}
+                >
+                  Прослушивания
+                </button>
+                <button
+                  onClick={() => setChartMetric('unique')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                    chartMetric === 'unique'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-[#94A3B8] hover:text-white'
+                  }`}
+                >
+                  Уникальные
+                </button>
+                <button
+                  onClick={() => setChartMetric('cohort')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                    chartMetric === 'cohort'
+                      ? 'bg-gradient-to-r from-indigo-600 to-emerald-600 text-white shadow-sm'
+                      : 'text-[#94A3B8] hover:text-white'
+                  }`}
+                >
+                  Когорта
+                </button>
+              </div>
+            </div>
+
+            {/* Hover Tooltip Preview Bar */}
+            {hoveredDay && (
+              <div className="p-2.5 rounded-xl bg-[#11152A] border border-purple-500/30 flex items-center justify-between text-xs font-mono flex-wrap gap-2">
+                <span className="text-slate-300 font-bold">{hoveredDay.label} ({hoveredDay.date}):</span>
+                <div className="flex items-center gap-4 text-xs font-mono">
+                  <span>Прослушиваний: <strong className="text-purple-300">{hoveredDay.listens}</strong></span>
+                  <span>Уникальных: <strong className="text-indigo-300">{hoveredDay.uniqueListeners}</strong></span>
+                  <span>Новых: <strong className="text-cyan-300">{hoveredDay.newListeners}</strong></span>
+                  <span>Возвращающихся: <strong className="text-emerald-300">{hoveredDay.returningListeners}</strong></span>
+                </div>
+              </div>
+            )}
+
+            {loadingChart ? (
+              <div className="h-48 flex items-center justify-center text-purple-400">
+                <Loader2 className="w-6 h-6 animate-spin" />
+              </div>
+            ) : dailyStats.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-xs text-[#94A3B8] font-mono">
+                Нет данных за выбранный период
+              </div>
+            ) : (
+              (() => {
+                const values = dailyStats.map((d) =>
+                  chartMetric === 'listens'
+                    ? d.listens
+                    : chartMetric === 'unique'
+                    ? d.uniqueListeners
+                    : d.uniqueListeners
+                );
+                const maxValue = Math.max(1, ...values);
+                const totalInWindow = values.reduce((sum, v) => sum + v, 0);
+                const avgInWindow = Math.round((totalInWindow / dailyStats.length) * 10) / 10;
+
+                return (
+                  <div className="space-y-4">
+                    {/* Visual Bar Histogram */}
+                    <div className="h-48 w-full flex items-end gap-1 sm:gap-2 pt-6 pb-2 px-2 bg-[#080915] rounded-2xl border border-[#1E2442]/50">
+                      {dailyStats.map((item, idx) => {
+                        const val =
+                          chartMetric === 'listens'
+                            ? item.listens
+                            : chartMetric === 'unique'
+                            ? item.uniqueListeners
+                            : item.uniqueListeners;
+
+                        const heightPct = Math.max(6, Math.round((val / maxValue) * 100));
+                        const isHovered = hoveredDay?.date === item.date;
+
+                        return (
+                          <div
+                            key={idx}
+                            onMouseEnter={() => setHoveredDay(item)}
+                            onMouseLeave={() => setHoveredDay(null)}
+                            className="flex-1 h-full flex flex-col justify-end items-center group cursor-pointer relative"
+                          >
+                            {/* Hover tooltip overlay */}
+                            <div className="absolute -top-10 bg-purple-950 border border-purple-500/40 text-purple-200 text-[10px] font-mono px-2.5 py-1 rounded-md pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 shadow-xl">
+                              {item.label}:{' '}
+                              {chartMetric === 'listens'
+                                ? `${item.listens} просл.`
+                                : chartMetric === 'unique'
+                                ? `${item.uniqueListeners} слуш.`
+                                : `${item.newListeners} нов. / ${item.returningListeners} возвр.`}
+                            </div>
+
+                            {/* Bar Rendering */}
+                            {chartMetric === 'cohort' ? (
+                              <div
+                                style={{ height: `${heightPct}%` }}
+                                className={`w-full max-w-[24px] rounded-t-md overflow-hidden flex flex-col-reverse transition-all ${
+                                  isHovered ? 'scale-105 shadow-lg shadow-indigo-500/30' : ''
+                                }`}
+                              >
+                                {val > 0 ? (
+                                  <>
+                                    <div
+                                      style={{
+                                        height: `${item.uniqueListeners > 0 ? (item.newListeners / item.uniqueListeners) * 100 : 0}%`,
+                                      }}
+                                      className="bg-indigo-500 w-full"
+                                    />
+                                    <div
+                                      style={{
+                                        height: `${item.uniqueListeners > 0 ? (item.returningListeners / item.uniqueListeners) * 100 : 0}%`,
+                                      }}
+                                      className="bg-emerald-500 w-full"
+                                    />
+                                  </>
+                                ) : (
+                                  <div className="bg-[#1E2442]/40 h-full w-full" />
+                                )}
+                              </div>
+                            ) : (
+                              <div
+                                style={{ height: `${heightPct}%` }}
+                                className={`w-full max-w-[24px] rounded-t-md transition-all ${
+                                  val > 0
+                                    ? isHovered
+                                      ? chartMetric === 'listens'
+                                        ? 'bg-purple-400 shadow-lg shadow-purple-500/50 scale-105'
+                                        : 'bg-indigo-400 shadow-lg shadow-indigo-500/50 scale-105'
+                                      : chartMetric === 'listens'
+                                      ? 'bg-gradient-to-t from-purple-800 to-purple-500 hover:from-purple-700 hover:to-purple-400'
+                                      : 'bg-gradient-to-t from-indigo-800 to-indigo-500 hover:from-indigo-700 hover:to-indigo-400'
+                                    : 'bg-[#1E2442]/40'
+                                }`}
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Chart Footer with Timeline labels & summary */}
+                    <div className="flex items-center justify-between text-[11px] font-mono text-[#64748B] flex-wrap gap-2">
+                      <span>{dailyStats[0]?.label}</span>
+                      <div className="flex items-center gap-4 text-xs font-mono">
+                        <span>Суммарно: <strong className="text-white">{totalInWindow}</strong></span>
+                        <span>В среднем: <strong className="text-purple-300">{avgInWindow}/день</strong></span>
+                        <span>Пик дня: <strong className="text-emerald-400">{maxValue}</strong></span>
+                      </div>
+                      <span>{dailyStats[dailyStats.length - 1]?.label}</span>
+                    </div>
+                  </div>
+                );
+              })()
+            )}
+          </div>
+
+          {/* Activity Peaks & Time Breakdowns Grid (2 Columns) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Column 1: Activity by Day of Week */}
+            <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-purple-400" />
+                    <span>Активность по дням недели</span>
+                  </h3>
+                  <p className="text-xs text-[#94A3B8]">
+                    Распределение квалифицированных прослушиваний по дням недели
+                  </p>
+                </div>
+
+                <div className="px-3 py-1 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-300 text-xs font-mono font-bold">
+                  {peakDay}
+                </div>
+              </div>
+
+              {dayOfWeekStats.length === 0 ? (
+                <p className="text-xs text-[#94A3B8] font-mono">Недостаточно данных</p>
+              ) : (
+                <div className="space-y-2.5">
+                  {(() => {
+                    const maxDow = Math.max(1, ...dayOfWeekStats.map((d) => d.listens));
+                    return dayOfWeekStats.map((d) => {
+                      const pct = maxDow > 0 ? Math.round((d.listens / maxDow) * 100) : 0;
+                      return (
+                        <div key={d.dow} className="space-y-1">
+                          <div className="flex items-center justify-between text-xs font-mono">
+                            <span className="text-slate-300 font-bold">{d.name} ({d.label})</span>
+                            <span className="text-purple-300 font-bold">
+                              {d.listens.toLocaleString('ru-RU')} просл.
+                            </span>
+                          </div>
+                          <div className="w-full bg-[#11152A] h-2 rounded-full overflow-hidden border border-[#1E2442]">
+                            <div
+                              style={{ width: `${pct}%` }}
+                              className="bg-gradient-to-r from-purple-700 to-indigo-500 h-full rounded-full transition-all"
+                            />
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* Column 2: Activity by Hours of Day (00:00 - 23:00) */}
+            <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-cyan-400" />
+                    <span>Активность по часам (00:00 - 23:00)</span>
+                  </h3>
+                  <p className="text-xs text-[#94A3B8]">
+                    Часовые пики прослушиваний по серверному времени
+                  </p>
+                </div>
+
+                <div className="px-3 py-1 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 text-xs font-mono font-bold">
+                  {peakHour}
+                </div>
+              </div>
+
+              {hourlyStats.length === 0 ? (
+                <p className="text-xs text-[#94A3B8] font-mono">Недостаточно данных</p>
+              ) : (
+                (() => {
+                  const maxHour = Math.max(1, ...hourlyStats.map((h) => h.listens));
+                  return (
+                    <div className="space-y-3">
+                      {/* 24-Bar Histogram */}
+                      <div className="h-32 w-full flex items-end gap-1 pt-4 pb-1 px-2 bg-[#080915] rounded-2xl border border-[#1E2442]">
+                        {hourlyStats.map((h) => {
+                          const heightPct = Math.max(6, Math.round((h.listens / maxHour) * 100));
+                          return (
+                            <div
+                              key={h.hour}
+                              className="flex-1 h-full flex flex-col justify-end items-center group cursor-pointer relative"
+                            >
+                              <div className="absolute -top-7 bg-cyan-950 border border-cyan-500/40 text-cyan-200 text-[9px] font-mono px-1.5 py-0.5 rounded pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+                                {h.label}: {h.listens}
+                              </div>
+                              <div
+                                style={{ height: `${heightPct}%` }}
+                                className={`w-full rounded-t-sm transition-all ${
+                                  h.listens > 0
+                                    ? 'bg-gradient-to-t from-cyan-800 to-cyan-400 group-hover:bg-cyan-300'
+                                    : 'bg-[#1E2442]/30'
+                                }`}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex items-center justify-between text-[10px] font-mono text-[#64748B]">
+                        <span>00:00</span>
+                        <span>06:00</span>
+                        <span>12:00</span>
+                        <span>18:00</span>
+                        <span>23:00</span>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+          </div>
+
+          {/* Breakdown: Popular Releases & Popular Tracks Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Popular Releases Breakdown */}
+            <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
+                  <Disc className="w-4 h-4 text-purple-400" />
+                  <span>Популярные релизы</span>
+                </h3>
+                <span className="text-xs text-[#94A3B8] font-mono">
+                  Доля от общего числа
+                </span>
+              </div>
+
+              {releasesStats.length === 0 ? (
+                <div className="p-8 text-center bg-[#11152A] rounded-2xl border border-[#1E2442] text-xs text-[#94A3B8] font-mono">
+                  Опубликованные релизы отсутствуют
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {releasesStats.map((rel) => {
+                    const pct = rel.sharePct || 0;
+
+                    return (
+                      <div
+                        key={rel.id}
+                        className="p-3.5 rounded-2xl bg-[#11152A] border border-[#1E2442] hover:border-purple-500/40 transition-all space-y-2"
+                      >
+                        <div className="flex items-center gap-3">
+                          {rel.cover ? (
+                            <img
+                              src={rel.cover}
+                              alt={rel.title}
+                              className="w-12 h-12 rounded-xl object-cover shrink-0 border border-[#1E2442]"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 rounded-xl bg-purple-900/30 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+                              <Disc className="w-5 h-5" />
+                            </div>
+                          )}
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-xs font-bold text-white font-mono truncate">{rel.title}</h4>
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-[#1E2442] text-slate-300">
+                                {rel.type}
+                              </span>
+                            </div>
+                            <span className="text-[11px] text-[#64748B] font-mono">
+                              {rel.tracksCount || 0} треков · {rel.releaseDate || 'Дата не указана'}
+                            </span>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <div className="flex items-center gap-1.5 text-purple-300 font-mono font-bold text-xs">
+                              <Headphones className="w-3.5 h-3.5 text-purple-400" />
+                              <span>{(rel.listenCount || 0).toLocaleString('ru-RU')}</span>
+                            </div>
+                            <span className="text-[10px] text-purple-400 font-mono font-bold">
+                              {pct}% от общих
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full bg-[#0B0D20] h-1.5 rounded-full overflow-hidden">
+                          <div
+                            style={{ width: `${pct}%` }}
+                            className="bg-gradient-to-r from-purple-600 to-indigo-500 h-full rounded-full transition-all"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Popular Tracks Breakdown */}
+            <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
+                  <Music className="w-4 h-4 text-purple-400" />
+                  <span>Популярные треки</span>
+                </h3>
+                <span className="text-xs text-[#94A3B8] font-mono">
+                  Сортировка по прослушиваниям
+                </span>
+              </div>
+
+              {tracksStats.length === 0 ? (
+                <div className="p-8 text-center bg-[#11152A] rounded-2xl border border-[#1E2442] text-xs text-[#94A3B8] font-mono">
+                  Треки в опубликованных релизах отсутствуют
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
+                  {tracksStats.slice(0, 15).map((trk, idx) => (
+                    <div
+                      key={trk.id}
+                      className="p-3 rounded-2xl bg-[#11152A] border border-[#1E2442] flex items-center gap-3 hover:border-purple-500/30 transition-all"
+                    >
+                      <span className="text-xs font-mono font-black text-[#64748B] w-6 text-center shrink-0">
+                        #{idx + 1}
+                      </span>
+
+                      <div className="flex-1 min-w-0">
+                        <h4 className="text-xs font-bold text-white font-mono truncate">{trk.title}</h4>
+                        <p className="text-[10px] text-[#64748B] font-mono truncate">Релиз: {trk.releaseTitle}</p>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <div className="flex items-center gap-1.5 text-purple-300 font-mono font-bold text-xs">
+                          <Headphones className="w-3.5 h-3.5 text-purple-400" />
+                          <span>{(trk.listenCount || 0).toLocaleString('ru-RU')}</span>
+                        </div>
+                        {trk.duration ? (
+                          <span className="text-[10px] text-[#64748B] font-mono">
+                            {Math.floor(trk.duration / 60)}:{String(trk.duration % 60).padStart(2, '0')}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Engagement & Measurement Transparency Block */}
+          <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
+            <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
+              <Layers className="w-4 h-4 text-emerald-400" />
+              <span>Вовлеченность слушателей и прозрачность метрик</span>
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-1">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold">Конверсия в рецензии</span>
+                <div className="text-xl font-black text-amber-400 font-mono">
+                  {stats.totalListens > 0
+                    ? `${Math.round(((stats.totalReviews || 0) / stats.totalListens) * 1000) / 10}%`
+                    : '0%'}
+                </div>
+                <p className="text-[10px] text-[#94A3B8] font-mono">
+                  {stats.totalReviews} рецензий на {stats.totalListens} прослушиваний
+                </p>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-1">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold">Удержание аудитории</span>
+                <div className="text-xl font-black text-emerald-400 font-mono">
+                  {stats.periodUniqueListeners > 0
+                    ? `${Math.round((returningListenersCount / stats.periodUniqueListeners) * 1000) / 10}%`
+                    : '0%'}
+                </div>
+                <p className="text-[10px] text-[#94A3B8] font-mono">
+                  доля возвращающихся слушателей за {statsDays} дн.
+                </p>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-1">
+                <span className="text-[11px] font-mono text-[#64748B] font-bold">Глубина каталога</span>
+                <div className="text-xl font-black text-cyan-400 font-mono">
+                  {stats.publishedCount > 0
+                    ? `${Math.round((stats.totalTracks / stats.publishedCount) * 10) / 10}`
+                    : '0'}{' '}
+                  <span className="text-xs font-normal text-slate-400">треков/релиз</span>
+                </div>
+                <p className="text-[10px] text-[#94A3B8] font-mono">
+                  среднее число треков на опубликованный релиз
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#11152A] border border-emerald-500/20 text-xs text-slate-300 font-mono space-y-1">
+              <div className="text-emerald-400 font-bold flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5" />
+                <span>Честная статистика без искусственных накруток:</span>
+              </div>
+              <p className="text-[11px] text-[#94A3B8] leading-relaxed">
+                Просмотры страниц релизов не логируются в структуре базы данных Dodik Tracker. Мы не придумываем ложные проценты конверсий страниц — вся статистика строится исключительно на реальных сессиях воспроизведения из таблиц <code className="text-purple-300">music_listens</code> и <code className="text-purple-300">music_playback_sessions</code>.
+              </p>
+            </div>
+          </div>
+
+          {/* PTS Ledger & Rewards Log */}
+          <div className="p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
+                  <Coins className="w-4 h-4 text-amber-400" />
+                  <span>Реестр начислений наград PTS за музыку</span>
+                </h3>
+                <p className="text-xs text-[#94A3B8]">
+                  Прозрачная экономика наград Dodik Tracker. 1 PTS начисляется за каждые 10 квалифицированных прослушиваний.
+                </p>
+              </div>
+
+              <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono text-xs font-bold">
+                Суммарно: +{stats.ptsEarned || 0} PTS
+              </div>
+            </div>
+
+            {/* Anti-cheat & Economics rules banner */}
+            <div className="p-4 rounded-2xl bg-[#11152A] border border-purple-500/20 text-xs text-slate-300 space-y-1 font-mono">
+              <div className="text-purple-300 font-bold flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Правила фиксации прослушиваний и наград:</span>
+              </div>
+              <ul className="list-disc list-inside space-y-0.5 text-[11px] text-[#94A3B8] pt-1">
+                <li>Прослушивание засчитывается после 30 секунд или 50% длительности трека.</li>
+                <li>Защита от накрутки: перемотка, спам-клики и повторные вызовы игнорируются сервером.</li>
+                <li>Собственные воспроизведения автора сохраняются в личную историю, но исключаются из всех публичных счетчиков и не начисляют PTS.</li>
+                <li>Награды начисляются автоматически в неизменяемый PostgreSQL-реестр баланса (PTS Ledger).</li>
+              </ul>
+            </div>
+
+            {/* Rewards Transactions Table */}
+            {ptsRewardsHistory.length === 0 ? (
+              <div className="p-6 text-center bg-[#11152A] border border-[#1E2442] rounded-2xl text-xs text-[#94A3B8] font-mono">
+                Пока нет начислений наград. Когда ваши треки наберут первые 10 прослушиваний, здесь появится первая транзакция!
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {ptsRewardsHistory.map((tx) => (
+                  <div
+                    key={tx.id}
+                    className="p-3 rounded-2xl bg-[#11152A] border border-[#1E2442] flex items-center justify-between gap-4 text-xs font-mono"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
+                        <Award className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-white font-bold">{tx.description}</div>
+                        <div className="text-[10px] text-[#64748B]">
+                          ID транзакции: #{tx.id} · Ref: {tx.referenceId}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <span className="text-sm font-black text-amber-400">+{tx.amount} PTS</span>
+                      <div className="text-[10px] text-[#64748B]">
+                        {new Date(tx.createdAt).toLocaleDateString('ru-RU', {
+                          day: 'numeric',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

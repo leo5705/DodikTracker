@@ -26,6 +26,7 @@ import {
   Info,
   ChevronDown,
   ChevronUp,
+  Headphones,
 } from 'lucide-react';
 
 interface ArtistProfile {
@@ -53,6 +54,7 @@ interface Release {
   cover: string | null;
   releaseDate: string | null;
   status: string;
+  listenCount?: number;
   createdAt: string;
   avgScore: number;
   reviewsCount: number;
@@ -70,6 +72,7 @@ interface Track {
   trackNumber: number;
   audioFile: string | null;
   duration: number | null;
+  listenCount?: number;
   explicit: boolean;
   lyrics: string | null;
   authorNote: string | null;
@@ -99,6 +102,7 @@ interface ArtistStats {
   totalTracks: number;
   totalReviews: number;
   avgOverallScore: number;
+  totalListens?: number;
 }
 
 export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) => {
@@ -320,7 +324,16 @@ export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) 
             )}
 
             {/* Stats Cards */}
-            <div className="pt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl">
+            <div className="pt-3 grid grid-cols-2 sm:grid-cols-5 gap-3 max-w-3xl">
+              <div className="p-3 rounded-2xl bg-purple-950/40 border border-purple-500/30 backdrop-blur-md">
+                <div className="text-xs font-medium text-purple-300 flex items-center gap-1.5">
+                  <Headphones className="w-3.5 h-3.5 text-purple-400" /> Прослушивания
+                </div>
+                <div className="text-xl font-bold text-white mt-1 font-mono">
+                  {(stats.totalListens || 0).toLocaleString('ru-RU')}
+                </div>
+              </div>
+
               <div className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-md">
                 <div className="text-xs font-medium text-slate-400 flex items-center gap-1.5">
                   <Disc className="w-3.5 h-3.5 text-cyan-400" /> Релизы

@@ -33,7 +33,7 @@ export const MusicNav: React.FC<MusicNavProps> = ({ activeTab }) => {
     { id: 'artists', label: 'Исполнители', icon: Users, path: '/music/artists', routeName: 'music-artists' },
     { id: 'genres', label: 'Жанры', icon: Radio, path: '/music/genres', routeName: 'music-genres' },
     { id: 'search', label: 'Поиск', icon: Search, path: '/music/search', routeName: 'music-search' },
-    { id: 'library', label: 'Медиатека', icon: Library, path: '/music/library', routeName: 'music-library' },
+    { id: 'library', label: 'Моя музыка', icon: Library, path: '/music/library', routeName: 'music-library' },
     {
       id: 'studio',
       label: isMusician ? 'Студия' : 'Стать музыкантом',

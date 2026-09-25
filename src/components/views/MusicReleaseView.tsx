@@ -23,6 +23,8 @@ import {
   LogIn,
   Sliders,
   CheckCircle2,
+  Headphones,
+  Heart,
 } from 'lucide-react';
 
 interface Genre {
@@ -41,12 +43,14 @@ interface ReleaseData {
   cover: string | null;
   releaseDate: string | null;
   status: string;
+  listenCount?: number;
   createdAt: string;
   stageName: string;
   artistSlug: string;
   artistAvatar: string | null;
   artistUserId: number;
   artistDescription: string | null;
+  isFavorite?: boolean;
 }
 
 interface ReviewStats {
@@ -89,7 +93,7 @@ const REVIEW_CRITERIA = [
 
 export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) => {
   const { navigate } = useRouter();
-  const { dbUser } = useAuth();
+  const { dbUser, authFetch } = useAuth();
   const { playTrack, currentTrack, isPlaying } = useMusicPlayer();
 
   const [loading, setLoading] = useState(true);
@@ -100,6 +104,8 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
   const [tracks, setTracks] = useState<Track[]>([]);
   const [stats, setStats] = useState<ReviewStats | null>(null);
   const [userReview, setUserReview] = useState<Review | null>(null);
+
+  const [togglingFavoriteRelease, setTogglingFavoriteRelease] = useState(false);
 
   // Reviews list & pagination & sorting
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -139,13 +145,113 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
 
   useEffect(() => {
     fetchRelease();
-  }, [idOrSlug]);
+  }, [idOrSlug, dbUser]);
+
+  useEffect(() => {
+    const handleListenRecorded = (e: any) => {
+      const { trackId, trackListenCount, releaseListenCount } = e.detail || {};
+      setRelease((prev) => (prev ? { ...prev, listenCount: releaseListenCount } : prev));
+      setTracks((prev) =>
+        prev.map((t) => (t.id === trackId ? { ...t, listenCount: trackListenCount } : t))
+      );
+    };
+
+    const handleFavTrackChanged = (e: any) => {
+      const { trackId, isFavorite } = e.detail || {};
+      if (trackId) {
+        setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, isFavorite } : t)));
+      }
+    };
+
+    const handleFavReleaseChanged = (e: any) => {
+      const { releaseId, isFavorite } = e.detail || {};
+      if (releaseId) {
+        setRelease((prev) => (prev && prev.id === releaseId ? { ...prev, isFavorite } : prev));
+      }
+    };
+
+    window.addEventListener('music:listen_recorded', handleListenRecorded);
+    window.addEventListener('music:favorite_track_changed', handleFavTrackChanged);
+    window.addEventListener('music:favorite_release_changed', handleFavReleaseChanged);
+    return () => {
+      window.removeEventListener('music:listen_recorded', handleListenRecorded);
+      window.removeEventListener('music:favorite_track_changed', handleFavTrackChanged);
+      window.removeEventListener('music:favorite_release_changed', handleFavReleaseChanged);
+    };
+  }, []);
+
+  const handleToggleFavoriteRelease = async () => {
+    if (!release || !dbUser || togglingFavoriteRelease) return;
+    const nextFav = !release.isFavorite;
+    setRelease((prev) => (prev ? { ...prev, isFavorite: nextFav } : prev));
+    setTogglingFavoriteRelease(true);
+    window.dispatchEvent(
+      new CustomEvent('music:favorite_release_changed', {
+        detail: { releaseId: release.id, isFavorite: nextFav },
+      })
+    );
+    try {
+      const res = await authFetch(`/api/music/my/releases/${release.id}`, {
+        method: nextFav ? 'POST' : 'DELETE',
+      });
+      if (!res.ok) {
+        setRelease((prev) => (prev ? { ...prev, isFavorite: !nextFav } : prev));
+        window.dispatchEvent(
+          new CustomEvent('music:favorite_release_changed', {
+            detail: { releaseId: release.id, isFavorite: !nextFav },
+          })
+        );
+      }
+    } catch {
+      setRelease((prev) => (prev ? { ...prev, isFavorite: !nextFav } : prev));
+      window.dispatchEvent(
+        new CustomEvent('music:favorite_release_changed', {
+          detail: { releaseId: release.id, isFavorite: !nextFav },
+        })
+      );
+    } finally {
+      setTogglingFavoriteRelease(false);
+    }
+  };
+
+  const handleToggleFavoriteTrack = async (trk: Track) => {
+    if (!dbUser) return;
+    const nextFav = !trk.isFavorite;
+    setTracks((prev) => prev.map((t) => (t.id === trk.id ? { ...t, isFavorite: nextFav } : t)));
+    window.dispatchEvent(
+      new CustomEvent('music:favorite_track_changed', {
+        detail: { trackId: trk.id, isFavorite: nextFav },
+      })
+    );
+    try {
+      const res = await authFetch(`/api/music/my/tracks/${trk.id}`, {
+        method: nextFav ? 'POST' : 'DELETE',
+      });
+      if (!res.ok) {
+        setTracks((prev) => prev.map((t) => (t.id === trk.id ? { ...t, isFavorite: !nextFav } : t)));
+        window.dispatchEvent(
+          new CustomEvent('music:favorite_track_changed', {
+            detail: { trackId: trk.id, isFavorite: !nextFav },
+          })
+        );
+      }
+    } catch {
+      setTracks((prev) => prev.map((t) => (t.id === trk.id ? { ...t, isFavorite: !nextFav } : t)));
+      window.dispatchEvent(
+        new CustomEvent('music:favorite_track_changed', {
+          detail: { trackId: trk.id, isFavorite: !nextFav },
+        })
+      );
+    }
+  };
 
   const fetchRelease = async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/music/releases/${idOrSlug}`);
+      const res = await (dbUser
+        ? authFetch(`/api/music/releases/${idOrSlug}`)
+        : fetch(`/api/music/releases/${idOrSlug}`));
       if (!res.ok) {
         if (res.status === 404) {
           throw new Error('Музыкальный релиз не найден');
@@ -571,7 +677,7 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
             </div>
 
             {/* Release Metadata */}
-            <div className="flex items-center justify-center md:justify-start gap-2 text-xs text-slate-400 font-medium">
+            <div className="flex items-center justify-center md:justify-start gap-2 text-xs text-slate-400 font-medium flex-wrap">
               {release.releaseDate && <span>{formatDate(release.releaseDate)}</span>}
               {release.releaseDate && <span className="text-slate-600">·</span>}
               <span>{tracks.length} {tracks.length === 1 ? 'трек' : tracks.length >= 2 && tracks.length <= 4 ? 'трека' : 'треков'}</span>
@@ -581,6 +687,11 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
                   <span>{formatTotalDurationText(totalSecs)}</span>
                 </>
               )}
+              <span className="text-slate-600">·</span>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 font-mono text-[11px] font-semibold">
+                <Headphones className="w-3.5 h-3.5 text-purple-400" />
+                <span>{(release.listenCount || 0).toLocaleString('ru-RU')} {((release.listenCount || 0) % 10 === 1 && (release.listenCount || 0) % 100 !== 11) ? 'прослушивание' : ((release.listenCount || 0) % 10 >= 2 && (release.listenCount || 0) % 10 <= 4 && ((release.listenCount || 0) % 100 < 10 || (release.listenCount || 0) % 100 >= 20)) ? 'прослушивания' : 'прослушиваний'}</span>
+              </span>
             </div>
 
             {/* Rating Summary in Hero */}
@@ -640,6 +751,23 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
                 <Share2 className="w-4 h-4" />
                 {copied ? 'Ссылка скопирована' : 'Поделиться'}
               </button>
+
+              {/* Favorite Release Button */}
+              {dbUser && (
+                <button
+                  onClick={handleToggleFavoriteRelease}
+                  disabled={togglingFavoriteRelease}
+                  className={`px-5 py-3 rounded-2xl font-bold text-sm flex items-center gap-2.5 transition-all cursor-pointer border ${
+                    release.isFavorite
+                      ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border-rose-500/40 shadow-lg shadow-rose-500/10'
+                      : 'bg-slate-800/80 hover:bg-slate-700 text-slate-200 hover:text-white border-slate-700/60'
+                  }`}
+                  title={release.isFavorite ? 'Удалить из избранного' : 'Добавить релиз в избранное'}
+                >
+                  <Heart className={`w-4 h-4 ${release.isFavorite ? 'fill-rose-500 text-rose-500' : ''}`} />
+                  <span>{release.isFavorite ? 'В избранном' : 'В избранное'}</span>
+                </button>
+              )}
             </div>
           </div>
         </section>
@@ -748,9 +876,37 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
                           </button>
                         )}
 
+                        {trk.listenCount !== undefined && trk.listenCount > 0 && (
+                          <span
+                            className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-950/40 border border-purple-500/20 text-[11px] font-mono text-purple-300/90"
+                            title="Квалифицированные прослушивания"
+                          >
+                            <Headphones className="w-3 h-3 text-purple-400" />
+                            <span>{trk.listenCount.toLocaleString('ru-RU')}</span>
+                          </span>
+                        )}
+
                         <span className="text-xs font-mono text-slate-400 ml-2 w-10 text-right">
                           {formatDuration(trk.duration)}
                         </span>
+
+                        {/* Favorite Track Button */}
+                        {dbUser && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleFavoriteTrack(trk);
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ml-1 ${
+                              trk.isFavorite
+                                ? 'text-rose-400 bg-rose-500/15 border border-rose-500/30'
+                                : 'text-slate-500 hover:text-rose-400 hover:bg-slate-800'
+                            }`}
+                            title={trk.isFavorite ? 'Удалить из любимых треков' : 'Добавить в любимые треки'}
+                          >
+                            <Heart className={`w-3.5 h-3.5 ${trk.isFavorite ? 'fill-rose-500 text-rose-500' : ''}`} />
+                          </button>
+                        )}
                       </div>
                     </div>
 

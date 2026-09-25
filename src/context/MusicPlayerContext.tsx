@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useRef, useEffect, ReactNode } from 'react';
 import { useRouter } from './RouterContext.tsx';
+import { useAuth } from './AuthContext.tsx';
 import {
   Play,
   Pause,
@@ -19,6 +20,7 @@ import {
   Disc,
   Sparkles,
   ExternalLink,
+  Heart,
 } from 'lucide-react';
 
 export interface Track {
@@ -38,6 +40,8 @@ export interface Track {
   explicit?: boolean;
   lyrics?: string | null;
   authorNote?: string | null;
+  listenCount?: number;
+  isFavorite?: boolean;
 }
 
 export interface ReleaseInfo {
@@ -86,11 +90,14 @@ interface MusicPlayerContextType {
   toggleShuffle: () => void;
   setIsExpanded: React.Dispatch<React.SetStateAction<boolean>>;
   closePlayer: () => void;
+  isCurrentTrackFavorite: boolean;
+  toggleFavoriteTrack: (trackId?: number) => Promise<boolean>;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
 
 export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { dbUser, authFetch } = useAuth();
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queue, setQueue] = useState<Track[]>([]);
   const [queueIndex, setQueueIndex] = useState<number>(-1);
@@ -107,15 +114,130 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [activeTab, setActiveTab] = useState<PlayerTab>('queue');
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const currentTrackRef = useRef<Track | null>(null);
+  const playbackSessionRef = useRef<{
+    sessionId: string;
+    trackId: number;
+    accumulatedSeconds: number;
+    lastTick: number;
+    reported: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    currentTrackRef.current = currentTrack;
+  }, [currentTrack]);
 
   // Initialize single global audio element
   useEffect(() => {
     const audio = new Audio();
     audioRef.current = audio;
 
+    const generateSessionId = () => {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+      return 'sess_' + Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
+    };
+
+    const handlePlay = () => {
+      const track = currentTrackRef.current;
+      if (!track) return;
+
+      if (!playbackSessionRef.current || playbackSessionRef.current.trackId !== track.id) {
+        const sessionId = generateSessionId();
+        playbackSessionRef.current = {
+          sessionId,
+          trackId: track.id,
+          accumulatedSeconds: 0,
+          lastTick: Date.now(),
+          reported: false,
+        };
+
+        // Notify backend of session start
+        fetch(`/api/music/tracks/${track.id}/playback-start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playbackSessionId: sessionId }),
+        }).catch(() => {});
+      } else {
+        playbackSessionRef.current.lastTick = Date.now();
+      }
+    };
+
+    const handlePause = () => {
+      if (playbackSessionRef.current) {
+        playbackSessionRef.current.lastTick = 0;
+      }
+    };
+
+    const handleSeeking = () => {
+      if (playbackSessionRef.current) {
+        playbackSessionRef.current.lastTick = 0;
+      }
+    };
+
+    const handleSeeked = () => {
+      if (playbackSessionRef.current && !audio.paused) {
+        playbackSessionRef.current.lastTick = Date.now();
+      }
+    };
+
     const handleTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
       setDuration(audio.duration || 0);
+
+      const session = playbackSessionRef.current;
+      const track = currentTrackRef.current;
+
+      if (!audio.paused && !audio.ended && session && track && session.trackId === track.id) {
+        const now = Date.now();
+        if (session.lastTick > 0) {
+          const delta = (now - session.lastTick) / 1000;
+          if (delta > 0 && delta < 2) {
+            session.accumulatedSeconds += delta;
+          }
+        }
+        session.lastTick = now;
+
+        // Check if listen threshold is reached
+        if (!session.reported) {
+          const dur = audio.duration || track.duration || 180;
+          let threshold = 30;
+          if (dur < 30) {
+            threshold = Math.max(5, Math.floor(dur * 0.5));
+          } else {
+            threshold = Math.min(30, Math.max(10, Math.floor(dur * 0.5)));
+          }
+
+          if (session.accumulatedSeconds >= threshold) {
+            session.reported = true;
+            const tId = track.id;
+            const sId = session.sessionId;
+            const playedSec = Math.round(session.accumulatedSeconds);
+
+            fetch(`/api/music/tracks/${tId}/listen`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ playbackSessionId: sId, playedSeconds: playedSec }),
+            })
+              .then((res) => res.json())
+              .then((data) => {
+                if (data && data.counted) {
+                  window.dispatchEvent(
+                    new CustomEvent('music:listen_recorded', {
+                      detail: {
+                        trackId: tId,
+                        trackListenCount: data.trackListenCount,
+                        releaseListenCount: data.releaseListenCount,
+                      },
+                    })
+                  );
+                }
+              })
+              .catch(() => {});
+          }
+        }
+      }
     };
 
     const handleEnded = () => {
@@ -127,11 +249,19 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       setIsPlaying(false);
     };
 
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('seeking', handleSeeking);
+    audio.addEventListener('seeked', handleSeeked);
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('error', handleError);
 
     return () => {
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('seeking', handleSeeking);
+      audio.removeEventListener('seeked', handleSeeked);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('error', handleError);
@@ -324,6 +454,79 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     setIsExpanded(false);
   };
 
+  // Fetch favorite status if undefined on current track
+  useEffect(() => {
+    if (!currentTrack || !dbUser) return;
+    if (currentTrack.isFavorite !== undefined) return;
+
+    authFetch(`/api/music/my/tracks/${currentTrack.id}/status`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && typeof data.isFavorite === 'boolean') {
+          setCurrentTrack((prev) => (prev && prev.id === currentTrack.id ? { ...prev, isFavorite: data.isFavorite } : prev));
+        }
+      })
+      .catch(() => {});
+  }, [currentTrack?.id, dbUser, authFetch]);
+
+  // Sync with global custom event
+  useEffect(() => {
+    const handleFavChange = (e: any) => {
+      const { trackId, isFavorite } = e.detail || {};
+      if (trackId) {
+        setCurrentTrack((prev) => (prev && prev.id === trackId ? { ...prev, isFavorite } : prev));
+        setQueue((prev) => prev.map((t) => (t.id === trackId ? { ...t, isFavorite } : t)));
+      }
+    };
+    window.addEventListener('music:favorite_track_changed', handleFavChange);
+    return () => window.removeEventListener('music:favorite_track_changed', handleFavChange);
+  }, []);
+
+  const toggleFavoriteTrack = async (trackId?: number): Promise<boolean> => {
+    const targetId = trackId || currentTrack?.id;
+    if (!targetId || !dbUser) return false;
+
+    const targetTrack = targetId === currentTrack?.id ? currentTrack : queue.find((t) => t.id === targetId);
+    const currentlyFav = Boolean(targetTrack?.isFavorite);
+    const nextFav = !currentlyFav;
+
+    if (currentTrack && currentTrack.id === targetId) {
+      setCurrentTrack((prev) => (prev ? { ...prev, isFavorite: nextFav } : prev));
+    }
+    setQueue((prev) => prev.map((t) => (t.id === targetId ? { ...t, isFavorite: nextFav } : t)));
+
+    window.dispatchEvent(
+      new CustomEvent('music:favorite_track_changed', {
+        detail: { trackId: targetId, isFavorite: nextFav },
+      })
+    );
+
+    try {
+      const res = await authFetch(`/api/music/my/tracks/${targetId}`, {
+        method: nextFav ? 'POST' : 'DELETE',
+      });
+      if (!res.ok) {
+        if (currentTrack && currentTrack.id === targetId) {
+          setCurrentTrack((prev) => (prev ? { ...prev, isFavorite: currentlyFav } : prev));
+        }
+        setQueue((prev) => prev.map((t) => (t.id === targetId ? { ...t, isFavorite: currentlyFav } : t)));
+        window.dispatchEvent(
+          new CustomEvent('music:favorite_track_changed', {
+            detail: { trackId: targetId, isFavorite: currentlyFav },
+          })
+        );
+        return currentlyFav;
+      }
+      return nextFav;
+    } catch {
+      if (currentTrack && currentTrack.id === targetId) {
+        setCurrentTrack((prev) => (prev ? { ...prev, isFavorite: currentlyFav } : prev));
+      }
+      setQueue((prev) => prev.map((t) => (t.id === targetId ? { ...t, isFavorite: currentlyFav } : t)));
+      return currentlyFav;
+    }
+  };
+
   return (
     <MusicPlayerContext.Provider
       value={{
@@ -354,6 +557,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         toggleShuffle,
         setIsExpanded,
         closePlayer,
+        isCurrentTrackFavorite: Boolean(currentTrack?.isFavorite),
+        toggleFavoriteTrack,
       }}
     >
       {children}
@@ -382,6 +587,7 @@ const formatTime = (secs: number) => {
 // UI component for persistent mini-player bar
 const GlobalPlayerBar: React.FC = () => {
   const { navigate } = useRouter();
+  const { dbUser } = useAuth();
   const {
     currentTrack,
     releaseInfo,
@@ -406,6 +612,7 @@ const GlobalPlayerBar: React.FC = () => {
     closePlayer,
     queue,
     queueIndex,
+    toggleFavoriteTrack,
   } = useMusicPlayer();
 
   if (!currentTrack) return null;
@@ -488,6 +695,24 @@ const GlobalPlayerBar: React.FC = () => {
               )}
             </p>
           </div>
+
+          {/* Favorite button in mini player */}
+          {dbUser && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFavoriteTrack();
+              }}
+              className={`p-1.5 rounded-xl transition-all cursor-pointer shrink-0 ${
+                currentTrack.isFavorite
+                  ? 'text-rose-400 bg-rose-500/15 border border-rose-500/30 shadow-sm'
+                  : 'text-slate-500 hover:text-rose-400 hover:bg-slate-800'
+              }`}
+              title={currentTrack.isFavorite ? 'Удалить из любимых треков' : 'Добавить в любимые треки'}
+            >
+              <Heart className={`w-4 h-4 ${currentTrack.isFavorite ? 'fill-rose-500 text-rose-500' : ''}`} />
+            </button>
+          )}
         </div>
 
         {/* Playback Controls & Progress Scrubber */}
@@ -616,6 +841,7 @@ const GlobalPlayerBar: React.FC = () => {
 // UI component for Full Expanded Player Modal
 const ExpandedMusicPlayer: React.FC = () => {
   const { navigate } = useRouter();
+  const { dbUser } = useAuth();
   const {
     currentTrack,
     queue,
@@ -643,6 +869,7 @@ const ExpandedMusicPlayer: React.FC = () => {
     toggleShuffle,
     setIsExpanded,
     closePlayer,
+    toggleFavoriteTrack,
   } = useMusicPlayer();
 
   if (!isExpanded || !currentTrack) return null;
@@ -787,6 +1014,24 @@ const ExpandedMusicPlayer: React.FC = () => {
                 </>
               )}
             </p>
+
+            {/* Favorite Track Button */}
+            {dbUser && (
+              <div className="pt-1 flex items-center justify-center">
+                <button
+                  onClick={() => toggleFavoriteTrack()}
+                  className={`px-3.5 py-1.5 rounded-full transition-all cursor-pointer inline-flex items-center gap-2 text-xs font-bold ${
+                    currentTrack.isFavorite
+                      ? 'text-rose-400 bg-rose-500/15 border border-rose-500/30 shadow-lg shadow-rose-500/10'
+                      : 'text-slate-400 hover:text-white bg-slate-900/80 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                  title={currentTrack.isFavorite ? 'Удалить из любимых' : 'Добавить в любимые'}
+                >
+                  <Heart className={`w-3.5 h-3.5 ${currentTrack.isFavorite ? 'fill-rose-500 text-rose-500' : ''}`} />
+                  <span>{currentTrack.isFavorite ? 'В любимых треках' : 'В любимые'}</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Timeline Scrubber */}

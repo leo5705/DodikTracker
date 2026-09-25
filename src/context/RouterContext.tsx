@@ -189,7 +189,7 @@ export function parseRoute(rawPathname: string): RouteMatch {
     return { name: 'music-search', params: queryParams, pathname: cleanPath };
   }
 
-  if (cleanPath === '/music/library') {
+  if (cleanPath === '/music/library' || cleanPath === '/music/my') {
     return { name: 'music-library', params: queryParams, pathname: cleanPath };
   }
 
