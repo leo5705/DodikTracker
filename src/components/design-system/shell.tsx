@@ -695,9 +695,10 @@ export const AppShell: React.FC<{
   const { route } = useRouter();
 
   const isMusicSection = route.name.startsWith('music') || route.name.startsWith('music-');
+  const hasBottomPlayer = Boolean(isMusicSection && currentTrack);
 
   return (
-    <div className="min-h-screen bg-[#080A18] text-[#F8FAFC] flex antialiased">
+    <div className={`min-h-screen bg-[#080A18] text-[#F8FAFC] flex antialiased ${hasBottomPlayer ? 'has-bottom-music-player' : ''}`}>
       {/* Permanent Desktop Sidebar */}
       <div className="hidden md:block">
         <Sidebar />
@@ -721,11 +722,10 @@ export const AppShell: React.FC<{
         <TopBar onOpenMobileMenu={() => setMobileMenuOpen(true)} />
 
         <main
-          className={`flex-1 min-w-0 px-4 sm:px-6 lg:px-8 2xl:px-10 py-7 max-w-[1760px] 2xl:max-w-[1920px] mx-auto w-full transition-all ${
-            isMusicSection && currentTrack
-              ? 'pb-[calc(7.5rem+env(safe-area-inset-bottom,0px))] md:pb-28'
-              : 'pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] md:pb-12'
-          }`}
+          className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 2xl:px-10 py-7 max-w-[1760px] 2xl:max-w-[1920px] mx-auto w-full transition-[padding-bottom] duration-300 ease-out"
+          style={{
+            paddingBottom: 'calc(var(--floating-actions-bottom, 76px) + 1rem)',
+          }}
         >
           {children}
         </main>

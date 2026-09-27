@@ -78,14 +78,14 @@ export const GlobalMusicPlayer: React.FC = () => {
         layoutId="global-music-player-shared-container"
         transition={{
           type: 'spring',
-          stiffness: 300,
-          damping: 30,
+          stiffness: 180,
+          damping: 24,
           mass: 0.8,
         }}
         className={
           isMusicSection
-            ? 'fixed bottom-3 left-3 right-3 sm:bottom-4 sm:left-6 sm:right-6 md:left-[280px] md:right-8 z-40 rounded-2xl bg-[#0F1328]/95 backdrop-blur-2xl border border-[#23294E] shadow-2xl p-3 sm:p-4 text-white flex flex-col gap-2 selection:bg-purple-500/30'
-            : 'fixed top-3.5 right-4 sm:right-48 z-40 rounded-xl bg-[#0B0D20]/95 backdrop-blur-xl border border-[#1E2442] shadow-xl p-2 sm:px-3 text-white flex items-center gap-2.5 max-w-[320px] sm:max-w-[360px] cursor-pointer hover:border-purple-500/40 transition-colors'
+            ? 'fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px)+0.5rem)] md:bottom-[calc(env(safe-area-inset-bottom,0px)+1rem)] left-3 right-3 md:left-[280px] md:right-8 z-40 rounded-2xl bg-[#0F1328]/95 backdrop-blur-2xl border border-[#23294E] shadow-2xl p-3 sm:p-4 text-white flex flex-col gap-2 selection:bg-purple-500/30 overflow-hidden'
+            : 'fixed top-3.5 right-4 sm:right-48 z-40 rounded-xl bg-[#0B0D20]/95 backdrop-blur-xl border border-[#1E2442] shadow-xl p-2 sm:px-3 text-white flex items-center gap-2.5 max-w-[320px] sm:max-w-[360px] cursor-pointer hover:border-purple-500/40 transition-colors overflow-hidden'
         }
       >
         {isMusicSection ? (
@@ -167,21 +167,23 @@ export const GlobalMusicPlayer: React.FC = () => {
                     <SkipBack className="w-5 h-5" />
                   </button>
 
-                  <button
+                  <motion.button
+                    layoutId="global-player-playbtn"
                     onClick={togglePlayPause}
                     className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white flex items-center justify-center shadow-lg shadow-purple-600/30 transition-all active:scale-95"
                     title={isPlaying ? 'Пауза' : 'Воспроизвести'}
                   >
                     {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
-                  </button>
+                  </motion.button>
 
-                  <button
+                  <motion.button
+                    layoutId="global-player-nextbtn"
                     onClick={playNext}
                     className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition-all active:scale-95"
                     title="Следующий трек"
                   >
                     <SkipForward className="w-5 h-5" />
-                  </button>
+                  </motion.button>
 
                   <button
                     onClick={toggleRepeat}
@@ -305,20 +307,22 @@ export const GlobalMusicPlayer: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-              <button
+              <motion.button
+                layoutId="global-player-playbtn"
                 onClick={togglePlayPause}
                 className="w-7 h-7 rounded-lg bg-purple-600 hover:bg-purple-500 text-white flex items-center justify-center shadow transition-transform active:scale-95"
                 title={isPlaying ? 'Пауза' : 'Воспроизвести'}
               >
                 {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current ml-0.5" />}
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                layoutId="global-player-nextbtn"
                 onClick={playNext}
                 className="p-1.5 text-slate-400 hover:text-white transition-colors"
                 title="Следующий трек"
               >
                 <SkipForward className="w-3.5 h-3.5" />
-              </button>
+              </motion.button>
             </div>
           </div>
         )}

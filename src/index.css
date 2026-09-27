@@ -18,6 +18,25 @@
     --mobile-nav-height: 4rem;
     --safe-bottom: env(safe-area-inset-bottom, 0px);
     --safe-top: env(safe-area-inset-top, 0px);
+    --music-player-height: 0px;
+    --floating-actions-bottom: calc(var(--mobile-nav-height) + var(--safe-bottom) + 0.75rem);
+  }
+
+  @media (min-width: 768px) {
+    :root {
+      --floating-actions-bottom: calc(var(--safe-bottom) + 1.5rem);
+    }
+  }
+
+  .has-bottom-music-player {
+    --music-player-height: 80px;
+    --floating-actions-bottom: calc(var(--music-player-height) + var(--mobile-nav-height) + var(--safe-bottom) + 1.25rem);
+  }
+
+  @media (min-width: 768px) {
+    .has-bottom-music-player {
+      --floating-actions-bottom: calc(var(--music-player-height) + var(--safe-bottom) + 2rem);
+    }
   }
 
   body {
@@ -46,15 +65,10 @@
   padding-top: env(safe-area-inset-top, 0px);
 }
 
-/* Position for floating widgets taking mobile bottom bar into account */
+/* Position for floating widgets taking mobile bottom bar and music player into account */
 .floating-widget-bottom {
-  bottom: calc(4rem + env(safe-area-inset-bottom, 0px) + 0.75rem);
-}
-
-@media (min-width: 768px) {
-  .floating-widget-bottom {
-    bottom: 1.5rem;
-  }
+  bottom: var(--floating-actions-bottom);
+  transition: bottom 300ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* Custom soft luxury scrollbars */

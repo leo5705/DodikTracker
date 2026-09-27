@@ -242,7 +242,7 @@ export const MiniMessenger: React.FC = () => {
   return (
     <div
       id="floating-mini-messenger"
-      className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px)+0.75rem)] right-4 md:bottom-6 md:right-6 z-35 flex flex-col items-end pointer-events-none"
+      className="fixed floating-widget-bottom right-4 md:right-6 z-35 flex flex-col items-end pointer-events-none transition-[bottom] duration-300 ease-out"
     >
       {/* Messenger Panel */}
       {isOpen && (
