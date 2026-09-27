@@ -6467,6 +6467,7 @@ musicRouter.post('/playlists/import-txt/parse', optionalAuth, parsePlaylistImpor
  * so it can be stored in musicPlaylistTracks with a valid foreign key.
  */
 async function ensureExternalTrackRegistered(
+  tx: any,
   userId: number,
   trackData: {
     videoId: string;
@@ -6482,7 +6483,7 @@ async function ensureExternalTrackRegistered(
   const audioFileKey = `yt_${cleanVideoId}`;
 
   // 1. Check if track already exists in musicTracks
-  const [existingTrack] = await db
+  const [existingTrack] = await tx
     .select({ id: musicTracks.id })
     .from(musicTracks)
     .where(or(eq(musicTracks.audioFile, audioFileKey), eq(musicTracks.slug, audioFileKey)))
@@ -6496,7 +6497,7 @@ async function ensureExternalTrackRegistered(
   const artistName = String(trackData.artistName || 'Внешний исполнитель').trim();
   let artistSlug = slugify(artistName);
 
-  const [existingArtist] = await db
+  const [existingArtist] = await tx
     .select({ id: artistProfiles.id })
     .from(artistProfiles)
     .where(ilike(artistProfiles.stageName, artistName))
@@ -6506,7 +6507,7 @@ async function ensureExternalTrackRegistered(
   if (existingArtist) {
     artistId = existingArtist.id;
   } else {
-    const [createdArtist] = await db
+    const [createdArtist] = await tx
       .insert(artistProfiles)
       .values({
         userId,
@@ -6521,7 +6522,7 @@ async function ensureExternalTrackRegistered(
 
   // 3. Find or create external release
   const releaseTitle = String(trackData.album || 'YouTube Music').trim();
-  const [existingRelease] = await db
+  const [existingRelease] = await tx
     .select({ id: musicReleases.id })
     .from(musicReleases)
     .where(and(eq(musicReleases.artistId, artistId), ilike(musicReleases.title, releaseTitle)))
@@ -6531,7 +6532,7 @@ async function ensureExternalTrackRegistered(
   if (existingRelease) {
     releaseId = existingRelease.id;
   } else {
-    const [createdRelease] = await db
+    const [createdRelease] = await tx
       .insert(musicReleases)
       .values({
         artistId,
@@ -6546,7 +6547,7 @@ async function ensureExternalTrackRegistered(
   }
 
   // 4. Create track row in musicTracks
-  const [newTrack] = await db
+  const [newTrack] = await tx
     .insert(musicTracks)
     .values({
       releaseId,
@@ -6573,156 +6574,159 @@ const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => 
       return res.status(400).json({ error: 'Список треков для импорта пуст' });
     }
 
-    let targetPlaylistId: number;
-
-    if (mode === 'EXISTING' || existingPlaylistId) {
-      const plId = parseInt(String(existingPlaylistId), 10);
-      if (isNaN(plId) || plId <= 0) {
-        return res.status(400).json({ error: 'Неверный идентификатор существующго плейлиста' });
-      }
-
-      const [playlist] = await db
-        .select()
-        .from(musicPlaylists)
-        .where(eq(musicPlaylists.id, plId))
-        .limit(1);
-
-      if (!playlist) {
-        return res.status(404).json({ error: 'Плейлист не найден' });
-      }
-
-      const isOwner = playlist.userId === user.id;
-      const isStaff = isStaffRole(user.role);
-
-      let canAdd = isOwner || isStaff;
-      if (!canAdd && playlist.isCollaborative) {
-        const [member] = await db
-          .select()
-          .from(musicPlaylistMembers)
-          .where(
-            and(
-              eq(musicPlaylistMembers.playlistId, plId),
-              eq(musicPlaylistMembers.userId, user.id)
-            )
-          )
-          .limit(1);
-        canAdd = member ? member.canAddTracks : true;
-      }
-
-      if (!canAdd) {
-        return res.status(403).json({ error: 'У вас нет прав на добавление треков в этот плейлист' });
-      }
-
-      targetPlaylistId = plId;
-    } else {
-      // Create a new playlist
-      if (!title || typeof title !== 'string' || !title.trim()) {
-        return res.status(400).json({ error: 'Название нового плейлиста обязательно' });
-      }
-
-      const [newPlaylist] = await db
-        .insert(musicPlaylists)
-        .values({
-          userId: user.id,
-          title: title.trim(),
-          description: description?.trim() || null,
-          visibility: 'PUBLIC',
-          isCollaborative: Boolean(isCollaborative),
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .returning();
-
-      targetPlaylistId = newPlaylist.id;
-    }
-
-    // Get current max position
-    const [maxPosRes] = await db
-      .select({ maxPos: sql<number>`COALESCE(MAX(position), 0)` })
-      .from(musicPlaylistTracks)
-      .where(eq(musicPlaylistTracks.playlistId, targetPlaylistId));
-
-    let currentPos = Number(maxPosRes?.maxPos || 0);
+    let targetPlaylistId = 0;
     let added = 0;
     let skipped = 0;
 
-    for (let i = 0; i < trackItems.length; i++) {
-      const rawItem = trackItems[i];
-      let targetTrackId: number | null = null;
-
-      if (typeof rawItem === 'number' || (typeof rawItem === 'string' && /^\d+$/.test(rawItem))) {
-        targetTrackId = parseInt(String(rawItem), 10);
-      } else if (typeof rawItem === 'object' && rawItem !== null) {
-        if (rawItem.numericTrackId && typeof rawItem.numericTrackId === 'number') {
-          targetTrackId = rawItem.numericTrackId;
-        } else if (rawItem.id && typeof rawItem.id === 'number') {
-          targetTrackId = rawItem.id;
-        } else if (rawItem.videoId || (typeof rawItem.id === 'string' && rawItem.id.startsWith('yt_'))) {
-          const vId = rawItem.videoId || String(rawItem.id).replace(/^yt_/, '');
-          targetTrackId = await ensureExternalTrackRegistered(user.id, {
-            videoId: vId,
-            title: rawItem.title || 'Внешний трек',
-            artistName: rawItem.artistName || rawItem.artist || 'Исполнитель',
-            album: rawItem.album || rawItem.releaseTitle || null,
-            coverUrl: rawItem.coverUrl || rawItem.thumbnail || null,
-            duration: rawItem.duration || rawItem.durationSeconds || null,
-          });
+    // Use transaction to ensure either everything succeeds or rolls back atomically
+    await db.transaction(async (tx) => {
+      if (mode === 'EXISTING' || existingPlaylistId) {
+        const plId = parseInt(String(existingPlaylistId), 10);
+        if (isNaN(plId) || plId <= 0) {
+          throw new Error('Неверный идентификатор существующего плейлиста');
         }
+
+        const [playlist] = await tx
+          .select()
+          .from(musicPlaylists)
+          .where(eq(musicPlaylists.id, plId))
+          .limit(1);
+
+        if (!playlist) {
+          throw new Error('Плейлист не найден');
+        }
+
+        const isOwner = playlist.userId === user.id;
+        const isStaff = isStaffRole(user.role);
+
+        let canAdd = isOwner || isStaff;
+        if (!canAdd && playlist.isCollaborative) {
+          const [member] = await tx
+            .select()
+            .from(musicPlaylistMembers)
+            .where(
+              and(
+                eq(musicPlaylistMembers.playlistId, plId),
+                eq(musicPlaylistMembers.userId, user.id)
+              )
+            )
+            .limit(1);
+          canAdd = member ? member.canAddTracks : true;
+        }
+
+        if (!canAdd) {
+          throw new Error('У вас нет прав на добавление треков в этот плейлист');
+        }
+
+        targetPlaylistId = plId;
+      } else {
+        // Create a new playlist
+        if (!title || typeof title !== 'string' || !title.trim()) {
+          throw new Error('Название нового плейлиста обязательно');
+        }
+
+        const [newPlaylist] = await tx
+          .insert(musicPlaylists)
+          .values({
+            userId: user.id,
+            title: title.trim(),
+            description: description?.trim() || null,
+            visibility: 'PUBLIC',
+            isCollaborative: Boolean(isCollaborative),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .returning();
+
+        targetPlaylistId = newPlaylist.id;
       }
 
-      if (!targetTrackId || isNaN(targetTrackId) || targetTrackId <= 0) {
-        skipped++;
-        continue;
-      }
-
-      // Check if track exists in musicTracks
-      const [track] = await db
-        .select({ id: musicTracks.id, title: musicTracks.title })
-        .from(musicTracks)
-        .where(eq(musicTracks.id, targetTrackId))
-        .limit(1);
-
-      if (!track) {
-        skipped++;
-        continue;
-      }
-
-      // Check if already in playlist
-      const [exists] = await db
-        .select({ id: musicPlaylistTracks.id })
+      // Get current max position
+      const [maxPosRes] = await tx
+        .select({ maxPos: sql<number>`COALESCE(MAX(position), 0)` })
         .from(musicPlaylistTracks)
-        .where(
-          and(
-            eq(musicPlaylistTracks.playlistId, targetPlaylistId),
-            eq(musicPlaylistTracks.trackId, track.id)
-          )
-        )
-        .limit(1);
+        .where(eq(musicPlaylistTracks.playlistId, targetPlaylistId));
 
-      if (exists) {
-        skipped++;
-        continue;
+      let currentPos = Number(maxPosRes?.maxPos || 0);
+
+      for (let i = 0; i < trackItems.length; i++) {
+        const rawItem = trackItems[i];
+        let targetTrackId: number | null = null;
+
+        if (typeof rawItem === 'number' || (typeof rawItem === 'string' && /^\d+$/.test(rawItem))) {
+          targetTrackId = parseInt(String(rawItem), 10);
+        } else if (typeof rawItem === 'object' && rawItem !== null) {
+          if (rawItem.numericTrackId && typeof rawItem.numericTrackId === 'number') {
+            targetTrackId = rawItem.numericTrackId;
+          } else if (rawItem.id && typeof rawItem.id === 'number') {
+            targetTrackId = rawItem.id;
+          } else if (rawItem.videoId || (typeof rawItem.id === 'string' && rawItem.id.startsWith('yt_'))) {
+            const vId = rawItem.videoId || String(rawItem.id).replace(/^yt_/, '');
+            targetTrackId = await ensureExternalTrackRegistered(tx, user.id, {
+              videoId: vId,
+              title: rawItem.title || 'Внешний трек',
+              artistName: rawItem.artistName || rawItem.artist || 'Исполнитель',
+              album: rawItem.album || rawItem.releaseTitle || null,
+              coverUrl: rawItem.coverUrl || rawItem.thumbnail || null,
+              duration: rawItem.duration || rawItem.durationSeconds || null,
+            });
+          }
+        }
+
+        if (!targetTrackId || isNaN(targetTrackId) || targetTrackId <= 0) {
+          skipped++;
+          continue;
+        }
+
+        // Check if track exists in musicTracks
+        const [track] = await tx
+          .select({ id: musicTracks.id, title: musicTracks.title })
+          .from(musicTracks)
+          .where(eq(musicTracks.id, targetTrackId))
+          .limit(1);
+
+        if (!track) {
+          skipped++;
+          continue;
+        }
+
+        // Check if already in playlist
+        const [exists] = await tx
+          .select({ id: musicPlaylistTracks.id })
+          .from(musicPlaylistTracks)
+          .where(
+            and(
+              eq(musicPlaylistTracks.playlistId, targetPlaylistId),
+              eq(musicPlaylistTracks.trackId, track.id)
+            )
+          )
+          .limit(1);
+
+        if (exists) {
+          skipped++;
+          continue;
+        }
+
+        currentPos++;
+        await tx
+          .insert(musicPlaylistTracks)
+          .values({
+            playlistId: targetPlaylistId,
+            trackId: track.id,
+            addedByUserId: user.id,
+            position: currentPos,
+            addedAt: new Date(),
+          })
+          .onConflictDoNothing();
+
+        added++;
       }
 
-      currentPos++;
-      await db
-        .insert(musicPlaylistTracks)
-        .values({
-          playlistId: targetPlaylistId,
-          trackId: track.id,
-          addedByUserId: user.id,
-          position: currentPos,
-          addedAt: new Date(),
-        })
-        .onConflictDoNothing();
-
-      added++;
-    }
-
-    await db
-      .update(musicPlaylists)
-      .set({ updatedAt: new Date() })
-      .where(eq(musicPlaylists.id, targetPlaylistId));
+      await tx
+        .update(musicPlaylists)
+        .set({ updatedAt: new Date() })
+        .where(eq(musicPlaylists.id, targetPlaylistId));
+    });
 
     return res.json({
       success: true,
