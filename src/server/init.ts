@@ -3,6 +3,7 @@ import { runAutoMigrations } from '../db/autoInit.ts';
 import { systemSettings, users } from '../db/schema.ts';
 import { eq, count } from 'drizzle-orm';
 import { achievementService } from './achievements/service.ts';
+import { externalMusicConfig } from './services/externalMusic/externalMusicConfig.ts';
 
 export async function initDbSettings() {
   try {
@@ -11,6 +12,11 @@ export async function initDbSettings() {
 
     // 1. Initialize and seed Achievements table
     await achievementService.init();
+
+    // 2. Initialize external music configuration (Genius, YouTube)
+    await externalMusicConfig.initialize().catch((err) => {
+      console.warn('[Init] External music config init warning:', err);
+    });
 
     // 2. Registration mode
     const setting = await db

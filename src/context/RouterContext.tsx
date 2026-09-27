@@ -37,7 +37,11 @@ export interface RouteMatch {
     | 'music-studio'
     | 'music-release-editor'
     | 'music-artist'
+    | 'music-external-artist'
     | 'music-release'
+    | 'music-external-release'
+    | 'music-playlist'
+    | 'music-playlists'
     | 'game-catalog'
     | 'game-detail'
     | 'game-developers'
@@ -139,13 +143,48 @@ export function parseRoute(rawPathname: string): RouteMatch {
     };
   }
 
+  const musicExternalArtistMatch = cleanPath.match(/^\/music\/external\/artist\/([a-zA-Z0-9_.-]+)\/(.+)$/);
+  if (musicExternalArtistMatch) {
+    return {
+      name: 'music-external-artist' as any,
+      params: { ...queryParams, provider: decodeURIComponent(musicExternalArtistMatch[1]), artistId: decodeURIComponent(musicExternalArtistMatch[2]) },
+      pathname: cleanPath,
+    };
+  }
+
   const musicReleaseMatch = cleanPath.match(/^\/music\/release\/([a-zA-Z0-9_.-]+)$/);
   if (musicReleaseMatch) {
     return {
       name: 'music-release',
-      params: { ...queryParams, idOrSlug: musicReleaseMatch[1] },
+      params: { ...queryParams, idOrSlug: decodeURIComponent(musicReleaseMatch[1]) },
       pathname: cleanPath,
     };
+  }
+
+  const musicExternalReleaseMatch = cleanPath.match(/^\/music\/external\/release\/([a-zA-Z0-9_.-]+)\/(.+)$/);
+  if (musicExternalReleaseMatch) {
+    return {
+      name: 'music-external-release' as any,
+      params: { ...queryParams, provider: decodeURIComponent(musicExternalReleaseMatch[1]), releaseId: decodeURIComponent(musicExternalReleaseMatch[2]) },
+      pathname: cleanPath,
+    };
+  }
+
+  if (cleanPath === '/music/playlists/import' || cleanPath === '/music/playlists/import-txt') {
+    return { name: 'music-playlists-import-txt' as any, params: queryParams, pathname: cleanPath };
+  }
+
+  const musicPlaylistMatch = cleanPath.match(/^\/music\/(?:playlist|playlists)\/(\d+)$/);
+  if (musicPlaylistMatch) {
+    return {
+      name: 'music-playlist',
+      params: { ...queryParams, id: musicPlaylistMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+
+  if (cleanPath === '/music/playlists') {
+    return { name: 'music-playlists', params: queryParams, pathname: cleanPath };
   }
 
   const releaseEditMatch = cleanPath.match(/^\/music\/studio\/releases\/edit\/(\d+)$/);

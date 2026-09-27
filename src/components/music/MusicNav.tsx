@@ -29,6 +29,7 @@ export const MusicNav: React.FC<MusicNavProps> = ({ activeTab }) => {
   const items = [
     { id: 'home', label: 'Обзор', icon: Compass, path: '/music', routeName: 'music-home' },
     { id: 'releases', label: 'Все релизы', icon: Disc, path: '/music/releases', routeName: 'music-releases' },
+    { id: 'playlists', label: 'Плейлисты', icon: ListMusic, path: '/music/playlists', routeName: 'music-playlists' },
     { id: 'new', label: 'Новинки', icon: Sparkles, path: '/music/new', routeName: 'music-new' },
     { id: 'artists', label: 'Исполнители', icon: Users, path: '/music/artists', routeName: 'music-artists' },
     { id: 'genres', label: 'Жанры', icon: Radio, path: '/music/genres', routeName: 'music-genres' },
@@ -71,7 +72,7 @@ export const MusicNav: React.FC<MusicNavProps> = ({ activeTab }) => {
                 </span>
               </div>
               <p className="text-xs text-[#94A3B8] font-medium leading-none mt-1">
-                Авторская музыкальная экосистема с 100-балльными рецензиями
+                Единая музыкальная платформа: мировые треки, релизы авторов Dodik, рецензии и тексты песен
               </p>
             </div>
           </div>

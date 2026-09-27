@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
+import { getBestMusicImageUrl } from '../../utils/musicImageUtils.ts';
 import {
   Music2,
   Disc,
@@ -15,6 +16,7 @@ import {
   Star,
   Sparkles,
   UserCheck,
+  Plus,
   FileText,
   Volume2,
   VolumeX,
@@ -27,7 +29,11 @@ import {
   ChevronDown,
   ChevronUp,
   Headphones,
+  Heart,
 } from 'lucide-react';
+import { TrackActionsMenu } from '../music/TrackActionsMenu.tsx';
+import { ArtistLinks } from '../music/ArtistLinks.tsx';
+import { MusicTrackRow } from '../music/MusicTrackRow.tsx';
 
 interface ArtistProfile {
   id: number;
@@ -42,6 +48,7 @@ interface ArtistProfile {
   username?: string;
   userAvatar?: string | null;
   userRole?: string;
+  isSubscribed?: boolean;
 }
 
 interface Release {
@@ -107,8 +114,8 @@ interface ArtistStats {
 
 export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) => {
   const { navigate, goBack } = useRouter();
-  const { dbUser } = useAuth();
-  const { playTrack, currentTrack, isPlaying } = useMusicPlayer();
+  const { dbUser, authFetch } = useAuth();
+  const { playTrack, currentTrack, isPlaying, toggleFavoriteTrack } = useMusicPlayer();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +123,7 @@ export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) 
   const [releases, setReleases] = useState<Release[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [favoriteTrackIds, setFavoriteTrackIds] = useState<Record<string | number, boolean>>({});
   const [stats, setStats] = useState<ArtistStats>({
     totalReleases: 0,
     totalTracks: 0,
@@ -130,6 +138,8 @@ export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) 
   const [selectedLyricsTrack, setSelectedLyricsTrack] = useState<Track | null>(null);
   const [selectedNoteTrack, setSelectedNoteTrack] = useState<Track | null>(null);
 
+  const [submittingSub, setSubmittingSub] = useState(false);
+
   useEffect(() => {
     fetchArtist();
   }, [idOrSlug]);
@@ -138,7 +148,7 @@ export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) 
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/music/artists/${idOrSlug}`);
+      const res = await authFetch(`/api/music/artists/${idOrSlug}`);
       if (!res.ok) {
         if (res.status === 404) {
           throw new Error('Музыкальный исполнитель не найден');
@@ -155,6 +165,28 @@ export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) 
       setError(err.message || 'Ошибка сети');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const toggleSubscribe = async () => {
+    if (!dbUser || !artist) return;
+    setSubmittingSub(true);
+    try {
+      const isSub = !!artist.isSubscribed;
+      const method = isSub ? 'DELETE' : 'POST';
+      const res = await authFetch(`/api/music/artists/${artist.id}/subscribe`, {
+        method,
+      });
+      if (res.ok) {
+        setArtist({
+          ...artist,
+          isSubscribed: !isSub,
+        });
+      }
+    } catch (err) {
+      console.error('Error toggling subscription:', err);
+    } finally {
+      setSubmittingSub(false);
     }
   };
 
@@ -252,6 +284,21 @@ export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) 
         </button>
 
         <div className="flex items-center gap-2">
+          {dbUser && (
+            <button
+              onClick={toggleSubscribe}
+              disabled={submittingSub}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-sm font-semibold transition backdrop-blur-md border cursor-pointer ${
+                artist.isSubscribed
+                  ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40'
+                  : 'bg-cyan-600 hover:bg-cyan-500 text-slate-950 border-cyan-500/40'
+              }`}
+            >
+              {artist.isSubscribed ? <UserCheck className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+              <span>{artist.isSubscribed ? 'Вы подписаны' : 'Подписаться'}</span>
+            </button>
+          )}
+
           <button
             onClick={handleShare}
             className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition text-sm font-medium backdrop-blur-md"
@@ -282,7 +329,7 @@ export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) 
           <div className="relative shrink-0">
             {artist.avatar ? (
               <img
-                src={artist.avatar}
+                src={getBestMusicImageUrl(artist.avatar, 'large')}
                 alt={artist.stageName}
                 className="w-32 h-32 sm:w-40 sm:h-40 rounded-2xl object-cover border-2 border-cyan-500/30 shadow-2xl shadow-cyan-950/50"
               />
@@ -508,96 +555,51 @@ export const ArtistProfileView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) 
               <p className="text-xs mt-1 text-slate-500">Исполнитель еще не опубликовал ни одного трека</p>
             </div>
           ) : (
-            <div className="rounded-2xl bg-slate-900/40 border border-slate-800/80 overflow-hidden divide-y divide-slate-800/60 backdrop-blur-md">
-              {tracks.map((track, idx) => {
-                const isCurrent = currentTrack?.id === track.id;
-                const isThisPlaying = isCurrent && isPlaying;
-
-                return (
-                  <div
-                    key={track.id}
-                    className={`flex items-center justify-between p-3.5 sm:px-5 hover:bg-slate-800/40 transition gap-3 sm:gap-4 ${
-                      isCurrent ? 'bg-cyan-500/10' : ''
-                    }`}
-                  >
-                    {/* Left: Number & Play */}
-                    <div className="flex items-center gap-3 min-w-0">
-                      <button
-                        onClick={() => handlePlayTrack(track)}
-                        className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition ${
-                          isThisPlaying
-                            ? 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20'
-                            : 'bg-slate-800/80 hover:bg-cyan-500 hover:text-slate-950 text-slate-300 border border-slate-700/60'
-                        }`}
-                        title={isThisPlaying ? 'Пауза' : 'Воспроизвести'}
-                      >
-                        {isThisPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
-                      </button>
-
-                      {/* Cover thumbnail */}
-                      <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-slate-950 border border-slate-800">
-                        {track.releaseCover ? (
-                          <img src={track.releaseCover} alt={track.releaseTitle} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-slate-600">
-                            <Disc className="w-5 h-5" />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Title & Release */}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className={`font-bold text-sm truncate ${isCurrent ? 'text-cyan-300' : 'text-slate-100'}`}>
-                            {track.title}
-                          </h4>
-                          {track.explicit && (
-                            <span className="px-1.5 py-0.2 text-[10px] font-black rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 uppercase shrink-0">
-                              E
-                            </span>
-                          )}
-                        </div>
-
-                        <p
-                          onClick={() => navigate(`/music/release/${track.releaseSlug || track.releaseId}`)}
-                          className="text-xs text-slate-400 hover:text-cyan-400 transition cursor-pointer truncate"
-                        >
-                          Релиз: {track.releaseTitle}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Right: Actions & Duration */}
-                    <div className="flex items-center gap-3 shrink-0">
-                      {track.lyrics && (
-                        <button
-                          onClick={() => setSelectedLyricsTrack(track)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 text-xs font-semibold transition flex items-center gap-1.5"
-                          title="Посмотреть текст песни"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Текст</span>
-                        </button>
-                      )}
-
-                      {track.authorNote && (
-                        <button
-                          onClick={() => setSelectedNoteTrack(track)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 text-xs font-semibold transition flex items-center gap-1.5"
-                          title="Заметка автора"
-                        >
-                          <Info className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Заметка</span>
-                        </button>
-                      )}
-
-                      <span className="text-xs font-mono font-medium text-slate-400 w-12 text-right">
-                        {formatDuration(track.duration)}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="space-y-2">
+              {tracks.map((track, idx) => (
+                <MusicTrackRow
+                  key={track.id}
+                  track={{
+                    id: track.id,
+                    source: 'dodik',
+                    title: track.title,
+                    artistName: (track as any).artistName || artist?.stageName || 'Исполнитель',
+                    artists: (track as any).artists,
+                    artistSlug: artist?.slug || '',
+                    artistId: artist?.id,
+                    releaseTitle: track.releaseTitle,
+                    releaseCover: track.releaseCover,
+                    thumbnail: track.releaseCover,
+                    releaseId: track.releaseId,
+                    releaseSlug: track.releaseSlug,
+                    duration: track.duration,
+                    explicit: track.explicit,
+                    trackNumber: idx + 1,
+                    isFavorite: !!favoriteTrackIds[track.id],
+                  }}
+                  index={idx + 1}
+                  showIndex={true}
+                  showCover={true}
+                  queueContext={tracks.map((t, i) => ({
+                    id: t.id,
+                    source: 'dodik',
+                    title: t.title,
+                    artistName: (t as any).artistName || artist?.stageName || 'Исполнитель',
+                    artists: (t as any).artists,
+                    artistSlug: artist?.slug || '',
+                    artistId: artist?.id,
+                    releaseTitle: t.releaseTitle,
+                    releaseCover: t.releaseCover,
+                    thumbnail: t.releaseCover,
+                    releaseId: t.releaseId,
+                    releaseSlug: t.releaseSlug,
+                    duration: t.duration,
+                    explicit: t.explicit,
+                    trackNumber: i + 1,
+                    isFavorite: !!favoriteTrackIds[t.id],
+                  }))}
+                />
+              ))}
             </div>
           )}
         </div>

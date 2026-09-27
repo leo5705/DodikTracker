@@ -18,6 +18,7 @@ import {
   Layers,
   Film,
   CheckCircle2,
+  Music,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 
@@ -176,6 +177,8 @@ export const AdminModerationTab: React.FC = () => {
 
   const getTargetIcon = (type: string) => {
     switch (type) {
+      case 'MUSIC_REVIEW':
+        return <Music className="w-4 h-4 text-purple-400" />;
       case 'REVIEW':
         return <FileText className="w-4 h-4 text-indigo-400" />;
       case 'COMMENT':
@@ -293,6 +296,7 @@ export const AdminModerationTab: React.FC = () => {
           >
             <option value="ALL">Другие фильтры...</option>
             <option value="SYSTEM">Обратная связь (Идеи/Баги)</option>
+            <option value="MUSIC_REVIEW">Музыкальные отзывы (Music Reviews)</option>
             <option value="REVIEW">Отзывы (Reviews)</option>
             <option value="COMMENT">Комментарии</option>
             <option value="MESSAGE">Сообщения</option>
@@ -363,6 +367,8 @@ export const AdminModerationTab: React.FC = () => {
                             ? '⚠️ Жалоба'
                             : 'Обратная связь'
                         }`
+                      : r.targetType === 'MUSIC_REVIEW'
+                      ? `Жалоба #${r.id} на музыкальный отзыв`
                       : `Жалоба #${r.id} на ${r.targetType}`}
                   </span>
                   {getReasonBadge(r.reason, r.targetType)}

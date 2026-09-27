@@ -22,9 +22,17 @@
     "restore": "bash scripts/restore.sh",
     "db:verify-files": "tsx src/scripts/verifyUploads.ts",
     "clean": "rm -rf dist server.js",
+    "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "tsx src/server/tests/notificationLogic.ts",
     "test:music": "tsx src/server/tests/musicReleaseTransaction.ts",
+    "test:ytmusic": "tsx src/server/tests/youtubeMusicSearch.ts",
+    "test:ytplayer": "tsx src/server/tests/youtubePlayerIntegration.ts",
+    "test:catalog": "tsx src/server/tests/catalogArchitecture.ts",
+    "test:search": "tsx src/server/tests/musicSearchIntegration.ts",
+    "test:soundcloud": "tsx src/server/tests/soundcloudArchitecture.ts",
+    "test:lyrics": "tsx src/server/tests/lyricsParserTests.ts && tsx src/server/tests/liveLyricsLogicTests.ts",
+    "test:step22": "tsx src/server/tests/step22GeniusAndMusicLayoutTests.ts",
     "test:safety": "tsx src/scripts/testUpdateSafety.ts"
   },
   "dependencies": {
@@ -51,7 +59,8 @@
     "pg": "^8.23.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "ytmusic-api": "^5.3.1"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",

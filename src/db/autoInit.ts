@@ -782,6 +782,53 @@ export async function runAutoMigrations(pool: Pool) {
         CREATE INDEX IF NOT EXISTS "music_favorite_tracks_track_id_idx" ON "music_favorite_tracks"("track_id");
         CREATE INDEX IF NOT EXISTS "music_favorite_tracks_created_at_idx" ON "music_favorite_tracks"("created_at");
 
+        -- 51. Music Playlists Table
+        CREATE TABLE IF NOT EXISTS "music_playlists" (
+          "id" serial PRIMARY KEY,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "title" text NOT NULL,
+          "description" text,
+          "cover" text,
+          "visibility" text NOT NULL DEFAULT 'PUBLIC',
+          "created_at" timestamp DEFAULT now(),
+          "updated_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "music_playlists_user_id_idx" ON "music_playlists"("user_id");
+        CREATE INDEX IF NOT EXISTS "music_playlists_visibility_idx" ON "music_playlists"("visibility");
+        CREATE INDEX IF NOT EXISTS "music_playlists_created_at_idx" ON "music_playlists"("created_at");
+
+        -- 52. Music Playlist Tracks Table (Junction)
+        CREATE TABLE IF NOT EXISTS "music_playlist_tracks" (
+          "id" serial PRIMARY KEY,
+          "playlist_id" integer NOT NULL REFERENCES "music_playlists"("id") ON DELETE CASCADE,
+          "track_id" integer NOT NULL REFERENCES "music_tracks"("id") ON DELETE CASCADE,
+          "position" integer NOT NULL DEFAULT 1,
+          "added_at" timestamp DEFAULT now(),
+          CONSTRAINT "music_playlist_tracks_unq" UNIQUE ("playlist_id", "track_id")
+        );
+        CREATE INDEX IF NOT EXISTS "music_playlist_tracks_playlist_id_idx" ON "music_playlist_tracks"("playlist_id");
+        CREATE INDEX IF NOT EXISTS "music_playlist_tracks_track_id_idx" ON "music_playlist_tracks"("track_id");
+        CREATE INDEX IF NOT EXISTS "music_playlist_tracks_position_idx" ON "music_playlist_tracks"("playlist_id", "position");
+
+        -- User Music History Table
+        CREATE TABLE IF NOT EXISTS "user_music_history" (
+          "id" serial PRIMARY KEY,
+          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+          "track_id" text NOT NULL,
+          "provider" text NOT NULL DEFAULT 'dodik',
+          "title" text NOT NULL,
+          "artist_name" text NOT NULL,
+          "artist_id" text,
+          "release_title" text,
+          "release_cover" text,
+          "duration_seconds" integer,
+          "listened_at" timestamp DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "user_music_history_user_id_idx" ON "user_music_history"("user_id");
+        CREATE INDEX IF NOT EXISTS "user_music_history_track_id_idx" ON "user_music_history"("track_id");
+        CREATE INDEX IF NOT EXISTS "user_music_history_listened_at_idx" ON "user_music_history"("listened_at");
+        CREATE INDEX IF NOT EXISTS "user_music_history_user_track_idx" ON "user_music_history"("user_id", "track_id");
+
         -- 36. Add Missing Columns to existing tables (Idempotent)
         ALTER TABLE "music_releases" ADD COLUMN IF NOT EXISTS "listen_count" integer NOT NULL DEFAULT 0;
         ALTER TABLE "music_tracks" ADD COLUMN IF NOT EXISTS "listen_count" integer NOT NULL DEFAULT 0;

@@ -13,6 +13,8 @@ import { IGDBProvider } from './igdb.ts';
 import { AniListProvider } from './anilist.ts';
 import { OpenLibraryProvider } from './openlibrary.ts';
 import { ITunesProvider } from './itunes.ts';
+import { YouTubeMusicProvider } from './youtubeMusic.ts';
+import { GeniusProvider } from './genius.ts';
 import { db } from '../../db/index.ts';
 import { systemIntegrations, apiLogs } from '../../db/schema.ts';
 import { decryptCredentials } from '../../lib/crypto.ts';
@@ -40,6 +42,8 @@ export class ProviderManager {
     this.register(new AniListProvider());
     this.register(new OpenLibraryProvider());
     this.register(new ITunesProvider());
+    this.register(new YouTubeMusicProvider());
+    this.register(new GeniusProvider());
   }
 
   register(provider: MediaProvider) {
@@ -47,7 +51,9 @@ export class ProviderManager {
   }
 
   getProvider(name: string): MediaProvider | undefined {
-    return this.providers.get(name.toUpperCase());
+    let upper = name.toUpperCase();
+    if (upper === 'YOUTUBE' || upper === 'YOUTUBE_MUSIC') upper = 'YOUTUBE MUSIC';
+    return this.providers.get(upper);
   }
 
   getAllProviders(): MediaProvider[] {
@@ -58,6 +64,7 @@ export class ProviderManager {
     try {
       let upperName = name.toUpperCase();
       if (upperName === 'GMDB') upperName = 'THEGAMESDB';
+      if (upperName === 'YOUTUBE' || upperName === 'YOUTUBE_MUSIC') upperName = 'YOUTUBE MUSIC';
 
       const providerObj = this.getProvider(upperName);
       const isPublic = providerObj ? !providerObj.requiresKey : false;
@@ -98,6 +105,10 @@ export class ProviderManager {
           credentials = {
             clientId: process.env.IGDB_CLIENT_ID,
             clientSecret: process.env.IGDB_CLIENT_SECRET,
+          };
+        } else if (upperName === 'GENIUS' && (process.env.GENIUS_ACCESS_TOKEN || process.env.GENIUS_API_KEY)) {
+          credentials = {
+            apiKey: process.env.GENIUS_ACCESS_TOKEN || process.env.GENIUS_API_KEY,
           };
         }
       }

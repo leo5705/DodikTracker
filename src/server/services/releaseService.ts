@@ -9,6 +9,10 @@ import {
   listItems,
   lists,
   systemIntegrations,
+  musicReleases,
+  artistProfiles,
+  artistSubscriptions,
+  notifications,
 } from '../../db/schema.ts';
 import { eq, and, or, inArray, gte, lte, ilike, desc, asc, sql } from 'drizzle-orm';
 import { decryptCredentials } from '../../lib/crypto.ts';
@@ -604,12 +608,126 @@ export class ReleaseService {
       };
     });
 
+    // 6.1 Query music releases for calendar if music category is requested
+    const musicItems: ReleaseItem[] = [];
+    const includeMusic = !options.categories || options.categories.includes('all') || options.categories.includes('ALL') || options.categories.includes('MUSIC');
+
+    if (includeMusic) {
+      try {
+        const musicConditions: any[] = [
+          eq(musicReleases.status, 'PUBLISHED'),
+          sql`${musicReleases.releaseDate} IS NOT NULL AND ${musicReleases.releaseDate} != ''`
+        ];
+
+        // Scope filter
+        if (scope === 'upcoming') {
+          musicConditions.push(gte(musicReleases.releaseDate, todayStr));
+        } else if (scope === 'past') {
+          musicConditions.push(sql`${musicReleases.releaseDate} < ${todayStr}`);
+        }
+
+        // Date range filter
+        if (options.dateFrom) {
+          musicConditions.push(gte(musicReleases.releaseDate, options.dateFrom));
+        }
+        if (options.dateTo) {
+          musicConditions.push(lte(musicReleases.releaseDate, options.dateTo));
+        }
+
+        // Search filter
+        if (options.search && options.search.trim()) {
+          const q = `%${options.search.trim()}%`;
+          musicConditions.push(ilike(musicReleases.title, q));
+        }
+
+        // Followed only filter for music
+        const userSubscriptionsList = options.userId ? await db
+          .select({ artistId: artistSubscriptions.artistId })
+          .from(artistSubscriptions)
+          .where(eq(artistSubscriptions.userId, options.userId)) : [];
+        const userFollowedArtistIds = new Set(userSubscriptionsList.map(s => s.artistId).filter(Boolean));
+
+        if (options.followedOnly) {
+          if (userFollowedArtistIds.size > 0) {
+            musicConditions.push(inArray(musicReleases.artistId, Array.from(userFollowedArtistIds) as number[]));
+          } else {
+            // Force no results if followed only is true but user follows no artists
+            musicConditions.push(sql`1 = 0`);
+          }
+        }
+
+        const musicWhere = and(...musicConditions);
+
+        const musicRows = await db
+          .select({
+            id: musicReleases.id,
+            title: musicReleases.title,
+            slug: musicReleases.slug,
+            type: musicReleases.type,
+            cover: musicReleases.cover,
+            releaseDate: musicReleases.releaseDate,
+            artistId: musicReleases.artistId,
+            stageName: artistProfiles.stageName,
+            avatar: artistProfiles.avatar,
+          })
+          .from(musicReleases)
+          .innerJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+          .where(musicWhere)
+          .limit(limit + offset);
+
+        for (const mRow of musicRows) {
+          const releaseD = new Date(mRow.releaseDate! + 'T00:00:00Z');
+          const diffMs = releaseD.getTime() - todayD.getTime();
+          const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+          const isSubscribed = userFollowedArtistIds.has(mRow.artistId);
+          const isSoon = diffDays === 0 || diffDays === 1;
+
+          musicItems.push({
+            id: 10000000 + mRow.id,
+            mediaId: 10000000 + mRow.id,
+            type: 'MUSIC',
+            title: `${mRow.stageName} — ${mRow.title} [${mRow.type}]`,
+            originalTitle: mRow.title,
+            description: `Музыкальный релиз от ${mRow.stageName}. Формат: ${mRow.type}`,
+            posterUrl: mRow.cover || mRow.avatar || null,
+            backdropUrl: mRow.cover || null,
+            releaseDate: mRow.releaseDate!,
+            genres: ['Музыка', mRow.type],
+            isFollowed: isSubscribed,
+            isSubscribed: isSubscribed,
+            isSoon,
+            isPopular: false,
+            countdown: this.formatCountdown(diffDays),
+            daysUntil: diffDays,
+          });
+        }
+      } catch (err) {
+        console.error('[GetReleases] Error loading music releases for calendar:', err);
+      }
+    }
+
+    // Merge and sort
+    let finalItems = [...items, ...musicItems];
+
+    finalItems.sort((a, b) => {
+      const ord = options.order || (scope === 'past' ? 'desc' : 'asc');
+      const dateCompare = ord === 'asc'
+        ? a.releaseDate.localeCompare(b.releaseDate)
+        : b.releaseDate.localeCompare(a.releaseDate);
+      if (dateCompare !== 0) return dateCompare;
+      return a.title.localeCompare(b.title);
+    });
+
+    const totalCount = total + musicItems.length;
+    const paginatedItems = finalItems.slice(0, limit);
+
     return {
-      items,
-      total,
+      items: paginatedItems,
+      total: totalCount,
       page,
       limit,
-      hasMore: offset + items.length < total,
+      hasMore: offset + paginatedItems.length < totalCount,
       currentDate: todayStr,
       availableGenres: Array.from(allGenresSet).slice(0, 30),
       availablePlatforms: Array.from(allPlatformsSet),
@@ -712,6 +830,67 @@ export class ReleaseService {
           notifiedCount++;
         } catch (err) {
           console.error('[ReleaseNotification] Failed to notify user:', err);
+        }
+      }
+
+      // Notify about upcoming music releases for followed artists
+      const upcomingMusicReleases = await db
+        .select({
+          id: musicReleases.id,
+          title: musicReleases.title,
+          slug: musicReleases.slug,
+          artistId: musicReleases.artistId,
+          stageName: artistProfiles.stageName,
+          artistUserId: artistProfiles.userId,
+        })
+        .from(musicReleases)
+        .innerJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+        .where(
+          and(
+            eq(musicReleases.status, 'PUBLISHED'),
+            lte(musicReleases.releaseDate, todayStr)
+          )
+        );
+
+      for (const release of upcomingMusicReleases) {
+        // Find followers for this artist
+        const followers = await db
+          .select({ userId: artistSubscriptions.userId })
+          .from(artistSubscriptions)
+          .where(eq(artistSubscriptions.artistId, release.artistId));
+
+        for (const follower of followers) {
+          // Check if already notified
+          const alreadyNotified = await db
+            .select({ id: notifications.id })
+            .from(notifications)
+            .where(
+              and(
+                eq(notifications.recipientUserId, follower.userId),
+                eq(notifications.type, 'NEW_RELEASE'),
+                eq(notifications.entityType, 'MUSIC_RELEASE'),
+                eq(notifications.entityId, String(release.id))
+              )
+            )
+            .limit(1);
+
+          if (alreadyNotified.length === 0) {
+            try {
+              await notificationService.create({
+                recipientUserId: follower.userId,
+                type: 'NEW_RELEASE',
+                title: '🎵 Сегодня день релиза музыки!',
+                body: `Сегодня выходит музыкальный релиз «${release.title}» от исполнителя «${release.stageName}»!`,
+                link: `/music/release/${release.slug || release.id}`,
+                entityType: 'MUSIC_RELEASE',
+                entityId: String(release.id),
+                actorUserId: release.artistUserId,
+              });
+              notifiedCount++;
+            } catch (notifyErr) {
+              console.error('[MusicReleaseNotification] Failed to notify follower:', notifyErr);
+            }
+          }
         }
       }
     } catch (err) {

@@ -38,9 +38,14 @@ import {
   newsComments,
   newsReactions,
   ptsTransactions,
+  artistProfiles,
+  musicReleases,
+  musicTracks,
 } from '../db/schema.ts';
 import { eq, and, or, desc, asc, sql, inArray, not, isNull, ilike, gte, lte, count } from 'drizzle-orm';
 import { providerManager } from './providers/index.ts';
+import { youtubeMusicProvider } from './services/externalMusic/youtubeMusicProvider.ts';
+import { externalMusicConfig } from './services/externalMusic/externalMusicConfig.ts';
 import { UnifiedSearchFilters } from './providers/types.ts';
 import { encryptCredentials, decryptCredentials, maskApiKey } from '../lib/crypto.ts';
 import { GameTranslator } from './services/gameTranslator.ts';
@@ -1631,9 +1636,14 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
       statisticsVisibility,
       notificationSettings,
       showAdultContent,
+      musicLyricsProvider,
       } = req.body;
 
     // Validation
+    if (musicLyricsProvider && !['auto', 'youtube', 'genius'].includes(musicLyricsProvider)) {
+      return res.status(400).json({ error: 'Неверный источник текста' });
+    }
+
     if (bio && String(bio).length > 500) {
       return res.status(400).json({ error: 'Биография слишком длинная (максимум 500 символов)' });
     }
@@ -1663,6 +1673,7 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
         statisticsVisibility: statisticsVisibility || user.statisticsVisibility,
         notificationSettings: notificationSettings !== undefined ? notificationSettings : user.notificationSettings,
         showAdultContent: typeof showAdultContent === 'boolean' ? showAdultContent : user.showAdultContent,
+        musicLyricsProvider: musicLyricsProvider || user.musicLyricsProvider,
         
         updatedAt: new Date(),
       })
@@ -2300,6 +2311,167 @@ const mediaSearchHandler = async (req: any, res: any) => {
   }
 };
 
+// Global search helper for music catalog items
+const searchMusicForGlobalSearch = async (query: string, limit = 5): Promise<any[]> => {
+  const cleanQ = query.trim().toLowerCase();
+  const results: any[] = [];
+
+  try {
+    // 1. Dodik Artists
+    const localArtists = await db
+      .select({
+        id: artistProfiles.id,
+        stageName: artistProfiles.stageName,
+        slug: artistProfiles.slug,
+        avatar: artistProfiles.avatar,
+      })
+      .from(artistProfiles)
+      .where(and(eq(artistProfiles.status, 'ACTIVE'), ilike(artistProfiles.stageName, `%${cleanQ}%`)))
+      .limit(limit);
+
+    for (const a of localArtists) {
+      results.push({
+        provider: 'DODIK_DB',
+        id: `dodik_artist_${a.id}`,
+        externalId: String(a.id),
+        type: 'music_artist',
+        kind: 'dodik',
+        title: a.stageName,
+        subtitle: 'Исполнитель Dodik Music',
+        posterUrl: a.avatar || null,
+        url: `/music/artist/${a.slug}`,
+      });
+    }
+
+    // 2. Dodik Releases
+    const localReleases = await db
+      .select({
+        id: musicReleases.id,
+        title: musicReleases.title,
+        slug: musicReleases.slug,
+        cover: musicReleases.cover,
+        type: musicReleases.type,
+        artistName: artistProfiles.stageName,
+      })
+      .from(musicReleases)
+      .innerJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+      .where(and(eq(musicReleases.status, 'PUBLISHED'), ilike(musicReleases.title, `%${cleanQ}%`)))
+      .limit(limit);
+
+    for (const r of localReleases) {
+      results.push({
+        provider: 'DODIK_DB',
+        id: `dodik_release_${r.id}`,
+        externalId: String(r.id),
+        type: 'music_release',
+        kind: 'dodik',
+        title: r.title,
+        subtitle: `${r.artistName} • ${r.type}`,
+        posterUrl: r.cover || null,
+        url: `/music/release/${r.slug || r.id}`,
+      });
+    }
+
+    // 3. Dodik Tracks
+    const localTracks = await db
+      .select({
+        id: musicTracks.id,
+        title: musicTracks.title,
+        releaseCover: musicReleases.cover,
+        artistName: artistProfiles.stageName,
+        releaseTitle: musicReleases.title,
+      })
+      .from(musicTracks)
+      .innerJoin(musicReleases, eq(musicTracks.releaseId, musicReleases.id))
+      .innerJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+      .where(and(eq(musicTracks.status, 'PUBLISHED'), eq(musicReleases.status, 'PUBLISHED'), ilike(musicTracks.title, `%${cleanQ}%`)))
+      .limit(limit);
+
+    for (const t of localTracks) {
+      results.push({
+        provider: 'DODIK_DB',
+        id: `dodik_track_${t.id}`,
+        externalId: String(t.id),
+        type: 'music_track',
+        kind: 'dodik',
+        title: t.title,
+        subtitle: `Трек • ${t.artistName}`,
+        posterUrl: t.releaseCover || null,
+        url: `/music/release/${t.id}`, // navigate/play
+        trackData: { ...t, source: 'dodik', artistName: t.artistName, releaseTitle: t.releaseTitle },
+      });
+    }
+  } catch (err) {
+    console.warn('Global local music search error:', err);
+  }
+
+  // B. Search External Music if enabled
+  try {
+    const externalItems: any[] = [];
+    if (externalMusicConfig.isCatalogEnabled('youtube')) {
+      const ytItems = await youtubeMusicProvider.searchTracks(query, { limit: 12 }).catch(() => []);
+      externalItems.push(...ytItems);
+    }
+
+    const seenTracks = new Set<string>();
+    const seenArtists = new Set<string>();
+    const seenAlbums = new Set<string>();
+
+    for (const item of externalItems) {
+      if (item.title && !seenTracks.has(item.id)) {
+        seenTracks.add(item.id);
+        results.push({
+          provider: item.provider,
+          id: item.id,
+          externalId: item.id,
+          type: 'music_track',
+          kind: 'external',
+          title: item.title,
+          subtitle: `Внешний трек • ${item.artist}`,
+          posterUrl: item.thumbnail,
+          url: `/music/external/release/${item.provider}/${item.albumId || 'album'}`,
+          playable: item.playable,
+          trackData: { ...item, source: item.provider },
+        });
+      }
+
+      if (item.artist && item.artistId && !seenArtists.has(`${item.provider}-${item.artistId}`)) {
+        seenArtists.add(`${item.provider}-${item.artistId}`);
+        results.push({
+          provider: item.provider,
+          id: `${item.provider}_art_${item.artistId}`,
+          externalId: item.artistId,
+          type: 'music_artist',
+          kind: 'external',
+          title: item.artist,
+          subtitle: `Исполнитель • ${item.provider === 'youtube' ? 'YouTube' : 'SoundCloud'}`,
+          posterUrl: item.thumbnail,
+          url: `/music/external/artist/${item.provider}/${item.artistId}`,
+        });
+      }
+
+      if (item.album && item.albumId && !seenAlbums.has(`${item.provider}-${item.albumId}`)) {
+        seenAlbums.add(`${item.provider}-${item.albumId}`);
+        results.push({
+          provider: item.provider,
+          id: `${item.provider}_rel_${item.albumId}`,
+          externalId: item.albumId,
+          type: 'music_release',
+          kind: 'external',
+          title: item.album,
+          subtitle: `Релиз • ${item.artist}`,
+          posterUrl: item.thumbnail,
+          url: `/music/external/release/${item.provider}/${item.albumId}`,
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Global external music search error:', err);
+  }
+
+  return results.slice(0, limit * 4);
+};
+
 // Autocomplete search endpoint for fast typeahead
 const mediaAutocompleteHandler = async (req: any, res: any) => {
   try {
@@ -2312,61 +2484,79 @@ const mediaAutocompleteHandler = async (req: any, res: any) => {
     const limit = Math.min(Math.max(parseInt(String(req.query.limit || '8'), 10) || 8, 1), 15);
     const isSuperAdmin = req.dbUser?.role === 'SUPER_ADMIN';
 
-    // 1. Search local DB with LIKE matching on title and original title
-    const localConditions: any[] = [];
-    if (!isSuperAdmin) {
-      localConditions.push(eq(media.isHidden, false));
-    }
-    const cleanQ = rawQuery.toLowerCase();
-    localConditions.push(
-      sql`(LOWER(${media.title}) LIKE ${'%' + cleanQ + '%'} OR LOWER(COALESCE(${media.originalTitle}, '')) LIKE ${'%' + cleanQ + '%'})`
-    );
+    let results: any[] = [];
 
-    if (typeFilter && typeFilter !== 'ALL') {
-      localConditions.push(eq(media.type, typeFilter));
-    }
-
-    let localItems: any[] = [];
-    try {
-      localItems = await db
-        .select()
-        .from(media)
-        .where(and(...localConditions))
-        .limit(limit);
-    } catch (e) {
-      console.warn('Autocomplete local search err:', e);
-    }
-
-    let results: any[] = localItems.map((item) => ({
-      provider: 'DODIK_DB',
-      externalId: String(item.id),
-      mediaId: item.id,
-      type: item.type,
-      title: item.title,
-      originalTitle: item.originalTitle,
-      year: item.year,
-      posterUrl: item.posterUrl,
-      rating: item.rating,
-      dodikRating: item.dodikRating,
-      isAdult: item.isAdult,
-      ageRating: item.ageRating,
-    }));
-
-    // 2. If results are few and query length >= 2, supplement with fast provider search
-    if (results.length < limit && rawQuery.length >= 2) {
+    // If seeking music specifically or generally (ALL)
+    if (!typeFilter || typeFilter === 'ALL' || typeFilter === 'MUSIC') {
       try {
-        const ext = await providerManager.search(rawQuery, typeFilter, 1, limit);
-        const extResults = ext.results || [];
-        results = [...results, ...extResults];
+        const musicResults = await searchMusicForGlobalSearch(rawQuery, 4);
+        results.push(...musicResults);
+      } catch (me) {
+        console.warn('Autocomplete music search error:', me);
+      }
+    }
+
+    // 1. Search local DB with LIKE matching on title and original title (if not searching exclusively music)
+    if (typeFilter !== 'MUSIC') {
+      const localConditions: any[] = [];
+      if (!isSuperAdmin) {
+        localConditions.push(eq(media.isHidden, false));
+      }
+      const cleanQ = rawQuery.toLowerCase();
+      localConditions.push(
+        sql`(LOWER(${media.title}) LIKE ${'%' + cleanQ + '%'} OR LOWER(COALESCE(${media.originalTitle}, '')) LIKE ${'%' + cleanQ + '%'})`
+      );
+
+      if (typeFilter && typeFilter !== 'ALL') {
+        localConditions.push(eq(media.type, typeFilter));
+      }
+
+      let localItems: any[] = [];
+      try {
+        localItems = await db
+          .select()
+          .from(media)
+          .where(and(...localConditions))
+          .limit(limit);
       } catch (e) {
-        // Ignore provider timeout for autocomplete
+        console.warn('Autocomplete local search err:', e);
+      }
+
+      const mediaResults = localItems.map((item) => ({
+        provider: 'DODIK_DB',
+        externalId: String(item.id),
+        mediaId: item.id,
+        type: item.type,
+        title: item.title,
+        originalTitle: item.originalTitle,
+        year: item.year,
+        posterUrl: item.posterUrl,
+        rating: item.rating,
+        dodikRating: item.dodikRating,
+        isAdult: item.isAdult,
+        ageRating: item.ageRating,
+      }));
+
+      results.push(...mediaResults);
+
+      // 2. If results are few and query length >= 2, supplement with fast provider search
+      if (results.length < limit && rawQuery.length >= 2 && typeFilter !== 'MUSIC') {
+        try {
+          const ext = await providerManager.search(rawQuery, typeFilter, 1, limit);
+          const extResults = ext.results || [];
+          results = [...results, ...extResults];
+        } catch (e) {
+          // Ignore provider timeout for autocomplete
+        }
       }
     }
 
     // Deduplicate
     const seen = new Set<string>();
     results = results.filter((item: any) => {
-      const key = item.mediaId ? `media-${item.mediaId}` : `${item.provider}-${item.externalId}`;
+      const key = item.mediaId 
+        ? `media-${item.mediaId}` 
+        : (item.type && item.type.startsWith('music_') ? `music-${item.type}-${item.id}` : `${item.provider}-${item.externalId}`);
       const titleKey = `${item.type}-${(item.title || '').trim().toLowerCase()}-${item.year || ''}`;
       if (seen.has(key) || (titleKey.length > 5 && seen.has(titleKey))) return false;
       seen.add(key);

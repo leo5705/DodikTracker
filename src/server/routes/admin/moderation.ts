@@ -11,8 +11,11 @@ import {
   tierLists,
   media,
   directMessages,
+  musicReviews,
+  musicReleases,
+  artistProfiles,
 } from '../../../db/schema.ts';
-import { eq, and, sql, desc, asc, count } from 'drizzle-orm';
+import { eq, and, sql, desc, asc, count, inArray } from 'drizzle-orm';
 import { logAdminAction } from './auditHelper.ts';
 import { notificationService } from '../../services/notificationService.ts';
 
@@ -38,15 +41,50 @@ const handleReportCreation = async (req: AuthRequest, res: Response) => {
     const effectiveReason = reason || (targetType === 'SYSTEM' ? 'OTHER' : 'RULES_VIOLATION');
 
     let targetUserId: number | null = null;
-    const targetIdStr = String(targetId);
+    const targetIdStr = String(targetId).trim();
     const targetIdNum = parseInt(targetIdStr, 10);
 
-    // Resolve targetUserId based on entity type
+    // Resolve targetUserId based on entity type & verify entity existence
     if (targetType === 'USER') {
       targetUserId = !isNaN(targetIdNum) ? targetIdNum : null;
+      if (targetUserId) {
+        const [targetU] = await db.select({ id: users.id }).from(users).where(eq(users.id, targetUserId)).limit(1);
+        if (!targetU) {
+          return res.status(404).json({ error: 'Пользователь не найден' });
+        }
+      }
+    } else if (targetType === 'MUSIC_REVIEW') {
+      if (isNaN(targetIdNum) || targetIdNum <= 0) {
+        return res.status(400).json({ error: 'Некорректный идентификатор музыкального отзыва' });
+      }
+      const [mRev] = await db
+        .select({
+          id: musicReviews.id,
+          userId: musicReviews.userId,
+          releaseId: musicReviews.releaseId,
+        })
+        .from(musicReviews)
+        .where(eq(musicReviews.id, targetIdNum))
+        .limit(1);
+
+      if (!mRev) {
+        return res.status(404).json({ error: 'Музыкальный отзыв не найден' });
+      }
+      targetUserId = mRev.userId;
+
+      // Self-report prevention
+      if (reporter && reporter.id === mRev.userId) {
+        return res.status(400).json({ error: 'Вы не можете отправить жалобу на собственный отзыв' });
+      }
     } else if (targetType === 'REVIEW' && !isNaN(targetIdNum)) {
       const [rev] = await db.select({ userId: reviews.userId }).from(reviews).where(eq(reviews.id, targetIdNum)).limit(1);
-      if (rev) targetUserId = rev.userId;
+      if (!rev) {
+        return res.status(404).json({ error: 'Отзыв не найден' });
+      }
+      targetUserId = rev.userId;
+      if (reporter && reporter.id === rev.userId) {
+        return res.status(400).json({ error: 'Вы не можете отправить жалобу на собственный отзыв' });
+      }
     } else if (targetType === 'COMMENT' && !isNaN(targetIdNum)) {
       const [cmt] = await db.select({ userId: comments.userId }).from(comments).where(eq(comments.id, targetIdNum)).limit(1);
       if (cmt) targetUserId = cmt.userId;
@@ -61,6 +99,29 @@ const handleReportCreation = async (req: AuthRequest, res: Response) => {
       if (msg) targetUserId = msg.senderId;
     }
 
+    // Duplicate report prevention: only 1 active (PENDING or IN_REVIEW) report per user per target
+    if (reporter) {
+      const [existingReport] = await db
+        .select({ id: reports.id })
+        .from(reports)
+        .where(
+          and(
+            eq(reports.reporterId, reporter.id),
+            eq(reports.targetType, targetType),
+            eq(reports.targetId, targetIdStr),
+            inArray(reports.status, ['PENDING', 'IN_REVIEW'])
+          )
+        )
+        .limit(1);
+
+      if (existingReport) {
+        return res.status(409).json({
+          error: 'Вы уже отправили жалобу на этот объект. Она находится на рассмотрении модераторов.',
+          reportId: existingReport.id,
+        });
+      }
+    }
+
     const [newReport] = await db
       .insert(reports)
       .values({
@@ -73,6 +134,31 @@ const handleReportCreation = async (req: AuthRequest, res: Response) => {
         status: 'PENDING',
       })
       .returning();
+
+    // Notify moderation staff about the new report
+    try {
+      const staffUsers = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(inArray(users.role, ['SUPER_ADMIN', 'ADMIN', 'MODERATOR']), eq(users.isBlocked, false)));
+
+      for (const staff of staffUsers) {
+        await notificationService.create({
+          recipientUserId: staff.id,
+          type: 'SYSTEM',
+          title: '⚠️ Новая жалоба на модерацию',
+          body: `Поступила жалоба на ${targetType === 'MUSIC_REVIEW' ? 'музыкальный отзыв' : targetType} (${effectiveReason}).`,
+          link: '/admin?tab=moderation',
+          entityType: 'REPORT',
+          entityId: String(newReport.id),
+          actorUserId: reporter ? reporter.id : undefined,
+          dedupKey: `MODERATION_REPORT:${newReport.id}`,
+          dedupWindowSeconds: 300,
+        });
+      }
+    } catch (notifErr) {
+      console.error('[Moderation] Notify staff error:', notifErr);
+    }
 
     res.json({
       success: true,
@@ -368,8 +454,115 @@ moderationRouter.get('/reports', requireAuth, requireStaff('MANAGE_MODERATION'),
       .limit(limit)
       .offset(offset);
 
+    // Enrich items with entity previews safely
+    const musicReviewIds = items.filter(r => r.targetType === 'MUSIC_REVIEW').map(r => parseInt(r.targetId, 10)).filter(id => !isNaN(id));
+    const contentReviewIds = items.filter(r => r.targetType === 'REVIEW').map(r => parseInt(r.targetId, 10)).filter(id => !isNaN(id));
+    const commentIds = items.filter(r => r.targetType === 'COMMENT').map(r => parseInt(r.targetId, 10)).filter(id => !isNaN(id));
+    const listIds = items.filter(r => r.targetType === 'LIST').map(r => parseInt(r.targetId, 10)).filter(id => !isNaN(id));
+    const tierListIds = items.filter(r => r.targetType === 'TIER_LIST').map(r => parseInt(r.targetId, 10)).filter(id => !isNaN(id));
+    const mediaIds = items.filter(r => r.targetType === 'MEDIA').map(r => parseInt(r.targetId, 10)).filter(id => !isNaN(id));
+
+    const musicReviewMap = new Map<number, any>();
+    if (musicReviewIds.length > 0) {
+      const mRevRows = await db
+        .select({
+          id: musicReviews.id,
+          overallScore: musicReviews.overallScore,
+          text: musicReviews.text,
+          releaseTitle: musicReleases.title,
+          artistStageName: artistProfiles.stageName,
+        })
+        .from(musicReviews)
+        .leftJoin(musicReleases, eq(musicReviews.releaseId, musicReleases.id))
+        .leftJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+        .where(inArray(musicReviews.id, musicReviewIds));
+
+      mRevRows.forEach((row) => {
+        musicReviewMap.set(row.id, {
+          title: `Релиз «${row.releaseTitle || 'Музыкальный релиз'}» (${row.artistStageName || 'Исполнитель'}) • ${row.overallScore}/100`,
+          text: row.text,
+        });
+      });
+    }
+
+    const contentReviewMap = new Map<number, any>();
+    if (contentReviewIds.length > 0) {
+      const revRows = await db
+        .select({
+          id: reviews.id,
+          title: reviews.title,
+          content: reviews.content,
+          isHidden: reviews.isHidden,
+          mediaTitle: media.title,
+        })
+        .from(reviews)
+        .leftJoin(media, eq(reviews.mediaId, media.id))
+        .where(inArray(reviews.id, contentReviewIds));
+
+      revRows.forEach((row) => {
+        contentReviewMap.set(row.id, {
+          title: row.title || (row.mediaTitle ? `Отзыв к «${row.mediaTitle}»` : 'Отзыв'),
+          text: row.content,
+          isHidden: row.isHidden,
+        });
+      });
+    }
+
+    const commentMap = new Map<number, any>();
+    if (commentIds.length > 0) {
+      const cmtRows = await db
+        .select({ id: comments.id, content: comments.content, isHidden: comments.isHidden })
+        .from(comments)
+        .where(inArray(comments.id, commentIds));
+      cmtRows.forEach(c => commentMap.set(c.id, { text: c.content, isHidden: c.isHidden }));
+    }
+
+    const listMap = new Map<number, any>();
+    if (listIds.length > 0) {
+      const lRows = await db
+        .select({ id: lists.id, title: lists.title, description: lists.description, isHidden: lists.isHidden })
+        .from(lists)
+        .where(inArray(lists.id, listIds));
+      lRows.forEach(l => listMap.set(l.id, { title: l.title, text: l.description, isHidden: l.isHidden }));
+    }
+
+    const tierListMap = new Map<number, any>();
+    if (tierListIds.length > 0) {
+      const tlRows = await db
+        .select({ id: tierLists.id, title: tierLists.title, description: tierLists.description, isHidden: tierLists.isHidden })
+        .from(tierLists)
+        .where(inArray(tierLists.id, tierListIds));
+      tlRows.forEach(tl => tierListMap.set(tl.id, { title: tl.title, text: tl.description, isHidden: tl.isHidden }));
+    }
+
+    const mediaMap = new Map<number, any>();
+    if (mediaIds.length > 0) {
+      const mRows = await db
+        .select({ id: media.id, title: media.title, description: media.description, isHidden: media.isHidden })
+        .from(media)
+        .where(inArray(media.id, mediaIds));
+      mRows.forEach(m => mediaMap.set(m.id, { title: m.title, text: m.description, isHidden: m.isHidden }));
+    }
+
+    const enrichedItems = items.map((r) => {
+      const targetIdNum = parseInt(r.targetId, 10);
+      let preview: any = null;
+      if (!isNaN(targetIdNum)) {
+        if (r.targetType === 'MUSIC_REVIEW') preview = musicReviewMap.get(targetIdNum) || null;
+        else if (r.targetType === 'REVIEW') preview = contentReviewMap.get(targetIdNum) || null;
+        else if (r.targetType === 'COMMENT') preview = commentMap.get(targetIdNum) || null;
+        else if (r.targetType === 'LIST') preview = listMap.get(targetIdNum) || null;
+        else if (r.targetType === 'TIER_LIST') preview = tierListMap.get(targetIdNum) || null;
+        else if (r.targetType === 'MEDIA') preview = mediaMap.get(targetIdNum) || null;
+      }
+      return {
+        ...r,
+        preview,
+      };
+    });
+
     res.json({
-      items,
+      items: enrichedItems,
       total: totalCount,
       page,
       limit,
@@ -406,7 +599,26 @@ moderationRouter.get('/reports/:id', requireAuth, requireStaff('MANAGE_MODERATIO
     let targetEntity: any = null;
     const targetIdNum = parseInt(report.targetId, 10);
 
-    if (report.targetType === 'REVIEW' && !isNaN(targetIdNum)) {
+    if (report.targetType === 'MUSIC_REVIEW' && !isNaN(targetIdNum)) {
+      const [mRev] = await db
+        .select({
+          review: musicReviews,
+          releaseTitle: musicReleases.title,
+          releaseCover: musicReleases.cover,
+          releaseSlug: musicReleases.slug,
+          artistStageName: artistProfiles.stageName,
+          artistSlug: artistProfiles.slug,
+          authorUsername: users.username,
+          authorAvatar: users.avatar,
+        })
+        .from(musicReviews)
+        .leftJoin(musicReleases, eq(musicReviews.releaseId, musicReleases.id))
+        .leftJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+        .leftJoin(users, eq(musicReviews.userId, users.id))
+        .where(eq(musicReviews.id, targetIdNum))
+        .limit(1);
+      targetEntity = mRev || null;
+    } else if (report.targetType === 'REVIEW' && !isNaN(targetIdNum)) {
       const [rev] = await db
         .select({
           review: reviews,
@@ -530,9 +742,12 @@ const handleReportActionExecution = async (req: AuthRequest, res: Response) => {
     const targetIdNum = parseInt(report.targetId, 10);
 
     // Perform the moderation action on target entity
-    if (action === 'DELETE' || action === 'HIDE') {
-      const shouldHide = action === 'HIDE';
-      if (report.targetType === 'REVIEW' && !isNaN(targetIdNum)) {
+    if (action === 'DELETE' || action === 'HIDE' || action === 'CONTENT_HIDDEN' || action === 'HIDE_CONTENT') {
+      const shouldHide = action === 'HIDE' || action === 'CONTENT_HIDDEN' || action === 'HIDE_CONTENT';
+      if (report.targetType === 'MUSIC_REVIEW' && !isNaN(targetIdNum)) {
+        // Music review removal
+        await db.delete(musicReviews).where(eq(musicReviews.id, targetIdNum));
+      } else if (report.targetType === 'REVIEW' && !isNaN(targetIdNum)) {
         if (action === 'DELETE') {
           await db.delete(reviews).where(eq(reviews.id, targetIdNum));
         } else {

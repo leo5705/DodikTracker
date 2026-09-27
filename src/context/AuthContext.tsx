@@ -26,6 +26,7 @@ export interface DbUser {
   telegramChatId?: string | null;
   telegramId?: string | null;
   notificationSettings?: Record<string, boolean>;
+  musicLyricsProvider?: 'auto' | 'youtube' | 'genius';
   invitesLeft: number;
   pts?: number;
   createdAt: string;

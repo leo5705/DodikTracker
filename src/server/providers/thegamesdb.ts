@@ -97,7 +97,7 @@ export class TheGamesDBProvider implements MediaProvider {
       const url = `${BASE_URL}/Games/ByGameName?name=${encodeURIComponent(query.trim())}&apikey=${encodeURIComponent(apiKey)}&fields=players,publishers,genres,overview,last_updated,rating,platform,coop,youtube,alternates&include=boxart,platform&page=${page}`;
       const res = await fetch(url);
       if (!res.ok) {
-        console.error(`TheGamesDB search HTTP ${res.status}`);
+        console.warn(`[TheGamesDB] search HTTP ${res.status} - returning empty results gracefully`);
         return { results: [], hasMore: false, page };
       }
 

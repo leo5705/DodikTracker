@@ -718,7 +718,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               <div className="space-y-1 divide-y divide-[#1E2442]/50">
                 {friendsFeed.slice(0, 7).map((act, index) => (
                   <ActivityTimelineItem
-                    key={act.id || index}
+                    key={`feed-${act.id || index}-${index}`}
                     activity={act}
                     isLast={index === Math.min(friendsFeed.length, 7) - 1}
                     onUserClick={(uname) => navigate(`/u/${uname}`)}
@@ -763,7 +763,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
             </div>
           ) : latestNews.length > 0 ? (
             <div className="space-y-3.5">
-              {latestNews.slice(0, 3).map((art) => {
+              {latestNews.slice(0, 3).map((art, idx) => {
                 let parsedCategory = 'Новости';
                 if (art.tags) {
                   if (Array.isArray(art.tags) && art.tags.length > 0) {
@@ -778,7 +778,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
 
                 return (
                   <NewsCard
-                    key={art.id}
+                    key={`news-${art.id || idx}-${idx}`}
                     image={art.cover}
                     title={art.title}
                     excerpt={
@@ -1044,9 +1044,9 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
 
           {friendsOnline.length > 0 ? (
             <div className="space-y-2">
-              {friendsOnline.map((fr) => (
+              {friendsOnline.map((fr, idx) => (
                 <div
-                  key={fr.id}
+                  key={`online-fr-${fr.id || fr.username || idx}-${idx}`}
                   onClick={() => navigate(`/u/${fr.username}`)}
                   className="flex items-center justify-between gap-2.5 p-2 rounded-xl bg-[#080A18] hover:bg-[#151932] border border-[#1E2442] transition-colors cursor-pointer"
                 >

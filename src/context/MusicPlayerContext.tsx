@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useState, useRef, useEffect, ReactNode } from 'react';
 import { useRouter } from './RouterContext.tsx';
 import { useAuth } from './AuthContext.tsx';
+import { loadYouTubeIframeAPI } from '../utils/youtubeIframeApi.ts';
+import { LiveLyrics } from '../components/music/LiveLyrics.tsx';
+import { ExpandedMusicPlayer } from '../components/music/ExpandedMusicPlayer.tsx';
+import { FullscreenMusicPlayer } from '../components/music/FullscreenMusicPlayer.tsx';
+import { FullscreenLyricsOverlay } from '../components/music/FullscreenLyricsOverlay.tsx';
+import { getBestMusicImageUrl } from '../utils/musicImageUtils.ts';
 import {
   Play,
   Pause,
@@ -21,27 +27,103 @@ import {
   Sparkles,
   ExternalLink,
   Heart,
+  Loader2,
 } from 'lucide-react';
 
+export type TrackSource = 'dodik' | 'youtube';
+
+export interface ExternalYouTubeTrack {
+  source: 'youtube';
+  videoId: string;
+  title: string;
+  artist: string;
+  artists: string[];
+  artistId?: string | null;
+  album?: string | null;
+  durationSeconds?: number | null;
+  thumbnail: string | null;
+  youtubeUrl: string;
+  isExplicit?: boolean | null;
+}
+
 export interface Track {
-  id: number;
-  releaseId: number;
+  id: number | string;
+  source?: TrackSource;
+  videoId?: string;
+  providerTrackId?: string;
+  youtubeUrl?: string;
+  thumbnail?: string | null;
+  album?: string | null;
+  releaseId?: number;
   releaseTitle?: string;
   releaseCover?: string | null;
   releaseSlug?: string;
-  artistId?: number;
+  artistId?: number | string;
+  externalArtistId?: string | null;
   artistName?: string;
   artistSlug?: string;
   title: string;
   slug?: string;
-  trackNumber: number;
-  audioFile: string;
+  trackNumber?: number;
+  audioFile?: string;
   duration?: number | null;
   explicit?: boolean;
+  playable?: boolean;
   lyrics?: string | null;
   authorNote?: string | null;
   listenCount?: number;
   isFavorite?: boolean;
+}
+
+export function convertYouTubeTrackToPlayerTrack(yt: ExternalYouTubeTrack): Track {
+  return {
+    id: `yt_${yt.videoId}`,
+    source: 'youtube',
+    videoId: yt.videoId,
+    youtubeUrl: yt.youtubeUrl,
+    title: yt.title,
+    artistName: yt.artist || (yt.artists && yt.artists[0]) || 'Исполнитель',
+    releaseTitle: yt.album || 'Сингл',
+    releaseCover: yt.thumbnail || null,
+    thumbnail: yt.thumbnail || null,
+    album: yt.album || null,
+    duration: yt.durationSeconds || null,
+    explicit: Boolean(yt.isExplicit),
+    audioFile: '',
+    trackNumber: 1,
+  };
+}
+
+export function normalizePlayerTrack(track: Track): Track {
+  const isYt =
+    track.source === 'youtube' ||
+    (typeof track.id === 'string' && track.id.startsWith('yt_')) ||
+    Boolean(track.videoId);
+
+  const videoId =
+    track.videoId ||
+    (typeof track.id === 'string' && track.id.startsWith('yt_')
+      ? track.id.replace(/^yt_/, '')
+      : undefined);
+
+  if (isYt && videoId) {
+    return {
+      ...track,
+      id: typeof track.id === 'string' && track.id.startsWith('yt_') ? track.id : `yt_${videoId}`,
+      source: 'youtube',
+      videoId,
+      youtubeUrl: track.youtubeUrl || `https://www.youtube.com/watch?v=${videoId}`,
+      releaseCover: track.releaseCover || track.thumbnail || null,
+      thumbnail: track.thumbnail || track.releaseCover || null,
+      artistName: track.artistName || 'Исполнитель',
+      releaseTitle: track.releaseTitle || track.album || 'Сингл',
+    };
+  }
+
+  return {
+    ...track,
+    source: track.source || 'dodik',
+  };
 }
 
 export interface ReleaseInfo {
@@ -59,8 +141,67 @@ export interface ArtistInfo {
   slug: string;
 }
 
+export interface GeniusAnnotation {
+  id: number;
+  fragment: string;
+  bodyPlain: string;
+  bodyHtml?: string;
+  verified: boolean;
+  votesTotal?: number;
+  author?: {
+    name: string;
+    avatarUrl?: string;
+    url?: string;
+  };
+}
+
+export interface GeniusCredit {
+  role: string;
+  artists: { name: string; url?: string; imageUrl?: string }[];
+}
+
+export interface GeniusTrackInfo {
+  geniusSongId: number;
+  url?: string;
+  title: string;
+  artistNames: string[];
+  description?: string;
+  releaseDate?: string;
+  albumName?: string;
+  albumCoverUrl?: string;
+  primaryArtist?: {
+    name: string;
+    imageUrl?: string;
+    url?: string;
+    headerImageUrl?: string;
+  };
+  annotations?: GeniusAnnotation[];
+  credits?: GeniusCredit[];
+  verified?: boolean;
+  headerImageUrl?: string;
+  songArtImageUrl?: string;
+  stats?: {
+    pageviews?: number;
+    unreviewedAnnotations?: number;
+    hot?: boolean;
+  };
+  fetchedAt: string;
+}
+
+export type PlayerState = 'mini' | 'expanded' | 'fullscreen' | 'lyrics';
+export type PlayerPlaybackStatus = 'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'blocked' | 'error';
 type RepeatMode = 'OFF' | 'ONE' | 'ALL';
 type PlayerTab = 'queue' | 'lyrics' | 'note';
+
+export interface PlaybackErrorState {
+  trackId: string | number;
+  trackTitle: string;
+  reason: 'embed_restricted' | 'video_unavailable' | 'audio_missing' | 'network_error' | 'unplayable';
+  message: string;
+  youtubeUrl?: string;
+  canOpenExternal?: boolean;
+  provider?: TrackSource;
+}
 
 interface MusicPlayerContextType {
   currentTrack: Track | null;
@@ -68,17 +209,41 @@ interface MusicPlayerContextType {
   queueIndex: number;
   releaseInfo: ReleaseInfo | null;
   artistInfo: ArtistInfo | null;
+  geniusInfo: GeniusTrackInfo | null;
+  isLoadingGenius: boolean;
+  isGeniusConfigured: boolean;
+  isInsightsOpen: boolean;
+  setIsInsightsOpen: (open: boolean) => void;
+  toggleInsights: () => void;
+  focusedAnnotation: GeniusAnnotation | null;
+  setFocusedAnnotation: (ann: GeniusAnnotation | null) => void;
   isPlaying: boolean;
+  playbackStatus: PlayerPlaybackStatus;
+  playbackError: PlaybackErrorState | null;
+  clearPlaybackError: () => void;
   currentTime: number;
   duration: number;
   volume: number;
   isMuted: boolean;
+  playerState: PlayerState;
+  previousPlayerState: PlayerState;
   isExpanded: boolean;
+  isFullscreen: boolean;
+  isLyricsOpen: boolean;
   repeatMode: RepeatMode;
   isShuffle: boolean;
   activeTab: PlayerTab;
   setActiveTab: (tab: PlayerTab) => void;
+  setPlayerState: (state: PlayerState) => void;
+  openExpanded: () => void;
+  openFullscreen: () => void;
+  openLyrics: () => void;
+  closeExpanded: () => void;
+  closeFullscreen: () => void;
+  closeLyrics: () => void;
   playTrack: (track: Track, newQueue?: Track[], newRelease?: ReleaseInfo | null) => void;
+  addToQueue: (track: Track) => void;
+  removeFromQueue: (trackId: string | number) => void;
   togglePlayPause: () => void;
   playNext: () => void;
   playPrev: () => void;
@@ -89,9 +254,11 @@ interface MusicPlayerContextType {
   toggleRepeat: () => void;
   toggleShuffle: () => void;
   setIsExpanded: React.Dispatch<React.SetStateAction<boolean>>;
+  setIsFullscreen: React.Dispatch<React.SetStateAction<boolean>>;
   closePlayer: () => void;
   isCurrentTrackFavorite: boolean;
-  toggleFavoriteTrack: (trackId?: number) => Promise<boolean>;
+  toggleFavoriteTrack: (trackId?: number | string) => Promise<boolean>;
+  updateTrackLyrics: (lyrics: string) => void;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
@@ -103,21 +270,140 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [queueIndex, setQueueIndex] = useState<number>(-1);
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
   const [artistInfo, setArtistInfo] = useState<ArtistInfo | null>(null);
+  const [geniusInfo, setGeniusInfo] = useState<GeniusTrackInfo | null>(null);
+  const [isLoadingGenius, setIsLoadingGenius] = useState<boolean>(false);
+  const [isGeniusConfigured, setIsGeniusConfigured] = useState<boolean>(true);
+  const [isInsightsOpen, setIsInsightsOpen] = useState<boolean>(false);
+  const [focusedAnnotation, setFocusedAnnotation] = useState<GeniusAnnotation | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [playbackStatus, setPlaybackStatus] = useState<PlayerPlaybackStatus>('idle');
+  const [playbackError, setPlaybackError] = useState<PlaybackErrorState | null>(null);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [volume, setVolumeState] = useState<number>(0.8);
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  const [playerState, setPlayerStateInternal] = useState<PlayerState>('mini');
+  const [previousPlayerState, setPreviousPlayerState] = useState<PlayerState>('expanded');
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('OFF');
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<PlayerTab>('queue');
 
+  const toggleInsights = () => {
+    setIsInsightsOpen((prev) => !prev);
+  };
+
+  const previousStateRef = useRef<PlayerState>('expanded');
+  const consecutiveErrorsRef = useRef<number>(0);
+
+  const clearPlaybackError = () => {
+    setPlaybackError(null);
+  };
+
+  const setPlayerState = (nextState: PlayerState) => {
+    setPlayerStateInternal((prev) => {
+      if (prev !== nextState && prev !== 'lyrics') {
+        previousStateRef.current = prev;
+        setPreviousPlayerState(prev);
+      }
+      return nextState;
+    });
+  };
+
+  const isExpanded = playerState === 'expanded';
+  const isFullscreen = playerState === 'fullscreen';
+  const isLyricsOpen = playerState === 'lyrics';
+
+  const openExpanded = () => setPlayerState('expanded');
+  const openFullscreen = () => setPlayerState('fullscreen');
+  const openLyrics = () => {
+    setPlayerStateInternal((prev) => {
+      if (prev !== 'lyrics') {
+        const fallbackPrev = prev === 'mini' ? 'expanded' : prev;
+        previousStateRef.current = fallbackPrev;
+        setPreviousPlayerState(fallbackPrev);
+      }
+      return 'lyrics';
+    });
+  };
+
+  const closeExpanded = () => setPlayerState('mini');
+  const closeFullscreen = () => setPlayerState('expanded');
+  const closeLyrics = () => {
+    const target = previousStateRef.current && previousStateRef.current !== 'lyrics' ? previousStateRef.current : 'fullscreen';
+    setPlayerState(target);
+  };
+
+  const setIsExpanded: React.Dispatch<React.SetStateAction<boolean>> = (value) => {
+    setPlayerStateInternal((prev) => {
+      const isExp = prev === 'expanded';
+      const nextBool = typeof value === 'function' ? value(isExp) : value;
+      return nextBool ? 'expanded' : 'mini';
+    });
+  };
+
+  const setIsFullscreen: React.Dispatch<React.SetStateAction<boolean>> = (value) => {
+    setPlayerStateInternal((prev) => {
+      const isFull = prev === 'fullscreen';
+      const nextBool = typeof value === 'function' ? value(isFull) : value;
+      return nextBool ? 'fullscreen' : 'expanded';
+    });
+  };
+
+  // Scroll Lock & Scrollbar Compensation for Fullscreen and Lyrics modes
+  const scrollYRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if (playerState === 'fullscreen' || playerState === 'lyrics') {
+      const scrollY = window.scrollY || document.documentElement.scrollTop;
+      scrollYRef.current = scrollY;
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+      const origPosition = document.body.style.position;
+      const origTop = document.body.style.top;
+      const origWidth = document.body.style.width;
+      const origOverflow = document.body.style.overflow;
+      const origPaddingRight = document.body.style.paddingRight;
+      const origTouchAction = document.body.style.touchAction;
+      const origOverscroll = document.documentElement.style.overscrollBehavior;
+
+      document.body.style.position = 'fixed';
+      document.body.style.top = `-${scrollY}px`;
+      document.body.style.width = '100%';
+      document.body.style.overflow = 'hidden';
+      if (scrollbarWidth > 0) {
+        document.body.style.paddingRight = `${scrollbarWidth}px`;
+      }
+      document.body.style.touchAction = 'none';
+      document.documentElement.style.overscrollBehavior = 'none';
+
+      return () => {
+        document.body.style.position = origPosition || '';
+        document.body.style.top = origTop || '';
+        document.body.style.width = origWidth || '';
+        document.body.style.overflow = origOverflow || '';
+        document.body.style.paddingRight = origPaddingRight || '';
+        document.body.style.touchAction = origTouchAction || '';
+        document.documentElement.style.overscrollBehavior = origOverscroll || '';
+        window.scrollTo({ top: scrollYRef.current, behavior: 'instant' });
+      };
+    }
+  }, [playerState]);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ytPlayerRef = useRef<any>(null);
   const currentTrackRef = useRef<Track | null>(null);
+  const repeatModeRef = useRef<RepeatMode>('OFF');
+  const isShuffleRef = useRef<boolean>(false);
+  const queueRef = useRef<Track[]>([]);
+  const queueIndexRef = useRef<number>(-1);
+  const isMutedRef = useRef<boolean>(false);
+  const volumeRef = useRef<number>(0.8);
+
   const playbackSessionRef = useRef<{
     sessionId: string;
-    trackId: number;
+    trackId: number | string;
     accumulatedSeconds: number;
     lastTick: number;
     reported: boolean;
@@ -125,9 +411,94 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   useEffect(() => {
     currentTrackRef.current = currentTrack;
-  }, [currentTrack]);
+    if (currentTrack && dbUser) {
+      authFetch('/api/music/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          trackId: currentTrack.id,
+          provider: currentTrack.source || 'dodik',
+          title: currentTrack.title,
+          artistName: currentTrack.artistName || 'Исполнитель',
+          artistId: currentTrack.artistId || null,
+          releaseTitle: currentTrack.releaseTitle || null,
+          releaseCover: currentTrack.releaseCover || currentTrack.thumbnail || null,
+          durationSeconds: currentTrack.duration || null,
+        }),
+      }).catch(() => {});
+    }
+  }, [currentTrack?.id, dbUser?.id]);
 
-  // Initialize single global audio element
+  // Fetch Genius Track Insights automatically when current track changes
+  useEffect(() => {
+    if (!currentTrack) {
+      setGeniusInfo(null);
+      setIsLoadingGenius(false);
+      setFocusedAnnotation(null);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingGenius(true);
+    setFocusedAnnotation(null);
+
+    const title = currentTrack.title || '';
+    const artist = currentTrack.artistName || releaseInfo?.artistName || '';
+    const album = currentTrack.releaseTitle || releaseInfo?.title || '';
+
+    const queryParams = new URLSearchParams();
+    if (title) queryParams.set('title', title);
+    if (artist) queryParams.set('artist', artist);
+    if (album) queryParams.set('album', album);
+
+    fetch(`/api/music/tracks/${encodeURIComponent(String(currentTrack.id))}/genius?${queryParams.toString()}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isMounted) return;
+        setGeniusInfo(data?.genius || null);
+        if (typeof data?.configured === 'boolean') {
+          setIsGeniusConfigured(data.configured);
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setGeniusInfo(null);
+      })
+      .finally(() => {
+        if (!isMounted) return;
+        setIsLoadingGenius(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentTrack?.id, currentTrack?.title, currentTrack?.artistName]);
+
+  useEffect(() => {
+    repeatModeRef.current = repeatMode;
+  }, [repeatMode]);
+
+  useEffect(() => {
+    isShuffleRef.current = isShuffle;
+  }, [isShuffle]);
+
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+
+  useEffect(() => {
+    queueIndexRef.current = queueIndex;
+  }, [queueIndex]);
+
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
+
+  useEffect(() => {
+    volumeRef.current = volume;
+  }, [volume]);
+
+  // Initialize single global audio element for Dodik tracks
   useEffect(() => {
     const audio = new Audio();
     audioRef.current = audio;
@@ -141,7 +512,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
     const handlePlay = () => {
       const track = currentTrackRef.current;
-      if (!track) return;
+      // CRITICAL: Skip listen sessions for YouTube tracks
+      if (!track || track.source === 'youtube') return;
 
       if (!playbackSessionRef.current || playbackSessionRef.current.trackId !== track.id) {
         const sessionId = generateSessionId();
@@ -153,7 +525,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           reported: false,
         };
 
-        // Notify backend of session start
         fetch(`/api/music/tracks/${track.id}/playback-start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -183,13 +554,18 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     };
 
     const handleTimeUpdate = () => {
+      const cur = currentTrackRef.current;
+      const isExternal = cur?.source === 'youtube' || (typeof cur?.id === 'string' && cur.id.startsWith('yt_')) || Boolean(cur?.videoId);
+      if (isExternal) return;
+
       setCurrentTime(audio.currentTime);
       setDuration(audio.duration || 0);
 
       const session = playbackSessionRef.current;
       const track = currentTrackRef.current;
 
-      if (!audio.paused && !audio.ended && session && track && session.trackId === track.id) {
+      // CRITICAL: Check track.source !== 'youtube' and not external
+      if (!audio.paused && !audio.ended && session && track && !isExternal && track.source !== 'youtube' && session.trackId === track.id) {
         const now = Date.now();
         if (session.lastTick > 0) {
           const delta = (now - session.lastTick) / 1000;
@@ -199,7 +575,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
         session.lastTick = now;
 
-        // Check if listen threshold is reached
         if (!session.reported) {
           const dur = audio.duration || track.duration || 180;
           let threshold = 30;
@@ -241,12 +616,33 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     };
 
     const handleEnded = () => {
-      handleAutoAdvance();
+      const cur = currentTrackRef.current;
+      const isExternal = cur?.source === 'youtube' || (typeof cur?.id === 'string' && cur.id.startsWith('yt_')) || Boolean(cur?.videoId);
+      if (!isExternal) {
+        handleAutoAdvance();
+      }
     };
 
     const handleError = (e: Event) => {
-      console.error("Global Music Player error:", e);
-      setIsPlaying(false);
+      const cur = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
+      if (!cur || cur.source === 'youtube') return;
+      const src = audio.getAttribute('src');
+      // If external track or no audio file src was set, ignore HTMLAudioElement error event
+      if (!src || src === '' || src === window.location.href) {
+        return;
+      }
+      console.warn('[MusicPlayer] HTMLAudioElement error:', e);
+
+      // Attempt YouTube fallback if track has a videoId or youtubeUrl
+      const fallbackVideoId = cur.videoId || (cur.youtubeUrl ? extractYouTubeVideoId(cur.youtubeUrl) : null);
+      if (fallbackVideoId) {
+        console.info('[MusicPlayer] Direct audio failed, attempting YouTube fallback for:', cur.title);
+        setCurrentTrack((prev) => (prev ? { ...prev, source: 'youtube', videoId: fallbackVideoId } : null));
+        initOrGetYouTubePlayer(fallbackVideoId, true);
+        return;
+      }
+
+      handleTrackPlaybackFailure(cur, 'audio_missing');
     };
 
     audio.addEventListener('play', handlePlay);
@@ -269,7 +665,134 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     };
   }, []);
 
-  // Keyboard shortcut listener (Space for play/pause, ESC to collapse expanded player)
+  // Helper to extract YouTube video ID if only URL is available
+  function extractYouTubeVideoId(url?: string | null): string | null {
+    if (!url) return null;
+    const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+    return match ? match[1] : null;
+  }
+
+  // Centralized playback failure handler
+  const handleTrackPlaybackFailure = (track: Track, codeOrReason?: number | string) => {
+    setIsPlaying(false);
+    const isBlocked = codeOrReason === 150 || codeOrReason === 101 || codeOrReason === 'embed_restricted';
+    const status: PlayerPlaybackStatus = isBlocked ? 'blocked' : 'error';
+    setPlaybackStatus(status);
+
+    let friendlyMessage = `Не удалось воспроизвести трек «${track.title}».`;
+    let reasonType: 'embed_restricted' | 'video_unavailable' | 'audio_missing' | 'network_error' | 'unplayable' = 'video_unavailable';
+
+    if (isBlocked) {
+      friendlyMessage = `Правообладатель ограничил встроенное воспроизведение трека «${track.title}».`;
+      reasonType = 'embed_restricted';
+    } else if (codeOrReason === 100) {
+      friendlyMessage = `Видео для трека «${track.title}» недоступно или удалено.`;
+      reasonType = 'video_unavailable';
+    } else if (codeOrReason === 'unplayable') {
+      friendlyMessage = `Трек «${track.title}» временно недоступен для воспроизведения.`;
+      reasonType = 'unplayable';
+    } else if (codeOrReason === 'audio_missing') {
+      friendlyMessage = `Не удалось загрузить аудиофайл для трека «${track.title}».`;
+      reasonType = 'audio_missing';
+    }
+
+    const ytUrl = track.youtubeUrl || (track.videoId ? `https://www.youtube.com/watch?v=${track.videoId}` : undefined);
+
+    setPlaybackError({
+      trackId: track.id,
+      trackTitle: track.title,
+      reason: reasonType,
+      message: friendlyMessage,
+      youtubeUrl: ytUrl,
+      canOpenExternal: Boolean(ytUrl),
+      provider: track.source,
+    });
+
+    window.dispatchEvent(
+      new CustomEvent('notification:toast', {
+        detail: {
+          type: isBlocked ? 'warning' : 'info',
+          message: friendlyMessage,
+        },
+      })
+    );
+
+    consecutiveErrorsRef.current += 1;
+    const currentQueue = queueRef.current;
+
+    // Advance only if we haven't failed every track in the queue (prevents infinite loop)
+    if (currentQueue.length > 1 && consecutiveErrorsRef.current < currentQueue.length) {
+      setTimeout(() => {
+        handleAutoAdvance(true);
+      }, 1500);
+    } else {
+      setIsPlaying(false);
+    }
+  };
+
+  // TimeUpdate Poller for YouTube Tracks
+  useEffect(() => {
+    if (!isPlaying || currentTrack?.source !== 'youtube') return;
+
+    const interval = setInterval(() => {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === 'function') {
+        try {
+          const cur = ytPlayerRef.current.getCurrentTime() || 0;
+          const dur = ytPlayerRef.current.getDuration() || 0;
+          setCurrentTime(cur);
+          if (dur > 0) {
+            setDuration(dur);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }, 150);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, currentTrack?.id, currentTrack?.source]);
+
+  // Media Session API Sync
+  useEffect(() => {
+    if (!currentTrack || typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
+      return;
+    }
+
+    const cover = currentTrack.releaseCover || releaseInfo?.cover || currentTrack.thumbnail;
+    const artistName = currentTrack.artistName || releaseInfo?.artistName || artistInfo?.stageName || 'Исполнитель';
+
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title,
+        artist: artistName,
+        album: currentTrack.releaseTitle || releaseInfo?.title || currentTrack.album || 'Dodik Music',
+        artwork: cover
+          ? [
+              { src: cover, sizes: '96x96', type: 'image/jpeg' },
+              { src: cover, sizes: '128x128', type: 'image/jpeg' },
+              { src: cover, sizes: '192x192', type: 'image/jpeg' },
+              { src: cover, sizes: '256x256', type: 'image/jpeg' },
+              { src: cover, sizes: '384x384', type: 'image/jpeg' },
+              { src: cover, sizes: '512x512', type: 'image/jpeg' },
+            ]
+          : [],
+      });
+
+      navigator.mediaSession.setActionHandler('play', () => togglePlayPause());
+      navigator.mediaSession.setActionHandler('pause', () => togglePlayPause());
+      navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
+      navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
+      navigator.mediaSession.setActionHandler('seekto', (details) => {
+        if (details.seekTime !== undefined) {
+          seek(details.seekTime);
+        }
+      });
+    } catch {
+      // Non-critical
+    }
+  }, [currentTrack?.id, currentTrack?.source, releaseInfo, artistInfo]);
+
+  // Keyboard shortcut listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
@@ -278,59 +801,218 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       if (e.code === 'Space' && currentTrack) {
         e.preventDefault();
         togglePlayPause();
-      } else if (e.code === 'Escape' && isExpanded) {
-        setIsExpanded(false);
+      } else if (e.code === 'Escape') {
+        const hasOpenModal = Boolean(document.querySelector('[role="dialog"], .portal-modal'));
+        if (hasOpenModal) return;
+
+        setPlayerStateInternal((prev) => {
+          if (prev === 'lyrics') {
+            return previousStateRef.current && previousStateRef.current !== 'lyrics' ? previousStateRef.current : 'fullscreen';
+          }
+          if (prev === 'fullscreen') {
+            return 'expanded';
+          }
+          if (prev === 'expanded') {
+            return 'mini';
+          }
+          return prev;
+        });
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentTrack, isPlaying, isExpanded]);
+  }, [currentTrack, isPlaying]);
 
-  const handleAutoAdvance = () => {
-    if (repeatMode === 'ONE' && audioRef.current) {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+  // Initialize or get YouTube Player
+  const initOrGetYouTubePlayer = (videoId: string, autoplay: boolean) => {
+    setPlaybackStatus('loading');
+    loadYouTubeIframeAPI()
+      .then((YT) => {
+        if (ytPlayerRef.current && typeof ytPlayerRef.current.loadVideoById === 'function') {
+          try {
+            ytPlayerRef.current.setVolume(Math.round((isMutedRef.current ? 0 : volumeRef.current) * 100));
+            if (autoplay) {
+              ytPlayerRef.current.loadVideoById(videoId);
+              setIsPlaying(true);
+              setPlaybackStatus('playing');
+            } else {
+              ytPlayerRef.current.cueVideoById(videoId);
+              setPlaybackStatus('ready');
+            }
+            return;
+          } catch (e) {
+            console.warn('[YouTube Player] Re-instantiating player on load error:', e);
+          }
+        }
+
+        let container = document.getElementById('dodik-yt-player-container');
+        const wrapper = document.getElementById('dodik-yt-player-container-wrapper');
+        if (!container && wrapper) {
+          wrapper.innerHTML = '<div id="dodik-yt-player-container"></div>';
+          container = document.getElementById('dodik-yt-player-container');
+        }
+        if (!container) return;
+
+        const validOrigin =
+          typeof window !== 'undefined' &&
+          window.location &&
+          window.location.origin &&
+          window.location.origin !== 'null' &&
+          (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+            ? window.location.origin
+            : undefined;
+
+        const playerVars: Record<string, any> = {
+          autoplay: autoplay ? 1 : 0,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          modestbranding: 1,
+          rel: 0,
+          playsinline: 1,
+          enablejsapi: 1,
+        };
+        if (validOrigin) {
+          playerVars.origin = validOrigin;
+        }
+
+        ytPlayerRef.current = new YT.Player('dodik-yt-player-container', {
+          height: '200',
+          width: '200',
+          host: 'https://www.youtube.com',
+          videoId: videoId,
+          playerVars,
+          events: {
+            onReady: (event: any) => {
+              event.target.setVolume(Math.round((isMutedRef.current ? 0 : volumeRef.current) * 100));
+              if (autoplay) {
+                event.target.playVideo();
+                setIsPlaying(true);
+                setPlaybackStatus('playing');
+              } else {
+                setPlaybackStatus('ready');
+              }
+            },
+            onStateChange: (event: any) => {
+              if (event.data === YT.PlayerState.PLAYING) {
+                setIsPlaying(true);
+                setPlaybackStatus('playing');
+                consecutiveErrorsRef.current = 0;
+                setPlaybackError(null);
+              } else if (event.data === YT.PlayerState.PAUSED) {
+                setIsPlaying(false);
+                setPlaybackStatus('paused');
+              } else if (event.data === YT.PlayerState.BUFFERING) {
+                setPlaybackStatus('loading');
+              } else if (event.data === YT.PlayerState.CUED) {
+                setPlaybackStatus('ready');
+              } else if (event.data === YT.PlayerState.ENDED) {
+                setPlaybackStatus('ready');
+                handleAutoAdvance();
+              }
+            },
+            onError: (event: any) => {
+              const code = event?.data;
+              const track = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
+              if (!track) return;
+
+              // Fallback check: If YouTube fails, check if track has an audioFile source (HTML5 Audio fallback)
+              const directAudioSrc = (track.audioFile || '').trim();
+              if (directAudioSrc && directAudioSrc !== '' && directAudioSrc !== window.location.href) {
+                console.info('[MusicPlayer] YouTube error received, attempting HTML5 audio fallback for:', track.title);
+                setCurrentTrack((prev) => (prev ? { ...prev, source: 'dodik' } : null));
+                setPlaybackStatus('loading');
+                if (audioRef.current) {
+                  audioRef.current.src = directAudioSrc;
+                  audioRef.current.currentTime = 0;
+                  audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+                  audioRef.current
+                    .play()
+                    .then(() => {
+                      setIsPlaying(true);
+                      setPlaybackStatus('playing');
+                      consecutiveErrorsRef.current = 0;
+                      setPlaybackError(null);
+                    })
+                    .catch(() => {
+                      handleTrackPlaybackFailure(track, code);
+                    });
+                }
+                return;
+              }
+
+              // No alternative provider available -> dispatch error & advance if queue permits
+              handleTrackPlaybackFailure(track, code);
+            },
+          },
+        });
+      })
+      .catch((err) => {
+        console.warn('[YouTube API Load Notice]', err);
+        setIsPlaying(false);
+        setPlaybackStatus('error');
+      });
+  };
+
+  const handleAutoAdvance = (skipRepeatOne = false) => {
+    const curRepeat = repeatModeRef.current;
+    const curTrack = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
+
+    if (!skipRepeatOne && curRepeat === 'ONE' && curTrack) {
+      if (curTrack.source === 'youtube' && curTrack.videoId) {
+        if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+          ytPlayerRef.current.seekTo(0, true);
+          ytPlayerRef.current.playVideo();
+          setIsPlaying(true);
+          setPlaybackStatus('playing');
+        } else {
+          initOrGetYouTubePlayer(curTrack.videoId, true);
+        }
+      } else if (audioRef.current && curTrack.audioFile) {
+        audioRef.current.currentTime = 0;
+        audioRef.current
+          .play()
+          .then(() => {
+            setIsPlaying(true);
+            setPlaybackStatus('playing');
+          })
+          .catch(console.error);
+      }
       return;
     }
 
-    setQueue((latestQueue) => {
-      setQueueIndex((prevIndex) => {
-        if (latestQueue.length === 0) {
-          setIsPlaying(false);
-          return prevIndex;
-        }
+    const latestQueue = queueRef.current;
+    const prevIndex = queueIndexRef.current;
 
-        let nextIdx = -1;
-        if (isShuffle && latestQueue.length > 1) {
-          do {
-            nextIdx = Math.floor(Math.random() * latestQueue.length);
-          } while (nextIdx === prevIndex);
-        } else if (prevIndex + 1 < latestQueue.length) {
-          nextIdx = prevIndex + 1;
-        } else if (repeatMode === 'ALL') {
-          nextIdx = 0;
-        }
+    if (latestQueue.length === 0) {
+      setIsPlaying(false);
+      setPlaybackStatus('idle');
+      return;
+    }
 
-        if (nextIdx >= 0 && audioRef.current) {
-          const nextTrack = latestQueue[nextIdx];
-          setCurrentTrack(nextTrack);
-          audioRef.current.src = nextTrack.audioFile;
-          audioRef.current.currentTime = 0;
-          audioRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
-          return nextIdx;
-        } else {
-          setIsPlaying(false);
-          return prevIndex;
-        }
-      });
-      return latestQueue;
-    });
+    let nextIdx = -1;
+    if (isShuffleRef.current && latestQueue.length > 1) {
+      do {
+        nextIdx = Math.floor(Math.random() * latestQueue.length);
+      } while (nextIdx === prevIndex);
+    } else if (prevIndex + 1 < latestQueue.length) {
+      nextIdx = prevIndex + 1;
+    } else if (curRepeat === 'ALL') {
+      nextIdx = 0;
+    }
+
+    if (nextIdx >= 0) {
+      const nextTrack = latestQueue[nextIdx];
+      playTrackInternal(nextTrack, latestQueue);
+    } else {
+      setIsPlaying(false);
+      setPlaybackStatus('idle');
+    }
   };
 
-  const playTrackInternal = (track: Track, newQueue?: Track[], newRelease?: ReleaseInfo | null) => {
-    if (!audioRef.current) return;
-
-    const finalQueue = newQueue && newQueue.length > 0 ? newQueue : [track];
+  const playTrackInternal = (rawTrack: Track, rawQueue?: Track[], newRelease?: ReleaseInfo | null) => {
+    const track = normalizePlayerTrack(rawTrack);
+    const finalQueue = rawQueue && rawQueue.length > 0 ? rawQueue.map(normalizePlayerTrack) : [track];
     const trackIdx = finalQueue.findIndex((t) => t.id === track.id);
 
     setQueue(finalQueue);
@@ -345,36 +1027,132 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       setArtistInfo({ stageName: newRelease.artistName, slug: newRelease.artistSlug });
     }
 
-    if (currentTrack?.id === track.id) {
-      if (isPlaying) {
+    const isSameTrack = currentTrack?.id === track.id;
+    if (isSameTrack) {
+      togglePlayPause();
+      return;
+    }
+
+    // Reset error state and start loading
+    consecutiveErrorsRef.current = 0;
+    setPlaybackError(null);
+    setPlaybackStatus('loading');
+    setCurrentTrack(track);
+    setCurrentTime(0);
+    setDuration(track.duration || 0);
+
+    if (track.playable === false) {
+      handleTrackPlaybackFailure(track, 'unplayable');
+      return;
+    }
+
+    if (track.source === 'youtube' && track.videoId) {
+      // Pause HTMLAudioElement and clear src so it never triggers playback errors
+      if (audioRef.current) {
         audioRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+        audioRef.current.removeAttribute('src');
+        audioRef.current.load();
       }
+      initOrGetYouTubePlayer(track.videoId, true);
     } else {
-      setCurrentTrack(track);
-      audioRef.current.src = track.audioFile;
-      audioRef.current.currentTime = 0;
-      audioRef.current.volume = isMuted ? 0 : volume;
-      audioRef.current
-        .play()
-        .then(() => setIsPlaying(true))
-        .catch((e) => {
-          console.error("Playback failed:", e);
-          setIsPlaying(false);
-        });
+      // Dodik / Direct Audio Track
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
+        try {
+          ytPlayerRef.current.pauseVideo();
+        } catch {}
+      }
+
+      const audioSrc = (track.audioFile || '').trim();
+      if (!audioSrc) {
+        // Fallback check: Does track have YouTube backup videoId or URL?
+        const fallbackVideoId = track.videoId || (track.youtubeUrl ? extractYouTubeVideoId(track.youtubeUrl) : null);
+        if (fallbackVideoId) {
+          console.info('[MusicPlayer] Dodik track has no audio file, falling back to YouTube for:', track.title);
+          setCurrentTrack((prev) => (prev ? { ...prev, source: 'youtube', videoId: fallbackVideoId } : null));
+          initOrGetYouTubePlayer(fallbackVideoId, true);
+          return;
+        }
+
+        handleTrackPlaybackFailure(track, 'audio_missing');
+        return;
+      }
+
+      if (audioRef.current) {
+        audioRef.current.src = audioSrc;
+        audioRef.current.currentTime = 0;
+        audioRef.current.volume = isMuted ? 0 : volume;
+        audioRef.current
+          .play()
+          .then(() => {
+            setIsPlaying(true);
+            setPlaybackStatus('playing');
+            consecutiveErrorsRef.current = 0;
+          })
+          .catch((e) => {
+            console.warn('[MusicPlayer] Playback start error:', e);
+            // Check if YouTube fallback is possible
+            const fallbackVideoId = track.videoId || (track.youtubeUrl ? extractYouTubeVideoId(track.youtubeUrl) : null);
+            if (fallbackVideoId) {
+              setCurrentTrack((prev) => (prev ? { ...prev, source: 'youtube', videoId: fallbackVideoId } : null));
+              initOrGetYouTubePlayer(fallbackVideoId, true);
+              return;
+            }
+            handleTrackPlaybackFailure(track, 'audio_missing');
+          });
+      }
     }
   };
 
   const playQueueIndex = (index: number) => {
-    if (!audioRef.current || index < 0 || index >= queue.length) return;
+    if (index < 0 || index >= queue.length) return;
     const targetTrack = queue[index];
-    setQueueIndex(index);
-    setCurrentTrack(targetTrack);
-    audioRef.current.src = targetTrack.audioFile;
-    audioRef.current.currentTime = 0;
-    audioRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+    playTrackInternal(targetTrack, queue);
+  };
+
+  const addToQueue = (rawTrack: Track) => {
+    const track = normalizePlayerTrack(rawTrack);
+    setQueue((prev) => {
+      if (prev.length === 0 || queueIndexRef.current < 0) {
+        playTrackInternal(track, [track]);
+        return [track];
+      }
+      const updated = [...prev, track];
+      window.dispatchEvent(
+        new CustomEvent('notification:toast', {
+          detail: {
+            type: 'success',
+            message: `Трек «${track.title}» добавлен в очередь`,
+          },
+        })
+      );
+      return updated;
+    });
+  };
+
+  const removeFromQueue = (trackId: string | number) => {
+    setQueue((prev) => {
+      const targetStr = String(trackId);
+      const indexToRemove = prev.findIndex((t) => String(t.id) === targetStr);
+      if (indexToRemove === -1) return prev;
+
+      const removedTrack = prev[indexToRemove];
+      const updated = prev.filter((_, idx) => idx !== indexToRemove);
+
+      if (indexToRemove < queueIndexRef.current) {
+        setQueueIndex((i) => Math.max(0, i - 1));
+      }
+
+      window.dispatchEvent(
+        new CustomEvent('notification:toast', {
+          detail: {
+            type: 'info',
+            message: `Трек «${removedTrack?.title || 'Песня'}» удалён из очереди`,
+          },
+        })
+      );
+
+      return updated;
+    });
   };
 
   const playNext = () => {
@@ -382,57 +1160,109 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   const playPrev = () => {
-    if (!audioRef.current) return;
-    if (audioRef.current.currentTime > 3) {
-      audioRef.current.currentTime = 0;
+    if (currentTime > 3) {
+      seek(0);
       return;
     }
 
     if (queue.length > 0 && queueIndex > 0) {
       const prevIdx = queueIndex - 1;
       const prevTrack = queue[prevIdx];
-      setCurrentTrack(prevTrack);
-      setQueueIndex(prevIdx);
-      audioRef.current.src = prevTrack.audioFile;
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+      playTrackInternal(prevTrack, queue);
     } else {
-      audioRef.current.currentTime = 0;
+      seek(0);
     }
   };
 
   const togglePlayPause = () => {
-    if (!audioRef.current || !currentTrack) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
+    if (!currentTrack) return;
+    const track = normalizePlayerTrack(currentTrack);
+
+    if (track.source === 'youtube' && track.videoId) {
+      if (!ytPlayerRef.current) {
+        initOrGetYouTubePlayer(track.videoId, true);
+        return;
+      }
+      if (isPlaying) {
+        if (typeof ytPlayerRef.current.pauseVideo === 'function') {
+          ytPlayerRef.current.pauseVideo();
+        }
+        setIsPlaying(false);
+      } else {
+        if (typeof ytPlayerRef.current.playVideo === 'function') {
+          ytPlayerRef.current.playVideo();
+        }
+        setIsPlaying(true);
+      }
     } else {
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+      if (!audioRef.current) return;
+      if (isPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        const audioSrc = (track.audioFile || '').trim();
+        if (!audioSrc) {
+          console.warn('[MusicPlayer] Dodik track has no audio source to play:', track.title);
+          setIsPlaying(false);
+          return;
+        }
+        audioRef.current
+          .play()
+          .then(() => setIsPlaying(true))
+          .catch((e) => {
+            console.error('Playback failed:', e);
+            setIsPlaying(false);
+          });
+      }
     }
   };
 
   const seek = (seconds: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = seconds;
-      setCurrentTime(seconds);
+    setCurrentTime(seconds);
+    const cur = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
+    if (cur?.source === 'youtube') {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+        ytPlayerRef.current.seekTo(seconds, true);
+      }
+    } else {
+      if (audioRef.current) {
+        audioRef.current.currentTime = seconds;
+      }
     }
   };
 
   const setVolume = (vol: number) => {
     setVolumeState(vol);
+    const muted = vol === 0;
+    setIsMuted(muted);
+
     if (audioRef.current) {
       audioRef.current.volume = vol;
-      setIsMuted(vol === 0);
+    }
+
+    if (ytPlayerRef.current && typeof ytPlayerRef.current.setVolume === 'function') {
+      try {
+        ytPlayerRef.current.setVolume(Math.round(vol * 100));
+        if (muted && typeof ytPlayerRef.current.mute === 'function') {
+          ytPlayerRef.current.mute();
+        } else if (!muted && typeof ytPlayerRef.current.unMute === 'function') {
+          ytPlayerRef.current.unMute();
+        }
+      } catch {}
     }
   };
 
   const toggleMute = () => {
-    if (!audioRef.current) return;
     if (isMuted) {
-      audioRef.current.volume = volume || 0.8;
-      setIsMuted(false);
+      const restoredVol = volume || 0.8;
+      setVolume(restoredVol);
     } else {
-      audioRef.current.volume = 0;
+      if (audioRef.current) audioRef.current.volume = 0;
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.mute === 'function') {
+        try {
+          ytPlayerRef.current.mute();
+        } catch {}
+      }
       setIsMuted(true);
     }
   };
@@ -449,14 +1279,20 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     if (audioRef.current) {
       audioRef.current.pause();
     }
+    if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
+      try {
+        ytPlayerRef.current.pauseVideo();
+      } catch {}
+    }
     setIsPlaying(false);
     setCurrentTrack(null);
-    setIsExpanded(false);
+    setPlayerState('mini');
   };
 
-  // Fetch favorite status if undefined on current track
+  // Fetch favorite status for Dodik tracks
   useEffect(() => {
     if (!currentTrack || !dbUser) return;
+    if (currentTrack.source === 'youtube' || typeof currentTrack.id === 'string') return;
     if (currentTrack.isFavorite !== undefined) return;
 
     authFetch(`/api/music/my/tracks/${currentTrack.id}/status`)
@@ -469,7 +1305,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       .catch(() => {});
   }, [currentTrack?.id, dbUser, authFetch]);
 
-  // Sync with global custom event
+  // Sync with favorite track custom event
   useEffect(() => {
     const handleFavChange = (e: any) => {
       const { trackId, isFavorite } = e.detail || {};
@@ -482,11 +1318,25 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     return () => window.removeEventListener('music:favorite_track_changed', handleFavChange);
   }, []);
 
-  const toggleFavoriteTrack = async (trackId?: number): Promise<boolean> => {
+  const toggleFavoriteTrack = async (trackId?: number | string): Promise<boolean> => {
     const targetId = trackId || currentTrack?.id;
     if (!targetId || !dbUser) return false;
 
     const targetTrack = targetId === currentTrack?.id ? currentTrack : queue.find((t) => t.id === targetId);
+
+    if (targetTrack?.source === 'youtube' || typeof targetId === 'string') {
+      const currentlyFav = Boolean(targetTrack?.isFavorite);
+      const nextFav = !currentlyFav;
+      if (currentTrack && currentTrack.id === targetId) {
+        setCurrentTrack((prev) => (prev ? { ...prev, isFavorite: nextFav } : prev));
+      }
+      setQueue((prev) => prev.map((t) => (t.id === targetId ? { ...t, isFavorite: nextFav } : t)));
+      return nextFav;
+    }
+
+    const numId = Number(targetId);
+    if (isNaN(numId)) return false;
+
     const currentlyFav = Boolean(targetTrack?.isFavorite);
     const nextFav = !currentlyFav;
 
@@ -502,7 +1352,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     );
 
     try {
-      const res = await authFetch(`/api/music/my/tracks/${targetId}`, {
+      const res = await authFetch(`/api/music/my/tracks/${numId}`, {
         method: nextFav ? 'POST' : 'DELETE',
       });
       if (!res.ok) {
@@ -510,11 +1360,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           setCurrentTrack((prev) => (prev ? { ...prev, isFavorite: currentlyFav } : prev));
         }
         setQueue((prev) => prev.map((t) => (t.id === targetId ? { ...t, isFavorite: currentlyFav } : t)));
-        window.dispatchEvent(
-          new CustomEvent('music:favorite_track_changed', {
-            detail: { trackId: targetId, isFavorite: currentlyFav },
-          })
-        );
         return currentlyFav;
       }
       return nextFav;
@@ -527,6 +1372,10 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   };
 
+  const updateTrackLyrics = (lyrics: string) => {
+    setCurrentTrack((prev) => (prev ? { ...prev, lyrics } : prev));
+  };
+
   return (
     <MusicPlayerContext.Provider
       value={{
@@ -535,17 +1384,41 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         queueIndex,
         releaseInfo,
         artistInfo,
+        geniusInfo,
+        isLoadingGenius,
+        isGeniusConfigured,
+        isInsightsOpen,
+        setIsInsightsOpen,
+        toggleInsights,
+        focusedAnnotation,
+        setFocusedAnnotation,
         isPlaying,
+        playbackStatus,
+        playbackError,
+        clearPlaybackError,
         currentTime,
         duration,
         volume,
         isMuted,
+        playerState,
+        previousPlayerState,
         isExpanded,
+        isFullscreen,
+        isLyricsOpen,
         repeatMode,
         isShuffle,
         activeTab,
         setActiveTab,
+        setPlayerState,
+        openExpanded,
+        openFullscreen,
+        openLyrics,
+        closeExpanded,
+        closeFullscreen,
+        closeLyrics,
         playTrack: playTrackInternal,
+        addToQueue,
+        removeFromQueue,
         togglePlayPause,
         playNext,
         playPrev,
@@ -556,14 +1429,35 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         toggleRepeat,
         toggleShuffle,
         setIsExpanded,
+        setIsFullscreen,
         closePlayer,
         isCurrentTrackFavorite: Boolean(currentTrack?.isFavorite),
         toggleFavoriteTrack,
+        updateTrackLyrics,
       }}
     >
       {children}
-      <GlobalPlayerBar />
+      {/* Compliant off-screen container with valid dimensions for YouTube IFrame Player */}
+      <div
+        id="dodik-yt-player-container-wrapper"
+        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          bottom: '8px',
+          right: '8px',
+          width: 200,
+          height: 200,
+          zIndex: -1,
+          opacity: 0.001,
+          pointerEvents: 'none',
+          overflow: 'hidden',
+        }}
+      >
+        <div id="dodik-yt-player-container" />
+      </div>
       <ExpandedMusicPlayer />
+      <FullscreenMusicPlayer />
+      <FullscreenLyricsOverlay />
     </MusicPlayerContext.Provider>
   );
 };
@@ -576,664 +1470,4 @@ export const useMusicPlayer = () => {
   return ctx;
 };
 
-// Format helper
-const formatTime = (secs: number) => {
-  if (isNaN(secs) || secs < 0) return '0:00';
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}:${s < 10 ? '0' : ''}${s}`;
-};
 
-// UI component for persistent mini-player bar
-const GlobalPlayerBar: React.FC = () => {
-  const { navigate } = useRouter();
-  const { dbUser } = useAuth();
-  const {
-    currentTrack,
-    releaseInfo,
-    artistInfo,
-    isPlaying,
-    currentTime,
-    duration,
-    volume,
-    isMuted,
-    isExpanded,
-    repeatMode,
-    isShuffle,
-    togglePlayPause,
-    playNext,
-    playPrev,
-    seek,
-    setVolume,
-    toggleMute,
-    toggleRepeat,
-    toggleShuffle,
-    setIsExpanded,
-    closePlayer,
-    queue,
-    queueIndex,
-    toggleFavoriteTrack,
-  } = useMusicPlayer();
-
-  if (!currentTrack) return null;
-
-  const cover = currentTrack.releaseCover || releaseInfo?.cover;
-  const artistName = currentTrack.artistName || releaseInfo?.artistName || artistInfo?.stageName || 'Исполнитель';
-  const artistSlug = currentTrack.artistSlug || releaseInfo?.artistSlug || artistInfo?.slug;
-  const releaseTitle = currentTrack.releaseTitle || releaseInfo?.title;
-  const releaseSlug = currentTrack.releaseSlug || releaseInfo?.slug;
-
-  const handleArtistClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (artistSlug) {
-      navigate(`/music/artist/${artistSlug}`);
-    }
-  };
-
-  const handleReleaseClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (releaseSlug) {
-      navigate(`/music/release/${releaseSlug}`);
-    } else if (currentTrack.releaseId) {
-      navigate(`/music/release/${currentTrack.releaseId}`);
-    }
-  };
-
-  return (
-    <div className="fixed bottom-[calc(3.8rem+env(safe-area-inset-bottom,0px))] md:bottom-0 left-0 right-0 z-40 bg-[#0B0D20]/95 backdrop-blur-2xl border-t border-[#1E2442] px-3 sm:px-5 py-2.5 shadow-2xl transition-all">
-      <div className="max-w-[1760px] mx-auto flex items-center justify-between gap-3 sm:gap-4">
-        {/* Track Info & Artwork */}
-        <div className="flex items-center gap-3 min-w-0 w-1/3 md:w-1/4">
-          <div
-            onClick={() => setIsExpanded((prev) => !prev)}
-            className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-purple-900/50 to-slate-900 border border-purple-500/20 overflow-hidden shrink-0 flex items-center justify-center relative group cursor-pointer shadow-md"
-            title="Развернуть плеер"
-          >
-            {cover ? (
-              <img src={cover} alt={currentTrack.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-            ) : (
-              <Music2 className="w-6 h-6 text-purple-400" />
-            )}
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-              <ChevronUp className="w-5 h-5 text-white" />
-            </div>
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <h4
-                onClick={() => setIsExpanded(true)}
-                className="text-xs sm:text-sm font-bold text-white truncate cursor-pointer hover:text-purple-300 transition-colors"
-                title={currentTrack.title}
-              >
-                {currentTrack.title}
-              </h4>
-              {currentTrack.explicit && (
-                <span className="px-1 py-0.2 text-[9px] font-black rounded bg-rose-500/20 text-rose-400 border border-rose-500/30 shrink-0">
-                  18+
-                </span>
-              )}
-            </div>
-
-            <p className="text-[11px] sm:text-xs text-slate-400 truncate mt-0.5">
-              <span
-                onClick={handleArtistClick}
-                className="hover:text-purple-300 hover:underline cursor-pointer transition-colors"
-              >
-                {artistName}
-              </span>
-              {releaseTitle && (
-                <>
-                  <span className="text-slate-600 mx-1">·</span>
-                  <span
-                    onClick={handleReleaseClick}
-                    className="text-slate-400 hover:text-purple-300 hover:underline cursor-pointer transition-colors"
-                  >
-                    {releaseTitle}
-                  </span>
-                </>
-              )}
-            </p>
-          </div>
-
-          {/* Favorite button in mini player */}
-          {dbUser && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleFavoriteTrack();
-              }}
-              className={`p-1.5 rounded-xl transition-all cursor-pointer shrink-0 ${
-                currentTrack.isFavorite
-                  ? 'text-rose-400 bg-rose-500/15 border border-rose-500/30 shadow-sm'
-                  : 'text-slate-500 hover:text-rose-400 hover:bg-slate-800'
-              }`}
-              title={currentTrack.isFavorite ? 'Удалить из любимых треков' : 'Добавить в любимые треки'}
-            >
-              <Heart className={`w-4 h-4 ${currentTrack.isFavorite ? 'fill-rose-500 text-rose-500' : ''}`} />
-            </button>
-          )}
-        </div>
-
-        {/* Playback Controls & Progress Scrubber */}
-        <div className="flex flex-col items-center gap-1 flex-1 max-w-xl">
-          <div className="flex items-center gap-2 sm:gap-4">
-            {/* Shuffle Toggle */}
-            <button
-              onClick={toggleShuffle}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer hidden sm:block ${
-                isShuffle ? 'text-purple-400 bg-purple-500/15' : 'text-slate-500 hover:text-slate-300'
-              }`}
-              title={isShuffle ? 'Случайный порядок включен' : 'Включить случайный порядок'}
-            >
-              <Shuffle className="w-3.5 h-3.5" />
-            </button>
-
-            {/* Prev Track */}
-            <button
-              onClick={playPrev}
-              className="p-1.5 text-slate-400 hover:text-white transition-colors cursor-pointer"
-              title="Предыдущий трек"
-            >
-              <SkipBack className="w-4 h-4 fill-current" />
-            </button>
-
-            {/* Play/Pause */}
-            <button
-              onClick={togglePlayPause}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-purple-500/25 hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0"
-              title={isPlaying ? 'Пауза' : 'Воспроизведение'}
-            >
-              {isPlaying ? (
-                <Pause className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
-              ) : (
-                <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-current ml-0.5" />
-              )}
-            </button>
-
-            {/* Next Track */}
-            <button
-              onClick={playNext}
-              disabled={queueIndex >= queue.length - 1 && repeatMode === 'OFF' && !isShuffle}
-              className={`p-1.5 transition-colors cursor-pointer ${
-                queueIndex >= queue.length - 1 && repeatMode === 'OFF' && !isShuffle
-                  ? 'text-slate-700 cursor-not-allowed'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="Следующий трек"
-            >
-              <SkipForward className="w-4 h-4 fill-current" />
-            </button>
-
-            {/* Repeat Toggle */}
-            <button
-              onClick={toggleRepeat}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer relative hidden sm:block ${
-                repeatMode !== 'OFF' ? 'text-purple-400 bg-purple-500/15' : 'text-slate-500 hover:text-slate-300'
-              }`}
-              title={`Повтор: ${repeatMode === 'OFF' ? 'выкл' : repeatMode === 'ONE' ? 'трек' : 'очередь'}`}
-            >
-              <Repeat className="w-3.5 h-3.5" />
-              {repeatMode === 'ONE' && (
-                <span className="absolute -top-1 -right-1 text-[8px] font-black bg-purple-500 text-slate-950 rounded-full w-3 h-3 flex items-center justify-center">
-                  1
-                </span>
-              )}
-            </button>
-          </div>
-
-          {/* Timeline Scrubber */}
-          <div className="w-full flex items-center gap-2 text-[10px] sm:text-[11px] font-mono text-slate-400">
-            <span className="w-8 text-right select-none">{formatTime(currentTime)}</span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              value={currentTime}
-              onChange={(e) => seek(parseFloat(e.target.value))}
-              className="flex-1 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500 hover:accent-purple-400 transition-all"
-            />
-            <span className="w-8 text-left select-none">{formatTime(duration)}</span>
-          </div>
-        </div>
-
-        {/* Volume & Actions */}
-        <div className="flex items-center justify-end gap-2 sm:gap-3 w-1/3 md:w-1/4">
-          <div className="hidden md:flex items-center gap-2">
-            <button onClick={toggleMute} className="text-slate-400 hover:text-white transition-colors cursor-pointer">
-              {isMuted || volume === 0 ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4" />}
-            </button>
-
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={isMuted ? 0 : volume}
-              onChange={(e) => setVolume(parseFloat(e.target.value))}
-              className="w-16 lg:w-20 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
-            />
-          </div>
-
-          {/* Expand Fullscreen Button */}
-          <button
-            onClick={() => setIsExpanded(true)}
-            className="p-1.5 rounded-lg bg-slate-800/60 hover:bg-purple-600/30 text-slate-300 hover:text-purple-300 border border-slate-700/50 hover:border-purple-500/40 transition-colors cursor-pointer"
-            title="Развернуть"
-          >
-            <ChevronUp className="w-4 h-4" />
-          </button>
-
-          {/* Close Player Button */}
-          <button
-            onClick={closePlayer}
-            className="p-1.5 text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
-            title="Закрыть плеер"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// UI component for Full Expanded Player Modal
-const ExpandedMusicPlayer: React.FC = () => {
-  const { navigate } = useRouter();
-  const { dbUser } = useAuth();
-  const {
-    currentTrack,
-    queue,
-    queueIndex,
-    releaseInfo,
-    artistInfo,
-    isPlaying,
-    currentTime,
-    duration,
-    volume,
-    isMuted,
-    isExpanded,
-    repeatMode,
-    isShuffle,
-    activeTab,
-    setActiveTab,
-    togglePlayPause,
-    playNext,
-    playPrev,
-    playQueueIndex,
-    seek,
-    setVolume,
-    toggleMute,
-    toggleRepeat,
-    toggleShuffle,
-    setIsExpanded,
-    closePlayer,
-    toggleFavoriteTrack,
-  } = useMusicPlayer();
-
-  if (!isExpanded || !currentTrack) return null;
-
-  const cover = currentTrack.releaseCover || releaseInfo?.cover;
-  const artistName = currentTrack.artistName || releaseInfo?.artistName || artistInfo?.stageName || 'Исполнитель';
-  const artistSlug = currentTrack.artistSlug || releaseInfo?.artistSlug || artistInfo?.slug;
-  const releaseTitle = currentTrack.releaseTitle || releaseInfo?.title;
-  const releaseSlug = currentTrack.releaseSlug || releaseInfo?.slug;
-
-  const handleArtistClick = () => {
-    setIsExpanded(false);
-    if (artistSlug) {
-      navigate(`/music/artist/${artistSlug}`);
-    }
-  };
-
-  const handleReleaseClick = () => {
-    setIsExpanded(false);
-    if (releaseSlug) {
-      navigate(`/music/release/${releaseSlug}`);
-    } else if (currentTrack.releaseId) {
-      navigate(`/music/release/${currentTrack.releaseId}`);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-[#080A18]/95 backdrop-blur-3xl flex flex-col justify-between overflow-y-auto animate-in fade-in duration-200">
-      {/* Dynamic Background Glow */}
-      <div
-        className="absolute inset-0 opacity-20 pointer-events-none blur-3xl scale-125"
-        style={{
-          backgroundImage: cover ? `url(${cover})` : undefined,
-          backgroundPosition: 'center',
-          backgroundSize: 'cover',
-        }}
-      />
-
-      {/* Header */}
-      <div className="relative z-10 max-w-6xl mx-auto w-full px-4 sm:px-8 pt-6 pb-4 flex items-center justify-between border-b border-slate-800/60 shrink-0">
-        <button
-          onClick={() => setIsExpanded(false)}
-          className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition flex items-center gap-2 text-xs font-bold cursor-pointer"
-        >
-          <ChevronDown className="w-5 h-5" />
-          <span className="hidden sm:inline">Свернуть</span>
-        </button>
-
-        <div className="text-center">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-purple-400 font-bold block">
-            СЕЙЧАС ВОСПРОИЗВОДИТСЯ
-          </span>
-          <h3 className="text-sm font-bold text-white max-w-xs truncate">{releaseTitle || 'Музыкальный плеер'}</h3>
-        </div>
-
-        {/* Tab switcher */}
-        <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-xl border border-slate-800">
-          <button
-            onClick={() => setActiveTab('queue')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'queue'
-                ? 'bg-purple-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <ListMusic className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Очередь ({queue.length})</span>
-          </button>
-
-          {currentTrack.lyrics && (
-            <button
-              onClick={() => setActiveTab('lyrics')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'lyrics'
-                  ? 'bg-purple-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <FileText className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Текст</span>
-            </button>
-          )}
-
-          {currentTrack.authorNote && (
-            <button
-              onClick={() => setActiveTab('note')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'note'
-                  ? 'bg-amber-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Info className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Заметка</span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Main Body Grid */}
-      <div className="relative z-10 max-w-6xl mx-auto w-full px-4 sm:px-8 py-6 flex-1 grid grid-cols-1 md:grid-cols-12 gap-8 items-center min-h-0">
-        {/* Left Column: Big Cover Artwork & Info & Controls */}
-        <div className="md:col-span-6 lg:col-span-5 flex flex-col items-center text-center space-y-6">
-          <div className="relative w-64 h-64 sm:w-80 sm:h-80 rounded-3xl overflow-hidden bg-slate-950 border border-purple-500/30 shadow-[0_0_60px_rgba(147,51,234,0.25)] group">
-            {cover ? (
-              <img src={cover} alt={currentTrack.title} className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-purple-900/40 to-slate-950">
-                <Disc className="w-24 h-24 text-purple-400 opacity-60 animate-spin-slow" />
-              </div>
-            )}
-            {isPlaying && (
-              <div className="absolute top-4 right-4 px-2.5 py-1 rounded-full bg-purple-600/90 backdrop-blur-md text-white text-[10px] font-bold tracking-wider flex items-center gap-1.5 shadow-lg border border-purple-400/30">
-                <Sparkles className="w-3 h-3 animate-spin" />
-                <span>ИГРАЕТ</span>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2 w-full">
-            <div className="flex items-center justify-center gap-2">
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-snug">
-                {currentTrack.title}
-              </h2>
-              {currentTrack.explicit && (
-                <span className="px-2 py-0.5 text-xs font-black rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 uppercase">
-                  18+
-                </span>
-              )}
-            </div>
-
-            <p className="text-sm sm:text-base font-medium text-slate-300 flex items-center justify-center gap-2">
-              <span onClick={handleArtistClick} className="hover:text-purple-300 hover:underline cursor-pointer">
-                {artistName}
-              </span>
-              {releaseTitle && (
-                <>
-                  <span className="text-slate-600">•</span>
-                  <span onClick={handleReleaseClick} className="text-slate-400 hover:text-purple-300 hover:underline cursor-pointer">
-                    {releaseTitle}
-                  </span>
-                </>
-              )}
-            </p>
-
-            {/* Favorite Track Button */}
-            {dbUser && (
-              <div className="pt-1 flex items-center justify-center">
-                <button
-                  onClick={() => toggleFavoriteTrack()}
-                  className={`px-3.5 py-1.5 rounded-full transition-all cursor-pointer inline-flex items-center gap-2 text-xs font-bold ${
-                    currentTrack.isFavorite
-                      ? 'text-rose-400 bg-rose-500/15 border border-rose-500/30 shadow-lg shadow-rose-500/10'
-                      : 'text-slate-400 hover:text-white bg-slate-900/80 hover:bg-slate-800 border border-slate-800'
-                  }`}
-                  title={currentTrack.isFavorite ? 'Удалить из любимых' : 'Добавить в любимые'}
-                >
-                  <Heart className={`w-3.5 h-3.5 ${currentTrack.isFavorite ? 'fill-rose-500 text-rose-500' : ''}`} />
-                  <span>{currentTrack.isFavorite ? 'В любимых треках' : 'В любимые'}</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Timeline Scrubber */}
-          <div className="w-full space-y-2">
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              value={currentTime}
-              onChange={(e) => seek(parseFloat(e.target.value))}
-              className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500 hover:accent-purple-400 transition-all"
-            />
-            <div className="flex items-center justify-between text-xs font-mono text-slate-400">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatTime(duration)}</span>
-            </div>
-          </div>
-
-          {/* Primary Controls */}
-          <div className="flex items-center justify-center gap-6 w-full pt-2">
-            <button
-              onClick={toggleShuffle}
-              className={`p-2.5 rounded-xl transition ${
-                isShuffle ? 'text-purple-400 bg-purple-500/20 border border-purple-500/40' : 'text-slate-400 hover:text-white'
-              }`}
-              title="Случайный порядок"
-            >
-              <Shuffle className="w-5 h-5" />
-            </button>
-
-            <button
-              onClick={playPrev}
-              className="p-3 text-slate-300 hover:text-white transition cursor-pointer"
-              title="Предыдущий"
-            >
-              <SkipBack className="w-7 h-7 fill-current" />
-            </button>
-
-            <button
-              onClick={togglePlayPause}
-              className="w-16 h-16 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-2xl shadow-purple-500/40 hover:scale-105 active:scale-95 transition cursor-pointer"
-              title={isPlaying ? 'Пауза' : 'Играть'}
-            >
-              {isPlaying ? <Pause className="w-8 h-8 fill-current" /> : <Play className="w-8 h-8 fill-current ml-1" />}
-            </button>
-
-            <button
-              onClick={playNext}
-              className="p-3 text-slate-300 hover:text-white transition cursor-pointer"
-              title="Следующий"
-            >
-              <SkipForward className="w-7 h-7 fill-current" />
-            </button>
-
-            <button
-              onClick={toggleRepeat}
-              className={`p-2.5 rounded-xl transition relative ${
-                repeatMode !== 'OFF' ? 'text-purple-400 bg-purple-500/20 border border-purple-500/40' : 'text-slate-400 hover:text-white'
-              }`}
-              title="Повтор"
-            >
-              <Repeat className="w-5 h-5" />
-              {repeatMode === 'ONE' && (
-                <span className="absolute -top-1 -right-1 text-[9px] font-black bg-purple-500 text-slate-950 rounded-full w-3.5 h-3.5 flex items-center justify-center">
-                  1
-                </span>
-              )}
-            </button>
-          </div>
-
-          {/* Volume control */}
-          <div className="flex items-center justify-center gap-3 w-full max-w-xs pt-2">
-            <button onClick={toggleMute} className="text-slate-400 hover:text-white transition">
-              {isMuted || volume === 0 ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4" />}
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={isMuted ? 0 : volume}
-              onChange={(e) => setVolume(parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
-            />
-          </div>
-        </div>
-
-        {/* Right Column: Tab Content Panel (Queue / Lyrics / Note) */}
-        <div className="md:col-span-6 lg:col-span-7 h-full flex flex-col bg-slate-900/50 border border-slate-800/80 rounded-3xl p-5 backdrop-blur-xl max-h-[500px] overflow-hidden">
-          {/* TAB 1: Queue */}
-          {activeTab === 'queue' && (
-            <div className="flex flex-col h-full min-h-0">
-              <div className="flex items-center justify-between mb-4 shrink-0 pb-3 border-b border-slate-800">
-                <h4 className="font-bold text-base text-white flex items-center gap-2">
-                  <ListMusic className="w-5 h-5 text-purple-400" />
-                  <span>Очередь воспроизведения</span>
-                </h4>
-                <span className="text-xs text-slate-400 font-mono font-semibold">
-                  {queueIndex + 1} из {queue.length}
-                </span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-1">
-                {queue.map((t, idx) => {
-                  const isCurrent = idx === queueIndex;
-                  return (
-                    <div
-                      key={`${t.id}-${idx}`}
-                      onClick={() => playQueueIndex(idx)}
-                      className={`flex items-center justify-between p-3 rounded-2xl transition cursor-pointer group ${
-                        isCurrent
-                          ? 'bg-purple-600/20 border border-purple-500/40 text-purple-300'
-                          : 'hover:bg-slate-800/60 text-slate-300 border border-transparent'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className="w-6 text-center text-xs font-mono font-bold text-slate-500 group-hover:text-purple-400 shrink-0">
-                          {isCurrent ? '▶' : idx + 1}
-                        </span>
-
-                        <div className="w-9 h-9 rounded-lg overflow-hidden bg-slate-950 border border-slate-800 shrink-0">
-                          {t.releaseCover ? (
-                            <img src={t.releaseCover} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-slate-600">
-                              <Music2 className="w-4 h-4" />
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h5 className={`text-sm font-bold truncate ${isCurrent ? 'text-white' : 'text-slate-200'}`}>
-                              {t.title}
-                            </h5>
-                            {t.explicit && (
-                              <span className="px-1 py-0.2 text-[9px] font-black rounded bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                                18+
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-400 truncate">
-                            {t.artistName || artistName}
-                          </p>
-                        </div>
-                      </div>
-
-                      <span className="text-xs font-mono text-slate-500 shrink-0 ml-3">
-                        {t.duration ? `${Math.floor(t.duration / 60)}:${Math.floor(t.duration % 60).toString().padStart(2, '0')}` : '—'}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 2: Lyrics */}
-          {activeTab === 'lyrics' && (
-            <div className="flex flex-col h-full min-h-0">
-              <div className="flex items-center justify-between mb-4 shrink-0 pb-3 border-b border-slate-800">
-                <h4 className="font-bold text-base text-white flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-purple-400" />
-                  <span>Текст песни «{currentTrack.title}»</span>
-                </h4>
-              </div>
-
-              <div className="flex-1 overflow-y-auto custom-scrollbar p-4 bg-slate-950/60 rounded-2xl border border-slate-800/80">
-                {currentTrack.lyrics ? (
-                  <p className="text-sm sm:text-base leading-relaxed text-slate-200 font-sans whitespace-pre-line">
-                    {currentTrack.lyrics}
-                  </p>
-                ) : (
-                  <p className="text-slate-500 text-sm italic">Текст песни отсутствует</p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 3: Author Note */}
-          {activeTab === 'note' && (
-            <div className="flex flex-col h-full min-h-0">
-              <div className="flex items-center justify-between mb-4 shrink-0 pb-3 border-b border-slate-800">
-                <h4 className="font-bold text-base text-amber-300 flex items-center gap-2">
-                  <Info className="w-5 h-5 text-amber-400" />
-                  <span>Заметка автора</span>
-                </h4>
-              </div>
-
-              <div className="flex-1 overflow-y-auto custom-scrollbar p-5 bg-amber-950/20 border border-amber-500/30 rounded-2xl text-amber-100">
-                {currentTrack.authorNote ? (
-                  <p className="text-sm leading-relaxed whitespace-pre-line font-medium">
-                    {currentTrack.authorNote}
-                  </p>
-                ) : (
-                  <p className="text-slate-500 text-sm italic">Заметка от исполнителя отсутствует</p>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};

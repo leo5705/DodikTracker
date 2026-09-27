@@ -30,6 +30,7 @@ export const users = pgTable('users', {
   telegramAuthExpires: timestamp('telegram_auth_expires'),
   notificationSettings: text('notification_settings').notNull().default('{"friendRequests":true,"friendReviews":true,"likes":true,"comments":true,"newReleases":true,"lists":true}'),
   showAdultContent: boolean('show_adult_content').notNull().default(false),
+  musicLyricsProvider: text('music_lyrics_provider').notNull().default('auto'), // 'auto' | 'youtube' | 'genius'
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({
@@ -908,6 +909,7 @@ export const artistProfilesRelations = relations(artistProfiles, ({ one, many })
   user: one(users, { fields: [artistProfiles.userId], references: [users.id] }),
   releases: many(musicReleases),
   tracks: many(musicTracks),
+  subscriptions: many(artistSubscriptions),
 }));
 
 export const musicReleasesRelations = relations(musicReleases, ({ one, many }) => ({
@@ -1063,6 +1065,144 @@ export const musicFavoriteTracks = pgTable('music_favorite_tracks', {
 export const musicFavoriteTracksRelations = relations(musicFavoriteTracks, ({ one }) => ({
   user: one(users, { fields: [musicFavoriteTracks.userId], references: [users.id] }),
   track: one(musicTracks, { fields: [musicFavoriteTracks.trackId], references: [musicTracks.id] }),
+}));
+
+// 51. Music Playlists
+export const musicPlaylists = pgTable('music_playlists', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  title: text('title').notNull(),
+  description: text('description'),
+  cover: text('cover'),
+  visibility: text('visibility').notNull().default('PUBLIC'), // 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
+  isCollaborative: boolean('is_collaborative').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  userIdIdx: index('music_playlists_user_id_idx').on(table.userId),
+  visibilityIdx: index('music_playlists_visibility_idx').on(table.visibility),
+  isCollaborativeIdx: index('music_playlists_is_collaborative_idx').on(table.isCollaborative),
+  createdAtIdx: index('music_playlists_created_at_idx').on(table.createdAt),
+}));
+
+// 52. Music Playlist Tracks (Junction)
+export const musicPlaylistTracks = pgTable('music_playlist_tracks', {
+  id: serial('id').primaryKey(),
+  playlistId: integer('playlist_id').references(() => musicPlaylists.id, { onDelete: 'cascade' }).notNull(),
+  trackId: integer('track_id').references(() => musicTracks.id, { onDelete: 'cascade' }).notNull(),
+  addedByUserId: integer('added_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  position: integer('position').notNull().default(1),
+  addedAt: timestamp('added_at').defaultNow(),
+}, (table) => ({
+  playlistIdIdx: index('music_playlist_tracks_playlist_id_idx').on(table.playlistId),
+  trackIdIdx: index('music_playlist_tracks_track_id_idx').on(table.trackId),
+  addedByUserIdIdx: index('music_playlist_tracks_added_by_user_id_idx').on(table.addedByUserId),
+  positionIdx: index('music_playlist_tracks_position_idx').on(table.playlistId, table.position),
+  unqPlaylistTrack: uniqueIndex('music_playlist_tracks_unq').on(table.playlistId, table.trackId),
+}));
+
+// 52b. Music Playlist Members (Collaborators & Viewers)
+export const musicPlaylistMembers = pgTable('music_playlist_members', {
+  id: serial('id').primaryKey(),
+  playlistId: integer('playlist_id').references(() => musicPlaylists.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  role: text('role').notNull().default('COLLABORATOR'), // 'COLLABORATOR' | 'VIEWER'
+  canAddTracks: boolean('can_add_tracks').notNull().default(true),
+  canRemoveTracks: boolean('can_remove_tracks').notNull().default(false),
+  addedAt: timestamp('added_at').defaultNow(),
+}, (table) => ({
+  playlistIdIdx: index('music_playlist_members_playlist_id_idx').on(table.playlistId),
+  userIdIdx: index('music_playlist_members_user_id_idx').on(table.userId),
+  unqPlaylistMember: uniqueIndex('music_playlist_members_unq').on(table.playlistId, table.userId),
+}));
+
+export const musicPlaylistsRelations = relations(musicPlaylists, ({ one, many }) => ({
+  user: one(users, { fields: [musicPlaylists.userId], references: [users.id] }),
+  tracks: many(musicPlaylistTracks),
+  members: many(musicPlaylistMembers),
+}));
+
+export const musicPlaylistTracksRelations = relations(musicPlaylistTracks, ({ one }) => ({
+  playlist: one(musicPlaylists, { fields: [musicPlaylistTracks.playlistId], references: [musicPlaylists.id] }),
+  track: one(musicTracks, { fields: [musicPlaylistTracks.trackId], references: [musicTracks.id] }),
+  addedByUser: one(users, { fields: [musicPlaylistTracks.addedByUserId], references: [users.id] }),
+}));
+
+export const musicPlaylistMembersRelations = relations(musicPlaylistMembers, ({ one }) => ({
+  playlist: one(musicPlaylists, { fields: [musicPlaylistMembers.playlistId], references: [musicPlaylists.id] }),
+  user: one(users, { fields: [musicPlaylistMembers.userId], references: [users.id] }),
+}));
+
+// 53. Artist Subscriptions Table
+export const artistSubscriptions = pgTable('artist_subscriptions', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  // For Dodik artists
+  artistId: integer('artist_id').references(() => artistProfiles.id, { onDelete: 'cascade' }),
+  // For External artists
+  provider: text('provider'), // 'youtube' | 'soundcloud'
+  externalArtistId: text('external_artist_id'),
+  externalArtistName: text('external_artist_name'),
+  externalArtistAvatar: text('external_artist_avatar'),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  userIdIdx: index('artist_sub_user_id_idx').on(table.userId),
+  artistIdIdx: index('artist_sub_artist_id_idx').on(table.artistId),
+  unqDodikSub: uniqueIndex('artist_sub_dodik_unq').on(table.userId, table.artistId),
+  unqExternalSub: uniqueIndex('artist_sub_ext_unq').on(table.userId, table.provider, table.externalArtistId),
+}));
+
+export const artistSubscriptionsRelations = relations(artistSubscriptions, ({ one }) => ({
+  user: one(users, { fields: [artistSubscriptions.userId], references: [users.id] }),
+  artist: one(artistProfiles, { fields: [artistSubscriptions.artistId], references: [artistProfiles.id] }),
+}));
+
+// 54. User Music Lyrics Preferences (Per-Track override)
+export const userMusicLyricsPreferences = pgTable('user_music_lyrics_preferences', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  // Reference for Dodik tracks
+  trackId: integer('track_id').references(() => musicTracks.id, { onDelete: 'cascade' }),
+  // Reference for External tracks
+  trackProvider: text('track_provider'), // 'youtube' | 'soundcloud'
+  externalTrackId: text('external_track_id'),
+  // Preference
+  preferredLyricsProvider: text('preferred_lyrics_provider').notNull(), // 'youtube' | 'genius'
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  userIdIdx: index('user_lyrics_pref_user_id_idx').on(table.userId),
+  unqDodikTrack: uniqueIndex('user_lyrics_pref_dodik_unq').on(table.userId, table.trackId),
+  unqExternalTrack: uniqueIndex('user_lyrics_pref_ext_unq').on(table.userId, table.trackProvider, table.externalTrackId),
+}));
+
+export const userMusicLyricsPreferencesRelations = relations(userMusicLyricsPreferences, ({ one }) => ({
+  user: one(users, { fields: [userMusicLyricsPreferences.userId], references: [users.id] }),
+  track: one(musicTracks, { fields: [userMusicLyricsPreferences.trackId], references: [musicTracks.id] }),
+}));
+
+// 55. User Music History (All Playback Sessions across Dodik & External)
+export const userMusicHistory = pgTable('user_music_history', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  trackId: text('track_id').notNull(),
+  provider: text('provider').notNull().default('dodik'), // 'dodik' | 'youtube'
+  title: text('title').notNull(),
+  artistName: text('artist_name').notNull(),
+  artistId: text('artist_id'),
+  releaseTitle: text('release_title'),
+  releaseCover: text('release_cover'),
+  durationSeconds: integer('duration_seconds'),
+  listenedAt: timestamp('listened_at').defaultNow(),
+}, (table) => ({
+  userIdIdx: index('user_music_history_user_id_idx').on(table.userId),
+  trackIdIdx: index('user_music_history_track_id_idx').on(table.trackId),
+  listenedAtIdx: index('user_music_history_listened_at_idx').on(table.listenedAt),
+  userTrackIdx: index('user_music_history_user_track_idx').on(table.userId, table.trackId),
+}));
+
+export const userMusicHistoryRelations = relations(userMusicHistory, ({ one }) => ({
+  user: one(users, { fields: [userMusicHistory.userId], references: [users.id] }),
 }));
 
 

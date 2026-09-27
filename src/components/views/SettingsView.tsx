@@ -20,6 +20,7 @@ import {
   AlertCircle,
   Unlink,
   RefreshCw,
+  Music,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useNotifications } from '../../context/NotificationContext.tsx';
@@ -37,7 +38,7 @@ interface SettingsViewProps {
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile }) => {
   const { dbUser, authFetch, logout, refreshProfile } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'privacy' | 'notifications' | 'invites'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'privacy' | 'music' | 'notifications' | 'invites'>('profile');
 
   // Profile Form state
   const [username, setUsername] = useState('');
@@ -52,6 +53,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
   const [listVisibility, setListVisibility] = useState('PUBLIC');
   const [statisticsVisibility, setStatisticsVisibility] = useState('PUBLIC');
   const [showAdultContent, setShowAdultContent] = useState(false);
+
+  // Music state
+  const [musicLyricsProvider, setMusicLyricsProvider] = useState('auto');
 
   // Telegram & Notifications state
   const { soundEnabled, setSoundEnabled, triggerTestToast } = useNotifications();
@@ -91,6 +95,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
       setListVisibility(dbUser.listVisibility || 'PUBLIC');
       setStatisticsVisibility(dbUser.statisticsVisibility || 'PUBLIC');
       setShowAdultContent(Boolean(dbUser.showAdultContent));
+      setMusicLyricsProvider(dbUser.musicLyricsProvider || 'auto');
       setTelegramChatId(dbUser.telegramChatId || '');
       if (dbUser.notificationSettings) {
         setNotificationSettings(dbUser.notificationSettings);
@@ -179,6 +184,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
           listVisibility,
           statisticsVisibility,
           showAdultContent,
+          musicLyricsProvider,
           telegramChatId: telegramChatId.trim() || null,
           notificationSettings: JSON.stringify(notificationSettings)
         }),
@@ -357,6 +363,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
   const tabs = [
     { id: 'profile', label: 'Профиль', icon: User },
     { id: 'privacy', label: 'Приватность', icon: Shield },
+    { id: 'music', label: 'Музыка', icon: Music },
     { id: 'notifications', label: 'Уведомления', icon: Bell },
     { id: 'invites', label: 'Мои приглашения', icon: Ticket },
   ];
@@ -527,6 +534,64 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
               className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white font-bold text-xs shadow-lg shadow-[#7C3AED]/25 transition-all disabled:opacity-50 cursor-pointer"
             >
               {saving ? 'Сохранение...' : 'Применить настройки'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {activeTab === 'music' && (
+        <form onSubmit={handleSaveSettings} className="space-y-6">
+          <div className="p-6 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-5">
+            <h3 className="text-xs font-bold text-[#A78BFA] uppercase tracking-wider font-mono pb-2 border-b border-[#1E2442]">
+              Настройки прослушивания
+            </h3>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-[#CBD5E1]">Источник текста по умолчанию</label>
+                <div className="grid grid-cols-1 gap-3">
+                  {[
+                    { id: 'auto', label: 'Автоматически', description: 'Определяет источник автоматически (YouTube Music → Genius).' },
+                    { id: 'youtube', label: 'YouTube Music', description: 'Предпочитать тексты из YouTube Music.' },
+                    { id: 'genius', label: 'Genius', description: 'Предпочитать тексты из Genius.' },
+                  ].map((option) => (
+                    <label
+                      key={option.id}
+                      className={`flex items-start gap-3.5 p-4 rounded-2xl border cursor-pointer transition-all ${
+                        musicLyricsProvider === option.id
+                          ? 'bg-[#151932] border-[#8B5CF6]/50 text-white shadow-md'
+                          : 'bg-[#0B0D20] border-[#1E2442] text-[#94A3B8] hover:border-[#1E2442]/80'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="musicLyricsProvider"
+                        value={option.id}
+                        checked={musicLyricsProvider === option.id}
+                        onChange={(e) => setMusicLyricsProvider(e.target.value)}
+                        className="mt-1"
+                      />
+                      <div>
+                        <span className="text-sm font-bold block">{option.label}</span>
+                        <span className="text-xs opacity-70">{option.description}</span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-[#64748B] mt-2">
+                  Определяет, откуда приложение пытается получить текст песни, если для трека доступно несколько источников.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white font-bold text-xs shadow-lg shadow-[#7C3AED]/25 transition-all disabled:opacity-50 cursor-pointer"
+            >
+              {saving ? 'Сохранение...' : 'Применить настройки музыки'}
             </button>
           </div>
         </form>

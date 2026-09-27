@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Play, Pause, Disc, Star, Music2, Loader2, Headphones } from 'lucide-react';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
+import { getBestMusicImageUrl } from '../../utils/musicImageUtils.ts';
+import { ArtistLinks } from './ArtistLinks.tsx';
 
 export interface ReleaseCardData {
   id: number;
@@ -13,6 +15,7 @@ export interface ReleaseCardData {
   releaseDate?: string | null;
   stageName?: string | null;
   artistSlug?: string | null;
+  artists?: string[];
   avgScore?: number;
   reviewsCount?: number;
   tracksCount?: number;
@@ -94,7 +97,7 @@ export const MusicReleaseCard: React.FC<MusicReleaseCardProps> = ({ release }) =
         <div className="relative aspect-square rounded-xl overflow-hidden bg-[#11152A] border border-[#1E2442] group-hover:shadow-lg transition-all">
           {release.cover ? (
             <img
-              src={release.cover}
+              src={getBestMusicImageUrl(release.cover, 'medium')}
               alt={release.title}
               className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
             />
@@ -139,9 +142,14 @@ export const MusicReleaseCard: React.FC<MusicReleaseCardProps> = ({ release }) =
             {release.title}
           </h3>
 
-          <p className="text-xs text-[#94A3B8] hover:text-white truncate">
-            {release.stageName || 'Исполнитель'}
-          </p>
+          <div className="text-xs text-[#94A3B8] truncate">
+            <ArtistLinks
+              artistName={release.stageName}
+              artists={release.artists}
+              artistSlug={release.artistSlug}
+              artistId={release.artistId}
+            />
+          </div>
         </div>
       </div>
 

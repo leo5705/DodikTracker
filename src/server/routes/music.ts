@@ -15,12 +15,24 @@ import {
   ptsTransactions,
   musicFavoriteReleases,
   musicFavoriteTracks,
+  musicPlaylists,
+  musicPlaylistTracks,
+  musicPlaylistMembers,
   users,
   activities,
+  artistSubscriptions,
+  userMusicHistory,
 } from '../../db/schema.ts';
 import { eq, and, or, desc, asc, sql, ilike, inArray, gt, gte } from 'drizzle-orm';
 import { notificationService } from '../services/notificationService.ts';
 import { logAdminAction } from './admin/auditHelper.ts';
+import { youtubeMusicService, youtubeSearchLimiter } from '../services/youtubeMusicService.ts';
+import { youtubeMusicProvider } from '../services/externalMusic/youtubeMusicProvider.ts';
+import { externalMusicConfig } from '../services/externalMusic/externalMusicConfig.ts';
+import { lyricsService } from '../services/externalMusic/lyricsService.ts';
+import { geniusProvider } from '../services/externalMusic/lyrics/geniusProvider.ts';
+import { musicRecommendationService } from '../services/musicRecommendationService.ts';
+import { parseRawInput, matchParsedTracks } from '../services/playlistImportService.ts';
 
 export const musicRouter = Router();
 
@@ -537,8 +549,26 @@ musicRouter.get('/artists/:idOrSlug', optionalAuth, async (req: AuthRequest, res
 
     const totalListens = releasesList.reduce((acc, r) => acc + (r.listenCount || 0), 0);
 
+    let isSubscribed = false;
+    if (req.dbUser) {
+      const sub = await db
+        .select({ id: artistSubscriptions.id })
+        .from(artistSubscriptions)
+        .where(
+          and(
+            eq(artistSubscriptions.userId, req.dbUser.id),
+            eq(artistSubscriptions.artistId, artist.id)
+          )
+        )
+        .limit(1);
+      isSubscribed = sub.length > 0;
+    }
+
     res.json({
-      artist,
+      artist: {
+        ...artist,
+        isSubscribed,
+      },
       releases: releasesList,
       tracks: tracksList,
       reviews: reviewsList,
@@ -820,14 +850,10 @@ musicRouter.get('/releases', optionalAuth, async (req: AuthRequest, res: Respons
     // Privacy / Status Filter
     if (statusParam && isStaffRole(user?.role)) {
       conditions.push(eq(musicReleases.status, statusParam));
-    } else if (userArtist) {
-      // Show published, plus user's own releases in any status
-      conditions.push(
-        or(
-          eq(musicReleases.status, 'PUBLISHED'),
-          eq(musicReleases.artistId, userArtist.id)
-        )
-      );
+    } else if (artistId && userArtist && userArtist.id === artistId) {
+      if (statusParam && ['DRAFT', 'PENDING_REVIEW', 'PUBLISHED', 'REJECTED', 'ARCHIVED'].includes(statusParam)) {
+        conditions.push(eq(musicReleases.status, statusParam));
+      }
     } else {
       conditions.push(eq(musicReleases.status, 'PUBLISHED'));
     }
@@ -935,6 +961,7 @@ musicRouter.get('/releases/:idOrSlug', optionalAuth, async (req: AuthRequest, re
         cover: musicReleases.cover,
         releaseDate: musicReleases.releaseDate,
         status: musicReleases.status,
+        rejectionReason: musicReleases.rejectionReason,
         listenCount: musicReleases.listenCount,
         createdAt: musicReleases.createdAt,
         updatedAt: musicReleases.updatedAt,
@@ -2271,12 +2298,18 @@ musicRouter.get('/my/summary', requireAuth, async (req: AuthRequest, res: Respon
       .innerJoin(musicReleases, eq(musicReviews.releaseId, musicReleases.id))
       .where(and(eq(musicReviews.userId, user.id), eq(musicReleases.status, 'PUBLISHED')));
 
+    const [playlistsCountRes] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.userId, user.id));
+
     res.json({
       favoriteReleasesCount: Number(favReleasesCount?.count || 0),
       favoriteTracksCount: Number(favTracksCount?.count || 0),
       recentTracksCount: Number(recentCountRes.rows?.[0]?.count || 0),
       totalListeningSeconds: Number(recentCountRes.rows?.[0]?.totalSeconds || 0),
       reviewsCount: Number(reviewsCountRes?.count || 0),
+      playlistsCount: Number(playlistsCountRes?.count || 0),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -3104,6 +3137,112 @@ musicRouter.post('/applications/admin/:id/reject', requireAuth, requireAdminOnly
 // ==========================================
 
 /**
+ * GET /api/music/studio/releases
+ * Musician Studio: List ONLY the authenticated user's releases across all moderation statuses (DRAFT, PENDING_REVIEW, PUBLISHED, REJECTED, ARCHIVED)
+ */
+musicRouter.get('/studio/releases', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const artist = await getOrCreateArtistProfileByUserId(user);
+
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string, 10) || 50));
+    const offset = (page - 1) * limit;
+
+    const statusParam = req.query.status ? String(req.query.status).toUpperCase() : null;
+    const type = req.query.type ? String(req.query.type).toUpperCase() : null;
+    const search = req.query.search ? String(req.query.search).trim() : '';
+    const sort = String(req.query.sort || 'newest');
+
+    // If user has no artist profile, return empty releases array
+    if (!artist) {
+      return res.json({
+        releases: [],
+        pagination: {
+          page: 1,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      });
+    }
+
+    // Strict ownership condition: artistId MUST equal current user's artist profile ID
+    const conditions = [eq(musicReleases.artistId, artist.id)];
+
+    if (statusParam && ['DRAFT', 'PENDING_REVIEW', 'PUBLISHED', 'REJECTED', 'ARCHIVED'].includes(statusParam)) {
+      conditions.push(eq(musicReleases.status, statusParam));
+    }
+    if (type && ['SINGLE', 'EP', 'ALBUM'].includes(type)) {
+      conditions.push(eq(musicReleases.type, type));
+    }
+    if (search) {
+      conditions.push(ilike(musicReleases.title, `%${search}%`));
+    }
+
+    const whereClause = and(...conditions);
+
+    // Calculate total count strictly for this user's releases
+    const [countRes] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(musicReleases)
+      .where(whereClause);
+
+    const total = Number(countRes?.count || 0);
+
+    let orderExpr = desc(musicReleases.createdAt);
+    if (sort === 'oldest') {
+      orderExpr = asc(musicReleases.createdAt);
+    } else if (sort === 'highest') {
+      orderExpr = desc(sql`COALESCE((SELECT AVG(overall_score) FROM music_reviews WHERE release_id = music_releases.id), 0)`);
+    } else if (sort === 'popular') {
+      orderExpr = desc(sql`(SELECT count(*) FROM music_reviews WHERE release_id = music_releases.id)`);
+    }
+
+    const releasesList = await db
+      .select({
+        id: musicReleases.id,
+        artistId: musicReleases.artistId,
+        title: musicReleases.title,
+        slug: musicReleases.slug,
+        type: musicReleases.type,
+        description: musicReleases.description,
+        cover: musicReleases.cover,
+        releaseDate: musicReleases.releaseDate,
+        status: musicReleases.status,
+        rejectionReason: musicReleases.rejectionReason,
+        listenCount: musicReleases.listenCount,
+        createdAt: musicReleases.createdAt,
+        updatedAt: musicReleases.updatedAt,
+        stageName: artistProfiles.stageName,
+        artistSlug: artistProfiles.slug,
+        artistAvatar: artistProfiles.avatar,
+        avgScore: sql<number>`COALESCE((SELECT ROUND(AVG(overall_score)::numeric, 1) FROM music_reviews WHERE release_id = music_releases.id), 0)`,
+        reviewsCount: sql<number>`(SELECT count(*) FROM music_reviews WHERE release_id = music_releases.id)`,
+        tracksCount: sql<number>`(SELECT count(*) FROM music_tracks WHERE release_id = music_releases.id)`,
+      })
+      .from(musicReleases)
+      .leftJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+      .where(whereClause)
+      .orderBy(orderExpr)
+      .limit(limit)
+      .offset(offset);
+
+    res.json({
+      releases: releasesList,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/music/studio/stats
  * Real metrics for musician's studio overview & extended analytics
  */
@@ -3727,6 +3866,9 @@ musicRouter.get('/studio/stats', requireAuth, async (req: AuthRequest, res: Resp
 // 8. MUSIC HUB HOME & SEARCH
 // ==========================================
 
+let cachedExternalHits: any[] = [];
+let cachedExternalHitsExpiresAt = 0;
+
 /**
  * GET /api/music/home
  * Returns curated data for the /music portal hub
@@ -3828,6 +3970,65 @@ musicRouter.get('/home', optionalAuth, async (_req, res) => {
       .from(musicGenres)
       .orderBy(asc(musicGenres.name));
 
+    // 9. Popular Dodik tracks
+    const popularDodikTracks = await db
+      .select({
+        id: musicTracks.id,
+        releaseId: musicTracks.releaseId,
+        title: musicTracks.title,
+        slug: musicTracks.slug,
+        audioFile: musicTracks.audioFile,
+        duration: musicTracks.duration,
+        trackNumber: musicTracks.trackNumber,
+        lyrics: musicTracks.lyrics,
+        releaseTitle: musicReleases.title,
+        releaseCover: musicReleases.cover,
+        releaseSlug: musicReleases.slug,
+        stageName: artistProfiles.stageName,
+        artistSlug: artistProfiles.slug,
+      })
+      .from(musicTracks)
+      .innerJoin(musicReleases, eq(musicTracks.releaseId, musicReleases.id))
+      .innerJoin(artistProfiles, eq(musicTracks.artistId, artistProfiles.id))
+      .where(
+        and(
+          eq(musicTracks.status, 'PUBLISHED'),
+          eq(musicReleases.status, 'PUBLISHED')
+        )
+      )
+      .orderBy(desc(musicTracks.listenCount), desc(musicTracks.createdAt))
+      .limit(8);
+
+    const dodikTracksFormatted = popularDodikTracks.map((t) => ({
+      ...t,
+      kind: 'dodik',
+      source: 'dodik',
+    }));
+
+    // 10. Trending YouTube Music Hits (cached 15 min)
+    let trendingHits: any[] = [];
+    if (Date.now() < cachedExternalHitsExpiresAt && cachedExternalHits.length > 0) {
+      trendingHits = cachedExternalHits;
+    } else {
+      try {
+        const timeoutPromise = new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 3000));
+        const searchPromise = youtubeMusicProvider.searchTracks('top hits 2026', { limit: 12 });
+        const externalHits = await Promise.race([searchPromise, timeoutPromise]);
+        if (Array.isArray(externalHits) && externalHits.length > 0) {
+          cachedExternalHits = externalHits;
+          cachedExternalHitsExpiresAt = Date.now() + 15 * 60 * 1000;
+          trendingHits = externalHits;
+        } else if (cachedExternalHits.length > 0) {
+          trendingHits = cachedExternalHits;
+        }
+      } catch (e) {
+        console.warn('Failed to load external hits for home:', e);
+        if (cachedExternalHits.length > 0) {
+          trendingHits = cachedExternalHits;
+        }
+      }
+    }
+
     res.json({
       stats: {
         totalReleases: Number(relCount?.count || 0),
@@ -3839,6 +4040,8 @@ musicRouter.get('/home', optionalAuth, async (_req, res) => {
       latestReleases,
       popularReleases,
       popularArtists,
+      popularTracks: dodikTracksFormatted,
+      trendingHits,
       genres: genresList,
     });
   } catch (err: any) {
@@ -3910,6 +4113,7 @@ musicRouter.get('/search', optionalAuth, async (req: AuthRequest, res: Response)
         audioFile: musicTracks.audioFile,
         duration: musicTracks.duration,
         trackNumber: musicTracks.trackNumber,
+        lyrics: musicTracks.lyrics,
         releaseTitle: musicReleases.title,
         releaseCover: musicReleases.cover,
         releaseSlug: musicReleases.slug,
@@ -3927,10 +4131,42 @@ musicRouter.get('/search', optionalAuth, async (req: AuthRequest, res: Response)
       )
       .limit(15);
 
+    // Search external music tracks, artists, and releases safely from YouTube Music if enabled
+    let externalTracks: any[] = [];
+    let externalArtists: any[] = [];
+    let externalReleases: any[] = [];
+
+    if (req.query.includeExternal !== 'false') {
+      try {
+        if (externalMusicConfig.isCatalogEnabled('youtube')) {
+          const [ytTracks, ytArtists, ytReleases] = await Promise.allSettled([
+            youtubeMusicProvider.searchTracks(q, { limit: 20 }),
+            youtubeMusicProvider.searchArtists(q, { limit: 8 }),
+            youtubeMusicProvider.searchReleases(q, { limit: 8 }),
+          ]);
+
+          if (ytTracks.status === 'fulfilled') {
+            externalTracks = ytTracks.value;
+          }
+          if (ytArtists.status === 'fulfilled') {
+            externalArtists = ytArtists.value;
+          }
+          if (ytReleases.status === 'fulfilled') {
+            externalReleases = ytReleases.value;
+          }
+        }
+      } catch (e) {
+        console.warn('[MusicRouter] External search error in search endpoint:', e);
+      }
+    }
+
     res.json({
       releases: releasesMatch,
       artists: artistsMatch,
       tracks: tracksMatch,
+      externalTracks,
+      externalArtists,
+      externalReleases,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -4140,6 +4376,29 @@ musicRouter.post('/admin/releases/:id/approve', requireAuth, requireStaff('MANAG
       });
     }
 
+    // Notify followers / subscribers of this artist
+    try {
+      const followers = await db
+        .select({ userId: artistSubscriptions.userId })
+        .from(artistSubscriptions)
+        .where(eq(artistSubscriptions.artistId, release.artistId));
+
+      for (const follower of followers) {
+        await notificationService.create({
+          recipientUserId: follower.userId,
+          type: 'NEW_RELEASE',
+          title: '🎵 Новый релиз любимого исполнителя',
+          body: `Музыкант «${release.stageName}» выпустил новый релиз «${release.title}»!`,
+          link: `/music/release/${release.slug || release.id}`,
+          entityType: 'MUSIC_RELEASE',
+          entityId: String(release.id),
+          actorUserId: release.artistUserId || admin.id,
+        });
+      }
+    } catch (followErr) {
+      console.error('[ApproveRelease] Failed to notify artist followers:', followErr);
+    }
+
     await logAdminAction({
       userId: admin.id,
       action: 'MUSIC_RELEASE_APPROVED',
@@ -4243,4 +4502,1982 @@ musicRouter.post('/admin/releases/:id/reject', requireAuth, requireStaff('MANAGE
     res.status(500).json({ error: err.message });
   }
 });
+
+// ==========================================
+// USER PLAYLISTS API
+// ==========================================
+
+/**
+ * POST /api/music/playlists
+ * Create a new user playlist
+ */
+musicRouter.post('/playlists', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { title, description, cover, visibility, isCollaborative } = req.body;
+
+    const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+    if (!trimmedTitle || trimmedTitle.length < 1 || trimmedTitle.length > 100) {
+      return res.status(400).json({ error: 'Название плейлиста обязательно и должно содержать от 1 до 100 символов' });
+    }
+
+    const trimmedDesc = typeof description === 'string' ? description.trim().slice(0, 1000) : null;
+    const trimmedCover = typeof cover === 'string' && cover.trim().length > 0 ? cover.trim().slice(0, 500) : null;
+
+    let validVisibility = 'PUBLIC';
+    if (visibility && ['PUBLIC', 'UNLISTED', 'PRIVATE'].includes(visibility)) {
+      validVisibility = visibility;
+    }
+
+    const [created] = await db
+      .insert(musicPlaylists)
+      .values({
+        userId: user.id,
+        title: trimmedTitle,
+        description: trimmedDesc,
+        cover: trimmedCover,
+        visibility: validVisibility,
+        isCollaborative: Boolean(isCollaborative),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    res.status(201).json({
+      success: true,
+      message: 'Плейлист успешно создан',
+      playlist: {
+        ...created,
+        tracksCount: 0,
+        totalDuration: 0,
+        isCollaborative: Boolean(created.isCollaborative),
+        owner: {
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar,
+        },
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/music/playlists
+ * Explore public playlists
+ */
+musicRouter.get('/playlists', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string, 10) || 20));
+    const offset = (page - 1) * limit;
+    const sort = String(req.query.sort || 'popular');
+    const q = req.query.q ? String(req.query.q).trim() : '';
+
+    const conditions = [
+      eq(musicPlaylists.visibility, 'PUBLIC'),
+    ];
+
+    if (q) {
+      conditions.push(
+        or(
+          ilike(musicPlaylists.title, `%${q}%`),
+          ilike(musicPlaylists.description, `%${q}%`),
+          ilike(users.username, `%${q}%`)
+        )!
+      );
+    }
+
+    const whereClause = and(...conditions);
+
+    const [countRes] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(musicPlaylists)
+      .innerJoin(users, eq(musicPlaylists.userId, users.id))
+      .where(whereClause);
+
+    const total = Number(countRes?.count || 0);
+
+    let orderExpr = desc(musicPlaylists.createdAt);
+    if (sort === 'title_asc') {
+      orderExpr = asc(musicPlaylists.title);
+    } else if (sort === 'updated') {
+      orderExpr = desc(musicPlaylists.updatedAt);
+    } else if (sort === 'tracks_count') {
+      orderExpr = desc(sql`(SELECT count(*) FROM music_playlist_tracks WHERE playlist_id = music_playlists.id)`);
+    } else if (sort === 'popular') {
+      // Order by sum of listen counts of tracks in playlist or tracks count
+      orderExpr = desc(sql`COALESCE((SELECT SUM(mt.listen_count) FROM music_playlist_tracks mpt JOIN music_tracks mt ON mpt.track_id = mt.id WHERE mpt.playlist_id = music_playlists.id), 0) + (SELECT count(*) FROM music_playlist_tracks WHERE playlist_id = music_playlists.id) * 10`);
+    }
+
+    const playlistRows = await db
+      .select({
+        id: musicPlaylists.id,
+        userId: musicPlaylists.userId,
+        title: musicPlaylists.title,
+        description: musicPlaylists.description,
+        cover: musicPlaylists.cover,
+        visibility: musicPlaylists.visibility,
+        createdAt: musicPlaylists.createdAt,
+        updatedAt: musicPlaylists.updatedAt,
+        username: users.username,
+        userAvatar: users.avatar,
+        tracksCount: sql<number>`(SELECT count(*)::int FROM music_playlist_tracks WHERE playlist_id = music_playlists.id)`,
+        totalDuration: sql<number>`COALESCE((SELECT SUM(mt.duration)::int FROM music_playlist_tracks mpt JOIN music_tracks mt ON mpt.track_id = mt.id WHERE mpt.playlist_id = music_playlists.id), 0)`,
+        firstTrackCover: sql<string | null>`(SELECT mr.cover FROM music_playlist_tracks mpt JOIN music_tracks mt ON mpt.track_id = mt.id JOIN music_releases mr ON mt.release_id = mr.id WHERE mpt.playlist_id = music_playlists.id ORDER BY mpt.position ASC LIMIT 1)`,
+      })
+      .from(musicPlaylists)
+      .innerJoin(users, eq(musicPlaylists.userId, users.id))
+      .where(whereClause)
+      .orderBy(orderExpr)
+      .limit(limit)
+      .offset(offset);
+
+    const formatted = playlistRows.map((pl) => ({
+      id: pl.id,
+      userId: pl.userId,
+      title: pl.title,
+      description: pl.description,
+      cover: pl.cover || pl.firstTrackCover,
+      customCover: pl.cover,
+      firstTrackCover: pl.firstTrackCover,
+      visibility: pl.visibility,
+      createdAt: pl.createdAt,
+      updatedAt: pl.updatedAt,
+      tracksCount: Number(pl.tracksCount || 0),
+      totalDuration: Number(pl.totalDuration || 0),
+      owner: {
+        id: pl.userId,
+        username: pl.username,
+        avatar: pl.userAvatar,
+      },
+    }));
+
+    res.json({
+      playlists: formatted,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/music/playlists/my
+ * User's own playlists (all visibilities)
+ */
+musicRouter.get('/playlists/my', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string, 10) || 30));
+    const offset = (page - 1) * limit;
+    const sort = String(req.query.sort || 'updated');
+    const q = req.query.q ? String(req.query.q).trim() : '';
+
+    const conditions = [
+      eq(musicPlaylists.userId, user.id),
+    ];
+
+    if (q) {
+      conditions.push(
+        or(
+          ilike(musicPlaylists.title, `%${q}%`),
+          ilike(musicPlaylists.description, `%${q}%`)
+        )!
+      );
+    }
+
+    const whereClause = and(...conditions);
+
+    const [countRes] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(musicPlaylists)
+      .where(whereClause);
+
+    const total = Number(countRes?.count || 0);
+
+    let orderExpr = desc(musicPlaylists.updatedAt);
+    if (sort === 'newest') {
+      orderExpr = desc(musicPlaylists.createdAt);
+    } else if (sort === 'title_asc') {
+      orderExpr = asc(musicPlaylists.title);
+    } else if (sort === 'tracks_count') {
+      orderExpr = desc(sql`(SELECT count(*) FROM music_playlist_tracks WHERE playlist_id = music_playlists.id)`);
+    }
+
+    const playlistRows = await db
+      .select({
+        id: musicPlaylists.id,
+        userId: musicPlaylists.userId,
+        title: musicPlaylists.title,
+        description: musicPlaylists.description,
+        cover: musicPlaylists.cover,
+        visibility: musicPlaylists.visibility,
+        createdAt: musicPlaylists.createdAt,
+        updatedAt: musicPlaylists.updatedAt,
+        tracksCount: sql<number>`(SELECT count(*)::int FROM music_playlist_tracks WHERE playlist_id = music_playlists.id)`,
+        totalDuration: sql<number>`COALESCE((SELECT SUM(mt.duration)::int FROM music_playlist_tracks mpt JOIN music_tracks mt ON mpt.track_id = mt.id WHERE mpt.playlist_id = music_playlists.id), 0)`,
+        firstTrackCover: sql<string | null>`(SELECT mr.cover FROM music_playlist_tracks mpt JOIN music_tracks mt ON mpt.track_id = mt.id JOIN music_releases mr ON mt.release_id = mr.id WHERE mpt.playlist_id = music_playlists.id ORDER BY mpt.position ASC LIMIT 1)`,
+      })
+      .from(musicPlaylists)
+      .where(whereClause)
+      .orderBy(orderExpr)
+      .limit(limit)
+      .offset(offset);
+
+    const formatted = playlistRows.map((pl) => ({
+      id: pl.id,
+      userId: pl.userId,
+      title: pl.title,
+      description: pl.description,
+      cover: pl.cover || pl.firstTrackCover,
+      customCover: pl.cover,
+      firstTrackCover: pl.firstTrackCover,
+      visibility: pl.visibility,
+      createdAt: pl.createdAt,
+      updatedAt: pl.updatedAt,
+      tracksCount: Number(pl.tracksCount || 0),
+      totalDuration: Number(pl.totalDuration || 0),
+      owner: {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+      },
+    }));
+
+    res.json({
+      playlists: formatted,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/music/playlists/my/for-track/:trackId
+ * List of user's playlists (and collaborative playlists where user can add tracks)
+ * indicating whether track is in each playlist
+ */
+musicRouter.get('/playlists/my/for-track/:trackId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const trackId = parseInt(req.params.trackId, 10);
+
+    if (isNaN(trackId) || trackId <= 0) {
+      return res.status(400).json({ error: 'Неверный идентификатор трека' });
+    }
+
+    const playlistRows = await db
+      .select({
+        id: musicPlaylists.id,
+        userId: musicPlaylists.userId,
+        title: musicPlaylists.title,
+        cover: musicPlaylists.cover,
+        visibility: musicPlaylists.visibility,
+        isCollaborative: musicPlaylists.isCollaborative,
+        updatedAt: musicPlaylists.updatedAt,
+        tracksCount: sql<number>`(SELECT count(*)::int FROM music_playlist_tracks WHERE playlist_id = music_playlists.id)`,
+        containsTrack: sql<boolean>`EXISTS (SELECT 1 FROM music_playlist_tracks WHERE playlist_id = music_playlists.id AND track_id = ${trackId})`,
+        firstTrackCover: sql<string | null>`(SELECT mr.cover FROM music_playlist_tracks mpt JOIN music_tracks mt ON mpt.track_id = mt.id JOIN music_releases mr ON mt.release_id = mr.id WHERE mpt.playlist_id = music_playlists.id ORDER BY mpt.position ASC LIMIT 1)`,
+      })
+      .from(musicPlaylists)
+      .where(
+        or(
+          eq(musicPlaylists.userId, user.id),
+          and(
+            eq(musicPlaylists.isCollaborative, true),
+            sql`EXISTS (SELECT 1 FROM music_playlist_members mpm WHERE mpm.playlist_id = music_playlists.id AND mpm.user_id = ${user.id} AND mpm.can_add_tracks = true)`
+          )
+        )
+      )
+      .orderBy(desc(musicPlaylists.updatedAt));
+
+    const formatted = playlistRows.map((pl) => ({
+      id: pl.id,
+      title: pl.title,
+      cover: pl.cover || pl.firstTrackCover,
+      visibility: pl.visibility,
+      isCollaborative: Boolean(pl.isCollaborative),
+      isOwner: pl.userId === user.id,
+      tracksCount: Number(pl.tracksCount || 0),
+      containsTrack: Boolean(pl.containsTrack),
+    }));
+
+    res.json({ playlists: formatted });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/music/user/:username/playlists
+ * Public playlists created by a user
+ */
+musicRouter.get('/user/:username/playlists', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const username = req.params.username;
+    if (!username) {
+      return res.status(400).json({ error: 'Имя пользователя обязательно' });
+    }
+
+    const [targetUser] = await db
+      .select({
+        id: users.id,
+        username: users.username,
+        avatar: users.avatar,
+      })
+      .from(users)
+      .where(eq(users.username, username))
+      .limit(1);
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    const isSelf = req.dbUser?.id === targetUser.id;
+    const isStaff = isStaffRole(req.dbUser?.role);
+
+    const conditions = [eq(musicPlaylists.userId, targetUser.id)];
+    if (!isSelf && !isStaff) {
+      conditions.push(eq(musicPlaylists.visibility, 'PUBLIC'));
+    }
+
+    const playlistRows = await db
+      .select({
+        id: musicPlaylists.id,
+        userId: musicPlaylists.userId,
+        title: musicPlaylists.title,
+        description: musicPlaylists.description,
+        cover: musicPlaylists.cover,
+        visibility: musicPlaylists.visibility,
+        createdAt: musicPlaylists.createdAt,
+        updatedAt: musicPlaylists.updatedAt,
+        tracksCount: sql<number>`(SELECT count(*)::int FROM music_playlist_tracks WHERE playlist_id = music_playlists.id)`,
+        totalDuration: sql<number>`COALESCE((SELECT SUM(mt.duration)::int FROM music_playlist_tracks mpt JOIN music_tracks mt ON mpt.track_id = mt.id WHERE mpt.playlist_id = music_playlists.id), 0)`,
+        firstTrackCover: sql<string | null>`(SELECT mr.cover FROM music_playlist_tracks mpt JOIN music_tracks mt ON mpt.track_id = mt.id JOIN music_releases mr ON mt.release_id = mr.id WHERE mpt.playlist_id = music_playlists.id ORDER BY mpt.position ASC LIMIT 1)`,
+      })
+      .from(musicPlaylists)
+      .where(and(...conditions))
+      .orderBy(desc(musicPlaylists.updatedAt));
+
+    const formatted = playlistRows.map((pl) => ({
+      id: pl.id,
+      userId: pl.userId,
+      title: pl.title,
+      description: pl.description,
+      cover: pl.cover || pl.firstTrackCover,
+      customCover: pl.cover,
+      firstTrackCover: pl.firstTrackCover,
+      visibility: pl.visibility,
+      createdAt: pl.createdAt,
+      updatedAt: pl.updatedAt,
+      tracksCount: Number(pl.tracksCount || 0),
+      totalDuration: Number(pl.totalDuration || 0),
+      owner: targetUser,
+    }));
+
+    res.json({
+      playlists: formatted,
+      user: targetUser,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/music/playlists/:id
+ * Single playlist view with all tracks, collaboration info and member details
+ */
+musicRouter.get('/playlists/:id', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const playlistId = parseInt(req.params.id, 10);
+    if (isNaN(playlistId) || playlistId <= 0) {
+      return res.status(400).json({ error: 'Неверный идентификатор плейлиста' });
+    }
+
+    const [playlistRow] = await db
+      .select({
+        id: musicPlaylists.id,
+        userId: musicPlaylists.userId,
+        title: musicPlaylists.title,
+        description: musicPlaylists.description,
+        cover: musicPlaylists.cover,
+        visibility: musicPlaylists.visibility,
+        isCollaborative: musicPlaylists.isCollaborative,
+        createdAt: musicPlaylists.createdAt,
+        updatedAt: musicPlaylists.updatedAt,
+        ownerUsername: users.username,
+        ownerAvatar: users.avatar,
+      })
+      .from(musicPlaylists)
+      .innerJoin(users, eq(musicPlaylists.userId, users.id))
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlistRow) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    const isOwner = Boolean(req.dbUser && req.dbUser.id === playlistRow.userId);
+    const isStaff = isStaffRole(req.dbUser?.role);
+
+    // Fetch members
+    const membersRows = await db
+      .select({
+        id: musicPlaylistMembers.id,
+        userId: users.id,
+        username: users.username,
+        displayName: users.username,
+        avatar: users.avatar,
+        role: musicPlaylistMembers.role,
+        canAddTracks: musicPlaylistMembers.canAddTracks,
+        canRemoveTracks: musicPlaylistMembers.canRemoveTracks,
+        addedAt: musicPlaylistMembers.addedAt,
+      })
+      .from(musicPlaylistMembers)
+      .innerJoin(users, eq(musicPlaylistMembers.userId, users.id))
+      .where(eq(musicPlaylistMembers.playlistId, playlistId))
+      .orderBy(asc(musicPlaylistMembers.addedAt));
+
+    const currentMember = req.dbUser ? membersRows.find((m) => m.userId === req.dbUser!.id) : null;
+    const isCollaborator = isOwner || Boolean(currentMember) || (Boolean(playlistRow.isCollaborative) && Boolean(req.dbUser));
+
+    // Permission check for PRIVATE playlist
+    if (playlistRow.visibility === 'PRIVATE' && !isOwner && !isStaff && !currentMember) {
+      return res.status(403).json({ error: 'Этот плейлист приватный и доступен только его владельцу и участникам' });
+    }
+
+    // Permissions summary
+    const canAddTracks = isOwner || isStaff || (Boolean(playlistRow.isCollaborative) && (!currentMember || currentMember.canAddTracks));
+    const canRemoveTracks = isOwner || isStaff || Boolean(currentMember?.canRemoveTracks);
+    const canManageSettings = isOwner || isStaff;
+    const canManageMembers = isOwner || isStaff;
+
+    // Fetch playlist tracks with addedBy user info
+    const rawTracks = await db
+      .select({
+        junctionId: musicPlaylistTracks.id,
+        position: musicPlaylistTracks.position,
+        addedAt: musicPlaylistTracks.addedAt,
+        addedByUserId: musicPlaylistTracks.addedByUserId,
+        id: musicTracks.id,
+        releaseId: musicTracks.releaseId,
+        artistId: musicTracks.artistId,
+        title: musicTracks.title,
+        slug: musicTracks.slug,
+        trackNumber: musicTracks.trackNumber,
+        audioFile: musicTracks.audioFile,
+        duration: musicTracks.duration,
+        explicit: musicTracks.explicit,
+        lyrics: musicTracks.lyrics,
+        authorNote: musicTracks.authorNote,
+        listenCount: musicTracks.listenCount,
+        releaseTitle: musicReleases.title,
+        releaseCover: musicReleases.cover,
+        releaseSlug: musicReleases.slug,
+        releaseType: musicReleases.type,
+        releaseStatus: musicReleases.status,
+        artistName: artistProfiles.stageName,
+        artistSlug: artistProfiles.slug,
+      })
+      .from(musicPlaylistTracks)
+      .innerJoin(musicTracks, eq(musicPlaylistTracks.trackId, musicTracks.id))
+      .innerJoin(musicReleases, eq(musicTracks.releaseId, musicReleases.id))
+      .innerJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+      .where(
+        and(
+          eq(musicPlaylistTracks.playlistId, playlistId),
+          (isOwner || isStaff) ? undefined : eq(musicReleases.status, 'PUBLISHED')
+        )
+      )
+      .orderBy(asc(musicPlaylistTracks.position), asc(musicPlaylistTracks.addedAt));
+
+    // Fetch user details for addedBy users
+    const addedByUserIds = Array.from(new Set(rawTracks.map((r) => r.addedByUserId).filter(Boolean))) as number[];
+    let addedUsersMap = new Map<number, { id: number; username: string; avatar: string | null }>();
+    if (addedByUserIds.length > 0) {
+      const addedUserRecords = await db
+        .select({ id: users.id, username: users.username, avatar: users.avatar })
+        .from(users)
+        .where(inArray(users.id, addedByUserIds));
+      addedUsersMap = new Map(addedUserRecords.map((u) => [u.id, u]));
+    }
+
+    // Check favorite status for tracks if logged in
+    let favoriteTrackIds = new Set<number>();
+    if (req.dbUser) {
+      const favRows = await db
+        .select({ trackId: musicFavoriteTracks.trackId })
+        .from(musicFavoriteTracks)
+        .where(eq(musicFavoriteTracks.userId, req.dbUser.id));
+      favoriteTrackIds = new Set(favRows.map((r) => r.trackId));
+    }
+
+    const tracks = rawTracks.map((tr) => {
+      const addedByUser = tr.addedByUserId ? addedUsersMap.get(tr.addedByUserId) : null;
+      const canDeleteThisTrack = isOwner || isStaff || (Boolean(playlistRow.isCollaborative) && tr.addedByUserId === req.dbUser?.id);
+
+      return {
+        id: tr.id,
+        junctionId: tr.junctionId,
+        position: tr.position,
+        addedAt: tr.addedAt,
+        releaseId: tr.releaseId,
+        artistId: tr.artistId,
+        title: tr.title,
+        slug: tr.slug,
+        trackNumber: tr.trackNumber,
+        audioFile: tr.audioFile,
+        duration: tr.duration,
+        explicit: tr.explicit,
+        lyrics: tr.lyrics,
+        authorNote: tr.authorNote,
+        listenCount: tr.listenCount,
+        releaseTitle: tr.releaseTitle,
+        releaseCover: tr.releaseCover,
+        releaseSlug: tr.releaseSlug,
+        releaseType: tr.releaseType,
+        artistName: tr.artistName,
+        artistSlug: tr.artistSlug,
+        isFavorite: favoriteTrackIds.has(tr.id),
+        addedBy: addedByUser
+          ? {
+              id: addedByUser.id,
+              username: addedByUser.username,
+              avatar: addedByUser.avatar,
+            }
+          : tr.addedByUserId === playlistRow.userId
+          ? {
+              id: playlistRow.userId,
+              username: playlistRow.ownerUsername,
+              avatar: playlistRow.ownerAvatar,
+            }
+          : null,
+        canRemove: canDeleteThisTrack,
+      };
+    });
+
+    const totalDuration = tracks.reduce((acc, t) => acc + (t.duration || 0), 0);
+    const firstTrackCover = tracks.length > 0 ? tracks[0].releaseCover : null;
+
+    res.json({
+      playlist: {
+        id: playlistRow.id,
+        userId: playlistRow.userId,
+        title: playlistRow.title,
+        description: playlistRow.description,
+        cover: playlistRow.cover || firstTrackCover,
+        customCover: playlistRow.cover,
+        firstTrackCover,
+        visibility: playlistRow.visibility,
+        isCollaborative: Boolean(playlistRow.isCollaborative),
+        createdAt: playlistRow.createdAt,
+        updatedAt: playlistRow.updatedAt,
+        tracksCount: tracks.length,
+        totalDuration,
+        owner: {
+          id: playlistRow.userId,
+          username: playlistRow.ownerUsername,
+          avatar: playlistRow.ownerAvatar,
+        },
+        members: membersRows,
+      },
+      tracks,
+      isOwner,
+      isCollaborator,
+      canAddTracks,
+      canRemoveTracks,
+      canManageSettings,
+      canManageMembers,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/music/playlists/:id
+ * PATCH /api/music/playlists/:id
+ * Update playlist details and collaboration settings
+ */
+const updatePlaylistHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const playlistId = parseInt(req.params.id, 10);
+
+    if (isNaN(playlistId) || playlistId <= 0) {
+      return res.status(400).json({ error: 'Неверный идентификатор плейлиста' });
+    }
+
+    const [existing] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    if (existing.userId !== user.id && !isStaffRole(user.role)) {
+      return res.status(403).json({ error: 'У вас нет прав для изменения этого плейлиста' });
+    }
+
+    const { title, description, cover, visibility, isCollaborative } = req.body;
+
+    const updateData: Record<string, any> = {
+      updatedAt: new Date(),
+    };
+
+    if (title !== undefined) {
+      const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+      if (!trimmedTitle || trimmedTitle.length < 1 || trimmedTitle.length > 100) {
+        return res.status(400).json({ error: 'Название плейлиста обязательно и должно содержать от 1 до 100 символов' });
+      }
+      updateData.title = trimmedTitle;
+    }
+
+    if (description !== undefined) {
+      updateData.description = typeof description === 'string' && description.trim().length > 0 ? description.trim().slice(0, 1000) : null;
+    }
+
+    if (cover !== undefined) {
+      updateData.cover = typeof cover === 'string' && cover.trim().length > 0 ? cover.trim().slice(0, 500) : null;
+    }
+
+    if (visibility !== undefined) {
+      if (!['PUBLIC', 'UNLISTED', 'PRIVATE'].includes(visibility)) {
+        return res.status(400).json({ error: 'Некорректный уровень приватности (PUBLIC, UNLISTED, PRIVATE)' });
+      }
+      updateData.visibility = visibility;
+    }
+
+    if (isCollaborative !== undefined) {
+      updateData.isCollaborative = Boolean(isCollaborative);
+    }
+
+    const [updated] = await db
+      .update(musicPlaylists)
+      .set(updateData)
+      .where(eq(musicPlaylists.id, playlistId))
+      .returning();
+
+    res.json({
+      success: true,
+      message: 'Плейлист успешно обновлён',
+      playlist: updated,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+musicRouter.put('/playlists/:id', requireAuth, updatePlaylistHandler);
+musicRouter.patch('/playlists/:id', requireAuth, updatePlaylistHandler);
+
+/**
+ * DELETE /api/music/playlists/:id
+ * Delete playlist
+ */
+musicRouter.delete('/playlists/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const playlistId = parseInt(req.params.id, 10);
+
+    if (isNaN(playlistId) || playlistId <= 0) {
+      return res.status(400).json({ error: 'Неверный идентификатор плейлиста' });
+    }
+
+    const [existing] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    if (existing.userId !== user.id && !isStaffRole(user.role)) {
+      return res.status(403).json({ error: 'У вас нет прав для удаления этого плейлиста' });
+    }
+
+    await db.delete(musicPlaylists).where(eq(musicPlaylists.id, playlistId));
+
+    res.json({
+      success: true,
+      message: 'Плейлист успешно удалён',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/music/playlists/:id/tracks
+ * Add track to playlist (supports collaborative playlists)
+ */
+musicRouter.post('/playlists/:id/tracks', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const playlistId = parseInt(req.params.id, 10);
+    const { trackId } = req.body;
+
+    const numericTrackId = parseInt(String(trackId), 10);
+
+    if (isNaN(playlistId) || playlistId <= 0 || isNaN(numericTrackId) || numericTrackId <= 0) {
+      return res.status(400).json({ error: 'Неверные параметры запроса' });
+    }
+
+    const [playlist] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    const isOwner = playlist.userId === user.id;
+    const isStaff = isStaffRole(user.role);
+
+    // Permission check for collaboration
+    let canAdd = isOwner || isStaff;
+    if (!canAdd && playlist.isCollaborative) {
+      // Check if user is an existing member with canAddTracks permission
+      const [member] = await db
+        .select()
+        .from(musicPlaylistMembers)
+        .where(
+          and(
+            eq(musicPlaylistMembers.playlistId, playlistId),
+            eq(musicPlaylistMembers.userId, user.id)
+          )
+        )
+        .limit(1);
+
+      if (member) {
+        canAdd = member.canAddTracks;
+      } else {
+        // If collaborative playlist allows participants to add, user can add
+        canAdd = true;
+      }
+    }
+
+    if (!canAdd) {
+      return res.status(403).json({ error: 'У вас нет прав на добавление треков в этот плейлист' });
+    }
+
+    // Verify track exists
+    const [track] = await db
+      .select({
+        id: musicTracks.id,
+        title: musicTracks.title,
+        releaseStatus: musicReleases.status,
+      })
+      .from(musicTracks)
+      .innerJoin(musicReleases, eq(musicTracks.releaseId, musicReleases.id))
+      .where(eq(musicTracks.id, numericTrackId))
+      .limit(1);
+
+    if (!track) {
+      return res.status(404).json({ error: 'Трек не найден в каталоге' });
+    }
+
+    // Check if track is already in playlist
+    const [existingTrackInPlaylist] = await db
+      .select({ id: musicPlaylistTracks.id })
+      .from(musicPlaylistTracks)
+      .where(
+        and(
+          eq(musicPlaylistTracks.playlistId, playlistId),
+          eq(musicPlaylistTracks.trackId, numericTrackId)
+        )
+      )
+      .limit(1);
+
+    if (existingTrackInPlaylist) {
+      return res.json({
+        success: true,
+        alreadyExists: true,
+        message: `Трек «${track.title}» уже находится в этом плейлисте`,
+      });
+    }
+
+    // If collaborative and user is not yet recorded as a member, record them
+    if (playlist.isCollaborative && !isOwner) {
+      await db
+        .insert(musicPlaylistMembers)
+        .values({
+          playlistId,
+          userId: user.id,
+          role: 'COLLABORATOR',
+          canAddTracks: true,
+          canRemoveTracks: false,
+        })
+        .onConflictDoNothing();
+    }
+
+    // Get max position in playlist
+    const [maxPosRes] = await db
+      .select({ maxPos: sql<number>`COALESCE(MAX(position), 0)` })
+      .from(musicPlaylistTracks)
+      .where(eq(musicPlaylistTracks.playlistId, playlistId));
+
+    const nextPos = Number(maxPosRes?.maxPos || 0) + 1;
+
+    await db.insert(musicPlaylistTracks).values({
+      playlistId,
+      trackId: numericTrackId,
+      addedByUserId: user.id,
+      position: nextPos,
+      addedAt: new Date(),
+    });
+
+    await db
+      .update(musicPlaylists)
+      .set({ updatedAt: new Date() })
+      .where(eq(musicPlaylists.id, playlistId));
+
+    // Send notification to playlist owner if added by a collaborator
+    if (playlist.userId !== user.id) {
+      try {
+        await notificationService.create({
+          recipientUserId: playlist.userId,
+          actorUserId: user.id,
+          type: 'CONTENT_SHARED',
+          title: 'Новый трек в плейлисте',
+          body: `${user.username} добавил(а) «${track.title}» в плейлист «${playlist.title}»`,
+          entityType: 'MUSIC_PLAYLIST',
+          entityId: String(playlist.id),
+          link: `/music/playlist/${playlist.id}`,
+          dedupKey: `playlist_track_add:${playlist.id}:${user.id}:${numericTrackId}`,
+        });
+      } catch (err) {
+        console.warn('Notification send failed for playlist track addition:', err);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Трек «${track.title}» добавлен в плейлист «${playlist.title}»`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/music/playlists/:id/tracks/:trackId
+ * Remove track from playlist (supports owner and author of track addition)
+ */
+musicRouter.delete('/playlists/:id/tracks/:trackId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const playlistId = parseInt(req.params.id, 10);
+    const trackId = parseInt(req.params.trackId, 10);
+
+    if (isNaN(playlistId) || playlistId <= 0 || isNaN(trackId) || trackId <= 0) {
+      return res.status(400).json({ error: 'Неверные параметры запроса' });
+    }
+
+    const [playlist] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    const [trackEntry] = await db
+      .select()
+      .from(musicPlaylistTracks)
+      .where(
+        and(
+          eq(musicPlaylistTracks.playlistId, playlistId),
+          eq(musicPlaylistTracks.trackId, trackId)
+        )
+      )
+      .limit(1);
+
+    if (!trackEntry) {
+      return res.status(404).json({ error: 'Трек не найден в этом плейлисте' });
+    }
+
+    const isOwner = playlist.userId === user.id;
+    const isStaff = isStaffRole(user.role);
+    const isAddedByMe = trackEntry.addedByUserId === user.id;
+
+    // Check permission
+    let canRemove = isOwner || isStaff;
+    if (!canRemove && playlist.isCollaborative && isAddedByMe) {
+      canRemove = true;
+    }
+
+    if (!canRemove) {
+      return res.status(403).json({ error: 'У вас нет прав на удаление этого трека из плейлиста' });
+    }
+
+    await db
+      .delete(musicPlaylistTracks)
+      .where(
+        and(
+          eq(musicPlaylistTracks.playlistId, playlistId),
+          eq(musicPlaylistTracks.trackId, trackId)
+        )
+      );
+
+    await db
+      .update(musicPlaylists)
+      .set({ updatedAt: new Date() })
+      .where(eq(musicPlaylists.id, playlistId));
+
+    res.json({
+      success: true,
+      message: 'Трек удалён из плейлиста',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/music/playlists/:id/members
+ * List members of a collaborative playlist
+ */
+musicRouter.get('/playlists/:id/members', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const playlistId = parseInt(req.params.id, 10);
+    if (isNaN(playlistId) || playlistId <= 0) {
+      return res.status(400).json({ error: 'Неверный идентификатор плейлиста' });
+    }
+
+    const [playlist] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    const members = await db
+      .select({
+        id: musicPlaylistMembers.id,
+        userId: users.id,
+        username: users.username,
+        avatar: users.avatar,
+        role: musicPlaylistMembers.role,
+        canAddTracks: musicPlaylistMembers.canAddTracks,
+        canRemoveTracks: musicPlaylistMembers.canRemoveTracks,
+        addedAt: musicPlaylistMembers.addedAt,
+      })
+      .from(musicPlaylistMembers)
+      .innerJoin(users, eq(musicPlaylistMembers.userId, users.id))
+      .where(eq(musicPlaylistMembers.playlistId, playlistId))
+      .orderBy(asc(musicPlaylistMembers.addedAt));
+
+    res.json({ members });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/music/playlists/:id/members
+ * Add collaborator/member to playlist (Owner only)
+ */
+musicRouter.post('/playlists/:id/members', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const playlistId = parseInt(req.params.id, 10);
+    const { userId, username, role, canAddTracks, canRemoveTracks } = req.body;
+
+    if (isNaN(playlistId) || playlistId <= 0) {
+      return res.status(400).json({ error: 'Неверный идентификатор плейлиста' });
+    }
+
+    const [playlist] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    if (playlist.userId !== user.id && !isStaffRole(user.role)) {
+      return res.status(403).json({ error: 'Только владелец плейлиста может управлять участниками' });
+    }
+
+    // Resolve target user
+    let targetUserId = typeof userId === 'number' ? userId : parseInt(String(userId), 10);
+    if ((isNaN(targetUserId) || targetUserId <= 0) && username) {
+      const [u] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(ilike(users.username, username.trim()))
+        .limit(1);
+      if (u) targetUserId = u.id;
+    }
+
+    if (isNaN(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: 'Пользователь не найден' });
+    }
+
+    if (targetUserId === playlist.userId) {
+      return res.status(400).json({ error: 'Владелец уже является главным участником плейлиста' });
+    }
+
+    // Upsert member
+    const [existingMember] = await db
+      .select()
+      .from(musicPlaylistMembers)
+      .where(
+        and(
+          eq(musicPlaylistMembers.playlistId, playlistId),
+          eq(musicPlaylistMembers.userId, targetUserId)
+        )
+      )
+      .limit(1);
+
+    if (existingMember) {
+      await db
+        .update(musicPlaylistMembers)
+        .set({
+          role: role || existingMember.role,
+          canAddTracks: canAddTracks !== undefined ? Boolean(canAddTracks) : existingMember.canAddTracks,
+          canRemoveTracks: canRemoveTracks !== undefined ? Boolean(canRemoveTracks) : existingMember.canRemoveTracks,
+        })
+        .where(eq(musicPlaylistMembers.id, existingMember.id));
+    } else {
+      await db.insert(musicPlaylistMembers).values({
+        playlistId,
+        userId: targetUserId,
+        role: role || 'COLLABORATOR',
+        canAddTracks: canAddTracks !== undefined ? Boolean(canAddTracks) : true,
+        canRemoveTracks: canRemoveTracks !== undefined ? Boolean(canRemoveTracks) : false,
+      });
+    }
+
+    // Ensure playlist is marked collaborative
+    if (!playlist.isCollaborative) {
+      await db
+        .update(musicPlaylists)
+        .set({ isCollaborative: true })
+        .where(eq(musicPlaylists.id, playlistId));
+    }
+
+    // Send notification
+    try {
+      await notificationService.create({
+        recipientUserId: targetUserId,
+        actorUserId: user.id,
+        type: 'CONTENT_SHARED',
+        title: 'Приглашение в плейлист',
+        body: `${user.username} добавил(а) вас в совместный плейлист «${playlist.title}»`,
+        entityType: 'MUSIC_PLAYLIST',
+        entityId: String(playlist.id),
+        link: `/music/playlist/${playlist.id}`,
+      });
+    } catch (e) {
+      console.warn('Failed to send playlist member invite notification:', e);
+    }
+
+    res.json({ success: true, message: 'Участник успешно добавлен' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/music/playlists/:id/members/:userId
+ * Update member permissions or role (Owner only)
+ */
+musicRouter.put('/playlists/:id/members/:userId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const playlistId = parseInt(req.params.id, 10);
+    const targetUserId = parseInt(req.params.userId, 10);
+
+    if (isNaN(playlistId) || playlistId <= 0 || isNaN(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: 'Неверные параметры запроса' });
+    }
+
+    const [playlist] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    if (playlist.userId !== user.id && !isStaffRole(user.role)) {
+      return res.status(403).json({ error: 'Только владелец плейлиста может изменять права участников' });
+    }
+
+    const { role, canAddTracks, canRemoveTracks } = req.body;
+
+    const [member] = await db
+      .select()
+      .from(musicPlaylistMembers)
+      .where(
+        and(
+          eq(musicPlaylistMembers.playlistId, playlistId),
+          eq(musicPlaylistMembers.userId, targetUserId)
+        )
+      )
+      .limit(1);
+
+    if (!member) {
+      return res.status(404).json({ error: 'Участник не найден в этом плейлисте' });
+    }
+
+    const updateFields: Record<string, any> = {};
+    if (role !== undefined) updateFields.role = role;
+    if (canAddTracks !== undefined) updateFields.canAddTracks = Boolean(canAddTracks);
+    if (canRemoveTracks !== undefined) updateFields.canRemoveTracks = Boolean(canRemoveTracks);
+
+    const [updated] = await db
+      .update(musicPlaylistMembers)
+      .set(updateFields)
+      .where(eq(musicPlaylistMembers.id, member.id))
+      .returning();
+
+    res.json({ success: true, message: 'Права участника обновлены', member: updated });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/music/playlists/:id/members/:userId
+ * Remove collaborator from playlist (Owner can remove any, Member can leave)
+ */
+musicRouter.delete('/playlists/:id/members/:userId', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const playlistId = parseInt(req.params.id, 10);
+    const targetUserId = parseInt(req.params.userId, 10);
+
+    if (isNaN(playlistId) || playlistId <= 0 || isNaN(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: 'Неверные параметры запроса' });
+    }
+
+    const [playlist] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    const isOwner = playlist.userId === user.id;
+    const isStaff = isStaffRole(user.role);
+    const isSelfLeaving = user.id === targetUserId;
+
+    if (!isOwner && !isStaff && !isSelfLeaving) {
+      return res.status(403).json({ error: 'У вас нет прав на удаление этого участника' });
+    }
+
+    await db
+      .delete(musicPlaylistMembers)
+      .where(
+        and(
+          eq(musicPlaylistMembers.playlistId, playlistId),
+          eq(musicPlaylistMembers.userId, targetUserId)
+        )
+      );
+
+    res.json({ success: true, message: isSelfLeaving ? 'Вы покинули плейлист' : 'Участник удалён' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/music/playlists/:id/reorder
+ * Reorder tracks in playlist
+ */
+musicRouter.put('/playlists/:id/reorder', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const playlistId = parseInt(req.params.id, 10);
+    const { trackIds } = req.body;
+
+    if (isNaN(playlistId) || playlistId <= 0 || !Array.isArray(trackIds)) {
+      return res.status(400).json({ error: 'Неверные параметры запроса' });
+    }
+
+    const [playlist] = await db
+      .select()
+      .from(musicPlaylists)
+      .where(eq(musicPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlist) {
+      return res.status(404).json({ error: 'Плейлист не найден' });
+    }
+
+    if (playlist.userId !== user.id && !isStaffRole(user.role)) {
+      return res.status(403).json({ error: 'У вас нет прав на редактирование этого плейлиста' });
+    }
+
+    // Update positions sequentially
+    for (let i = 0; i < trackIds.length; i++) {
+      const tid = parseInt(trackIds[i], 10);
+      if (!isNaN(tid)) {
+        await db
+          .update(musicPlaylistTracks)
+          .set({ position: i + 1 })
+          .where(
+            and(
+              eq(musicPlaylistTracks.playlistId, playlistId),
+              eq(musicPlaylistTracks.trackId, tid)
+            )
+          );
+      }
+    }
+
+    await db
+      .update(musicPlaylists)
+      .set({ updatedAt: new Date() })
+      .where(eq(musicPlaylists.id, playlistId));
+
+    res.json({
+      success: true,
+      message: 'Порядок треков обновлён',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 12. EXTERNAL MUSIC SEARCH & LYRICS
+// ==========================================
+
+/**
+ * GET /api/music/tracks/:trackId/lyrics
+ * Fetch lyrics for internal or external track
+ */
+musicRouter.get('/tracks/:trackId/lyrics', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const rawId = String(req.params.trackId).trim();
+    if (!rawId) {
+      return res.status(400).json({ error: 'Идентификатор трека обязателен' });
+    }
+
+    // Check if numeric (internal Dodik track)
+    const numId = Number(rawId);
+    if (!isNaN(numId) && numId > 0 && !rawId.startsWith('yt_')) {
+      const lyrics = await lyricsService.getInternalTrackLyrics(numId);
+      return res.json({ trackId: numId, lyrics });
+    }
+
+    // External track ID
+    const providerTrackId = rawId.replace(/^yt_/, '');
+    const title = req.query.title ? String(req.query.title) : undefined;
+    const artist = req.query.artist ? String(req.query.artist) : undefined;
+
+    const preferredProvider = req.dbUser?.musicLyricsProvider || 'auto';
+
+    const lyrics = await lyricsService.getExternalTrackLyrics(
+      providerTrackId, 
+      title, 
+      artist, 
+      null, 
+      null, 
+      preferredProvider
+    );
+    return res.json({ trackId: rawId, lyrics });
+  } catch (err: any) {
+    console.error('[MusicRouter] Fetch lyrics error:', err);
+    res.status(500).json({ error: 'Не удалось загрузить текст песни' });
+  }
+});
+
+/**
+ * GET /api/music/tracks/:trackId/genius
+ * Fetch Genius Track Insights (description, annotations, credits, primary artist info)
+ */
+musicRouter.get('/tracks/:trackId/genius', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const rawId = String(req.params.trackId).trim();
+    if (!rawId) {
+      return res.status(400).json({ error: 'Идентификатор трека обязателен' });
+    }
+
+    let title = req.query.title ? String(req.query.title).trim() : '';
+    let artist = req.query.artist ? String(req.query.artist).trim() : '';
+    let album = req.query.album ? String(req.query.album).trim() : undefined;
+
+    // If internal Dodik numeric ID and title/artist missing, load from DB
+    const numId = Number(rawId);
+    if (!isNaN(numId) && numId > 0 && !rawId.startsWith('yt_')) {
+      if (!title || !artist) {
+        const [track] = await db
+          .select({
+            title: musicTracks.title,
+            artistName: artistProfiles.stageName,
+            releaseTitle: musicReleases.title,
+          })
+          .from(musicTracks)
+          .innerJoin(musicReleases, eq(musicTracks.releaseId, musicReleases.id))
+          .innerJoin(artistProfiles, eq(musicReleases.artistId, artistProfiles.id))
+          .where(eq(musicTracks.id, numId))
+          .limit(1);
+
+        if (track) {
+          title = title || track.title;
+          artist = artist || track.artistName;
+          album = album || track.releaseTitle;
+        }
+      }
+    } else if (rawId.startsWith('yt_') && (!title || !artist)) {
+      // Fetch details from YouTube if not provided
+      const cleanYtId = rawId.replace(/^yt_/, '');
+      const details = await youtubeMusicProvider.getTrackDetails(cleanYtId);
+      if (details) {
+        title = title || details.title;
+        artist = artist || details.artist;
+        album = album || details.album || undefined;
+      }
+    }
+
+    if (!title) {
+      return res.json({ trackId: rawId, genius: null, configured: true, message: 'Недостаточно информации о треке' });
+    }
+
+    const rawApiKey = externalMusicConfig.getApiKey('genius');
+    const isConfigured = Boolean(rawApiKey && rawApiKey.trim().length > 0);
+
+    // Safe diagnostic log without printing token
+    console.log(`[MusicRouter] Fetching Genius insights for "${title}" by "${artist}". Genius configured: ${isConfigured}`);
+
+    if (!isConfigured) {
+      console.warn('[MusicRouter] GENIUS_NOT_CONFIGURED: Access Token for Genius API is missing.');
+      return res.json({
+        trackId: rawId,
+        genius: null,
+        configured: false,
+        message: 'GENIUS_NOT_CONFIGURED',
+      });
+    }
+
+    const artists = artist ? artist.split(/[,/&]| feat\.? | ft\.? /i).map((a) => a.trim()).filter(Boolean) : [];
+    if (artist && !artists.includes(artist)) {
+      artists.unshift(artist);
+    }
+
+    const genius = await geniusProvider.getTrackInsights({
+      title,
+      artists,
+      album,
+    });
+
+    return res.json({
+      trackId: rawId,
+      genius: genius || null,
+      configured: true,
+      message: genius ? undefined : 'Информация Genius пока недоступна',
+    });
+  } catch (err: any) {
+    console.error('[MusicRouter] Fetch genius insights error:', err);
+    return res.status(500).json({ error: 'Не удалось загрузить информацию Genius' });
+  }
+});
+
+/**
+ * GET /api/music/external/youtube/search
+ * External YouTube Music song search.
+ * Returns normalized YouTubeTrackDTO[] without creating DB records or downloading tracks.
+ */
+musicRouter.get('/external/youtube/search', youtubeSearchLimiter, async (req: any, res: Response) => {
+  try {
+    const q = req.query.q;
+    if (!q || typeof q !== 'string' || !q.trim()) {
+      return res.status(400).json({ error: 'Поисковый запрос обязателен и не может быть пустым' });
+    }
+
+    if (q.trim().length > 200) {
+      return res.status(400).json({ error: 'Поисковый запрос слишком длинный (максимум 200 символов)' });
+    }
+
+    const rawLimit = req.query.limit !== undefined ? parseInt(req.query.limit as string, 10) : 10;
+    const limit = isNaN(rawLimit) ? 10 : Math.min(20, Math.max(1, rawLimit));
+
+    const results = await youtubeMusicService.searchSongs(q, limit);
+    return res.json(results);
+  } catch (err: any) {
+    console.error('[MusicRouter] External YouTube search error:', err);
+    const status = err.status && typeof err.status === 'number' ? err.status : 500;
+    const message = err.status === 400
+      ? err.message
+      : 'Не удалось выполнить поиск в YouTube Music. Попробуйте позже.';
+    return res.status(status).json({ error: message });
+  }
+});
+
+/**
+ * GET /api/music/external/search
+ * External music catalog search (YouTube Music).
+ */
+musicRouter.get('/external/search', async (req: any, res: Response) => {
+  try {
+    const q = req.query.q;
+    if (!q || typeof q !== 'string' || !q.trim()) {
+      return res.status(400).json({ error: 'Поисковый запрос обязателен' });
+    }
+
+    const rawLimit = req.query.limit !== undefined ? parseInt(req.query.limit as string, 10) : 10;
+    const limit = isNaN(rawLimit) ? 10 : Math.min(20, Math.max(1, rawLimit));
+
+    const results: any[] = [];
+
+    // Search YouTube Music if enabled
+    if (externalMusicConfig.isCatalogEnabled('youtube')) {
+      try {
+        const ytResults = await youtubeMusicProvider.searchTracks(q, { limit });
+        results.push(...ytResults);
+      } catch (e) {
+        console.warn('[MusicRouter] YouTube search failed in unified search:', e);
+      }
+    }
+
+    return res.json(results);
+  } catch (err: any) {
+    console.error('[MusicRouter] Unified external search error:', err);
+    return res.status(500).json({ error: 'Ошибка выполнения внешнего поиска' });
+  }
+});
+
+/**
+ * GET /api/music/recommendations/for-you
+ * Personal recommendations endpoint supporting limit and cursor pagination.
+ */
+musicRouter.get('/recommendations/for-you', optionalAuth, async (req: any, res: Response) => {
+  try {
+    const userId = req.dbUser ? req.dbUser.id : null;
+    const limit = parseInt(req.query.limit as string, 10) || 12;
+    const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+    const refresh = req.query.refresh === 'true' || req.query.refresh === '1';
+
+    const result = await musicRecommendationService.getPersonalizedForYou(userId, { limit, cursor, refresh });
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[MusicRouter] /recommendations/for-you error:', err);
+    return res.status(500).json({ error: 'Не удалось загрузить персональные рекомендации' });
+  }
+});
+
+/**
+ * GET /api/music/recommendations
+ * Personalized recommendations system based on user history and affinity signals.
+ */
+musicRouter.get('/recommendations', optionalAuth, async (req: any, res: Response) => {
+  try {
+    const userId = req.dbUser ? req.dbUser.id : null;
+    const recommendations = await musicRecommendationService.getRecommendationsForUser(userId);
+    return res.json(recommendations);
+  } catch (err: any) {
+    console.error('[MusicRouter] Recommendations error:', err);
+    return res.status(500).json({ error: 'Не удалось сгенерировать рекомендации' });
+  }
+});
+
+/**
+ * GET /api/music/recommendations/similar/:trackId
+ * Get similar tracks for a specific track ID.
+ */
+musicRouter.get('/recommendations/similar/:trackId', async (req: any, res: Response) => {
+  try {
+    const { trackId } = req.params;
+    const artist = req.query.artist ? String(req.query.artist) : undefined;
+    const title = req.query.title ? String(req.query.title) : undefined;
+
+    const similar = await musicRecommendationService.getSimilarTracksForTrack(trackId, artist, title);
+    return res.json({ tracks: similar });
+  } catch (err: any) {
+    console.error('[MusicRouter] Similar tracks error:', err);
+    return res.status(500).json({ error: 'Не удалось загрузить похожие треки' });
+  }
+});
+
+/**
+ * POST /api/music/history
+ * Record playback event in user_music_history table.
+ */
+musicRouter.post('/history', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.dbUser!.id;
+    const { trackId, provider, title, artistName, artistId, releaseTitle, releaseCover, durationSeconds } = req.body;
+
+    if (!trackId || !title || !artistName) {
+      return res.status(400).json({ error: 'Необходимы параметры trackId, title, artistName' });
+    }
+
+    await db.insert(userMusicHistory).values({
+      userId,
+      trackId: String(trackId),
+      provider: provider || 'dodik',
+      title,
+      artistName,
+      artistId: artistId ? String(artistId) : null,
+      releaseTitle: releaseTitle || null,
+      releaseCover: releaseCover || null,
+      durationSeconds: durationSeconds ? parseInt(String(durationSeconds), 10) : null,
+      listenedAt: new Date(),
+    });
+
+    return res.json({ ok: true });
+  } catch (err: any) {
+    console.error('[MusicRouter] History record error:', err);
+    return res.status(500).json({ error: 'Не удалось сохранить историю' });
+  }
+});
+
+/**
+ * GET /api/music/external/artist/:provider/:artistId
+ * Fetch YouTube Music external artist full profile with categorized discography, popular tracks, and similar artists.
+ */
+musicRouter.get('/external/artist/:provider/:artistId', optionalAuth, async (req: any, res: Response) => {
+  try {
+    const { provider, artistId } = req.params;
+    if (provider !== 'youtube') {
+      return res.status(400).json({ error: 'Поддерживается только провайдер youtube' });
+    }
+
+    const fullProfile = await youtubeMusicProvider.getArtistFullProfile(artistId);
+    if (!fullProfile) {
+      return res.status(404).json({ error: 'Профиль внешнего артиста не найден' });
+    }
+
+    let isSubscribed = false;
+    if (req.dbUser) {
+      const sub = await db
+        .select({ id: artistSubscriptions.id })
+        .from(artistSubscriptions)
+        .where(
+          and(
+            eq(artistSubscriptions.userId, req.dbUser.id),
+            eq(artistSubscriptions.provider, provider),
+            eq(artistSubscriptions.externalArtistId, artistId)
+          )
+        )
+        .limit(1);
+      isSubscribed = sub.length > 0;
+    }
+
+    return res.json({
+      artist: {
+        ...fullProfile.artist,
+        isSubscribed,
+      },
+      tracks: fullProfile.popularTracks,
+      releases: [
+        ...fullProfile.albums,
+        ...fullProfile.singlesAndEps,
+        ...fullProfile.compilations,
+        ...fullProfile.liveReleases,
+      ],
+      fullProfile,
+    });
+  } catch (err: any) {
+    console.error('[MusicRouter] Fetch external artist profile error:', err);
+    return res.status(500).json({ error: 'Не удалось загрузить внешний профиль артиста' });
+  }
+});
+
+/**
+ * GET /api/music/external/release/:provider/:releaseId
+ * Fetch YouTube Music external release with tracklist.
+ */
+musicRouter.get('/external/release/:provider/:releaseId', async (req: any, res: Response) => {
+  try {
+    const { provider, releaseId } = req.params;
+    if (provider !== 'youtube') {
+      return res.status(400).json({ error: 'Поддерживается только провайдер youtube' });
+    }
+
+    const release = await youtubeMusicProvider.getRelease(releaseId);
+    if (!release) {
+      return res.status(404).json({ error: 'Внешний релиз не найден' });
+    }
+
+    return res.json(release);
+  } catch (err: any) {
+    console.error('[MusicRouter] Fetch external release error:', err);
+    return res.status(500).json({ error: 'Не удалось загрузить внешний релиз' });
+  }
+});
+
+// ==========================================
+// ARTIST SUBSCRIPTIONS ENDPOINTS
+// ==========================================
+
+// Get user followed artists (subscriptions)
+musicRouter.get('/my-subscriptions', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.dbUser!.id;
+
+    const subs = await db
+      .select({
+        id: artistSubscriptions.id,
+        artistId: artistSubscriptions.artistId,
+        provider: artistSubscriptions.provider,
+        externalArtistId: artistSubscriptions.externalArtistId,
+        externalArtistName: artistSubscriptions.externalArtistName,
+        externalArtistAvatar: artistSubscriptions.externalArtistAvatar,
+        stageName: artistProfiles.stageName,
+        slug: artistProfiles.slug,
+        avatar: artistProfiles.avatar,
+      })
+      .from(artistSubscriptions)
+      .leftJoin(artistProfiles, eq(artistSubscriptions.artistId, artistProfiles.id))
+      .where(eq(artistSubscriptions.userId, userId));
+
+    const dodikArtists = subs
+      .filter((s) => s.artistId !== null)
+      .map((s) => ({
+        id: s.artistId,
+        stageName: s.stageName,
+        slug: s.slug,
+        avatar: s.avatar,
+      }));
+
+    const externalArtists = subs
+      .filter((s) => s.provider !== null)
+      .map((s) => ({
+        provider: s.provider,
+        artistId: s.externalArtistId,
+        name: s.externalArtistName,
+        avatar: s.externalArtistAvatar,
+      }));
+
+    return res.json({
+      dodikArtists,
+      externalArtists,
+    });
+  } catch (err: any) {
+    console.error('Error fetching followed artists:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Subscribe to a Dodik artist
+musicRouter.post('/artists/:artistId/subscribe', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.dbUser!.id;
+    const artistId = parseInt(req.params.artistId, 10);
+    if (isNaN(artistId)) return res.status(400).json({ error: 'Неверный ID исполнителя' });
+
+    // Check if artist exists
+    const artist = await db.select().from(artistProfiles).where(eq(artistProfiles.id, artistId)).limit(1);
+    if (artist.length === 0) return res.status(404).json({ error: 'Исполнитель не найден' });
+
+    await db
+      .insert(artistSubscriptions)
+      .values({
+        userId,
+        artistId,
+      })
+      .onConflictDoNothing();
+
+    return res.json({ subscribed: true });
+  } catch (err: any) {
+    console.error('Error subscribing to artist:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Unsubscribe from a Dodik artist
+musicRouter.delete('/artists/:artistId/subscribe', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.dbUser!.id;
+    const artistId = parseInt(req.params.artistId, 10);
+    if (isNaN(artistId)) return res.status(400).json({ error: 'Неверный ID исполнителя' });
+
+    await db
+      .delete(artistSubscriptions)
+      .where(
+        and(
+          eq(artistSubscriptions.userId, userId),
+          eq(artistSubscriptions.artistId, artistId)
+        )
+      );
+
+    return res.json({ subscribed: false });
+  } catch (err: any) {
+    console.error('Error unsubscribing from artist:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Subscribe to an external artist
+musicRouter.post('/external/artists/:provider/:artistId/subscribe', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.dbUser!.id;
+    const { provider, artistId } = req.params;
+    if (provider !== 'youtube' && provider !== 'soundcloud') {
+      return res.status(400).json({ error: 'Неизвестный провайдер' });
+    }
+
+    const { name, avatar } = req.body;
+
+    await db
+      .insert(artistSubscriptions)
+      .values({
+        userId,
+        provider,
+        externalArtistId: artistId,
+        externalArtistName: name || null,
+        externalArtistAvatar: avatar || null,
+      })
+      .onConflictDoNothing();
+
+    return res.json({ subscribed: true });
+  } catch (err: any) {
+    console.error('Error subscribing to external artist:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Unsubscribe from an external artist
+musicRouter.delete('/external/artists/:provider/:artistId/subscribe', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.dbUser!.id;
+    const { provider, artistId } = req.params;
+    if (provider !== 'youtube' && provider !== 'soundcloud') {
+      return res.status(400).json({ error: 'Неизвестный провайдер' });
+    }
+
+    await db
+      .delete(artistSubscriptions)
+      .where(
+        and(
+          eq(artistSubscriptions.userId, userId),
+          eq(artistSubscriptions.provider, provider),
+          eq(artistSubscriptions.externalArtistId, artistId)
+        )
+      );
+
+    return res.json({ subscribed: false });
+  } catch (err: any) {
+    console.error('Error unsubscribing from external artist:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 13. PLAYLIST IMPORT ENGINE (TXT / CSV / JSON / YMusicExport)
+// ==========================================
+
+const parsePlaylistImportHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const rawContent = req.body.text || req.body.content || req.body.data;
+    if (!rawContent || (typeof rawContent !== 'string' && typeof rawContent !== 'object')) {
+      return res.status(400).json({ error: 'Содержимое файла плейлиста обязательно' });
+    }
+
+    const contentStr = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent);
+    const rawTracks = parseRawInput(contentStr);
+
+    if (rawTracks.length === 0) {
+      return res.status(400).json({ error: 'Не удалось извлечь список треков из переданного файла' });
+    }
+
+    const matchResult = await matchParsedTracks(rawTracks);
+
+    return res.json({
+      total: matchResult.total,
+      matchedCount: matchResult.matchedCount,
+      unmatchedCount: matchResult.unmatchedCount,
+      tracks: matchResult.tracks,
+      unmatchedTracks: matchResult.unmatchedTracks,
+    });
+  } catch (err: any) {
+    console.error('Error parsing playlist for import:', err);
+    return res.status(500).json({ error: err.message || 'Ошибка при распознавании файла плейлиста' });
+  }
+};
+
+musicRouter.post('/playlists/import/parse', optionalAuth, parsePlaylistImportHandler);
+musicRouter.post('/playlists/import-txt/parse', optionalAuth, parsePlaylistImportHandler);
+
+const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { mode, playlistId: existingPlaylistId, title, description, isCollaborative, trackIds } = req.body;
+
+    if (!Array.isArray(trackIds) || trackIds.length === 0) {
+      return res.status(400).json({ error: 'Список треков для импорта пуст' });
+    }
+
+    let targetPlaylistId: number;
+
+    if (mode === 'EXISTING' || existingPlaylistId) {
+      const plId = parseInt(String(existingPlaylistId), 10);
+      if (isNaN(plId) || plId <= 0) {
+        return res.status(400).json({ error: 'Неверный идентификатор существующго плейлиста' });
+      }
+
+      const [playlist] = await db
+        .select()
+        .from(musicPlaylists)
+        .where(eq(musicPlaylists.id, plId))
+        .limit(1);
+
+      if (!playlist) {
+        return res.status(404).json({ error: 'Плейлист не найден' });
+      }
+
+      const isOwner = playlist.userId === user.id;
+      const isStaff = isStaffRole(user.role);
+
+      let canAdd = isOwner || isStaff;
+      if (!canAdd && playlist.isCollaborative) {
+        const [member] = await db
+          .select()
+          .from(musicPlaylistMembers)
+          .where(
+            and(
+              eq(musicPlaylistMembers.playlistId, plId),
+              eq(musicPlaylistMembers.userId, user.id)
+            )
+          )
+          .limit(1);
+        canAdd = member ? member.canAddTracks : true;
+      }
+
+      if (!canAdd) {
+        return res.status(403).json({ error: 'У вас нет прав на добавление треков в этот плейлист' });
+      }
+
+      targetPlaylistId = plId;
+    } else {
+      // Create a new playlist
+      if (!title || typeof title !== 'string' || !title.trim()) {
+        return res.status(400).json({ error: 'Название нового плейлиста обязательно' });
+      }
+
+      const [newPlaylist] = await db
+        .insert(musicPlaylists)
+        .values({
+          userId: user.id,
+          title: title.trim(),
+          description: description?.trim() || null,
+          visibility: 'PUBLIC',
+          isCollaborative: Boolean(isCollaborative),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      targetPlaylistId = newPlaylist.id;
+    }
+
+    // Get current max position
+    const [maxPosRes] = await db
+      .select({ maxPos: sql<number>`COALESCE(MAX(position), 0)` })
+      .from(musicPlaylistTracks)
+      .where(eq(musicPlaylistTracks.playlistId, targetPlaylistId));
+
+    let currentPos = Number(maxPosRes?.maxPos || 0);
+    let added = 0;
+    let skipped = 0;
+
+    for (let i = 0; i < trackIds.length; i++) {
+      const rawId = trackIds[i];
+      const numericTrackId = parseInt(String(rawId), 10);
+      if (isNaN(numericTrackId) || numericTrackId <= 0) {
+        skipped++;
+        continue;
+      }
+
+      const [track] = await db
+        .select({ id: musicTracks.id, title: musicTracks.title })
+        .from(musicTracks)
+        .where(eq(musicTracks.id, numericTrackId))
+        .limit(1);
+
+      if (!track) {
+        skipped++;
+        continue;
+      }
+
+      // Check if already in playlist
+      const [exists] = await db
+        .select({ id: musicPlaylistTracks.id })
+        .from(musicPlaylistTracks)
+        .where(
+          and(
+            eq(musicPlaylistTracks.playlistId, targetPlaylistId),
+            eq(musicPlaylistTracks.trackId, track.id)
+          )
+        )
+        .limit(1);
+
+      if (exists) {
+        skipped++;
+        continue;
+      }
+
+      currentPos++;
+      await db
+        .insert(musicPlaylistTracks)
+        .values({
+          playlistId: targetPlaylistId,
+          trackId: track.id,
+          addedByUserId: user.id,
+          position: currentPos,
+          addedAt: new Date(),
+        })
+        .onConflictDoNothing();
+
+      added++;
+    }
+
+    await db
+      .update(musicPlaylists)
+      .set({ updatedAt: new Date() })
+      .where(eq(musicPlaylists.id, targetPlaylistId));
+
+    return res.json({
+      success: true,
+      playlistId: targetPlaylistId,
+      added,
+      skipped,
+    });
+  } catch (err: any) {
+    console.error('Error executing playlist import:', err);
+    return res.status(500).json({ error: err.message || 'Ошибка при сохранении импортированного плейлиста' });
+  }
+};
+
+musicRouter.post('/playlists/import/execute', requireAuth, executePlaylistImportHandler);
+musicRouter.post('/playlists/import-txt/execute', requireAuth, executePlaylistImportHandler);
 

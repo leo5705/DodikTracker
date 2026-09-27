@@ -34,6 +34,8 @@ import { useNotifications } from '../../context/NotificationContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
 import { FeedbackModal } from '../modals/FeedbackModal.tsx';
 import { Avatar } from './user-and-social.tsx';
+import { GlobalMusicPlayer } from '../music/GlobalMusicPlayer.tsx';
+import { AnimatePresence } from 'motion/react';
 
 export interface NavItemConfig {
   id: string;
@@ -404,6 +406,10 @@ export const TopBar: React.FC<{
   const handleSelectSuggestion = (item: any) => {
     setIsOpenSuggestions(false);
     setSearchValue('');
+    if (item.url) {
+      navigate(item.url);
+      return;
+    }
     const id = item.mediaId || item.id;
     if (id) {
       const typePath = (item.type || 'movie').toLowerCase();
@@ -412,6 +418,8 @@ export const TopBar: React.FC<{
       navigate(`/search?q=${encodeURIComponent(item.title || '')}`);
     }
   };
+
+  const isMusicSection = route.name.startsWith('music') || route.name.startsWith('music-');
 
   return (
     <header className="h-[72px] border-b border-[#1E2442] bg-[#080A18]/85 backdrop-blur-xl sticky top-0 z-20 px-4 sm:px-6 lg:px-8 2xl:px-10 flex items-center justify-between gap-4">
@@ -518,7 +526,7 @@ export const TopBar: React.FC<{
                       </div>
                       <div className="flex items-center gap-2 mt-1">
                         <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-[#191D38] text-[#8B5CF6]">
-                          {item.type}
+                          {item.type === 'music_track' ? 'ТРЕК' : item.type === 'music_release' ? 'АЛЬБОМ' : item.type === 'music_artist' ? 'АРТИСТ' : item.type}
                         </span>
                         {item.dodikRating && (
                           <span className="text-xs font-bold text-amber-400 font-mono">
@@ -563,8 +571,10 @@ export const TopBar: React.FC<{
         )}
       </div>
 
+
+
       {/* Right Actions */}
-      <div className="flex items-center gap-2.5 sm:gap-3.5">
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         {/* Quick Search trigger for mobile */}
         <button
           onClick={() => navigate('/search')}
@@ -573,6 +583,8 @@ export const TopBar: React.FC<{
         >
           <Search className="w-4.5 h-4.5" />
         </button>
+
+
 
         {/* Roulette quick button */}
         <button
@@ -680,6 +692,9 @@ export const AppShell: React.FC<{
 }> = ({ children }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { currentTrack } = useMusicPlayer();
+  const { route } = useRouter();
+
+  const isMusicSection = route.name.startsWith('music') || route.name.startsWith('music-');
 
   return (
     <div className="min-h-screen bg-[#080A18] text-[#F8FAFC] flex antialiased">
@@ -705,13 +720,20 @@ export const AppShell: React.FC<{
       <div className="flex-1 min-w-0 flex flex-col min-h-screen">
         <TopBar onOpenMobileMenu={() => setMobileMenuOpen(true)} />
 
-        <main className={`flex-1 min-w-0 px-4 sm:px-6 lg:px-8 2xl:px-10 py-7 max-w-[1760px] 2xl:max-w-[1920px] mx-auto w-full transition-all ${
-          currentTrack ? 'pb-[calc(9.5rem+env(safe-area-inset-bottom,0px))] md:pb-28' : 'pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-12'
-        }`}>
+        <main
+          className={`flex-1 min-w-0 px-4 sm:px-6 lg:px-8 2xl:px-10 py-7 max-w-[1760px] 2xl:max-w-[1920px] mx-auto w-full transition-all ${
+            isMusicSection && currentTrack
+              ? 'pb-[calc(7.5rem+env(safe-area-inset-bottom,0px))] md:pb-28'
+              : 'pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] md:pb-12'
+          }`}
+        >
           {children}
         </main>
 
         <MobileBottomNav />
+
+        {/* Single Global Music Player with Top <-> Bottom Shared Motion Layout */}
+        <GlobalMusicPlayer />
       </div>
     </div>
   );

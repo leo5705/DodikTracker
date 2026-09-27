@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { providerManager } from '../../providers/index.ts';
 import { encryptCredentials, maskApiKey } from '../../../lib/crypto.ts';
 import { logAdminAction } from './auditHelper.ts';
+import { externalMusicConfig } from '../../services/externalMusic/externalMusicConfig.ts';
 
 export const integrationsRouter = Router();
 
@@ -112,6 +113,7 @@ integrationsRouter.post(
         }
 
         providerManager.clearCache();
+        await externalMusicConfig.initialize();
         await logAdminAction({
           userId: req.user!.id,
           action: 'DELETE_INTEGRATION_KEY',
@@ -173,6 +175,7 @@ integrationsRouter.post(
         }
 
         providerManager.clearCache();
+        await externalMusicConfig.initialize();
         await logAdminAction({
           userId: req.user!.id,
           action: 'UPDATE_INTEGRATION_KEY',
@@ -205,6 +208,7 @@ integrationsRouter.post(
         }
 
         providerManager.clearCache();
+        await externalMusicConfig.initialize();
         await logAdminAction({
           userId: req.user!.id,
           action: 'TOGGLE_INTEGRATION',
@@ -267,6 +271,58 @@ integrationsRouter.post(
     } catch (err: any) {
       console.error('[Integrations Router] Health Check error:', err);
       res.status(500).json({ ok: false, latencyMs: 0, error: err.message || 'Ошибка проверки соединения' });
+    }
+  }
+);
+
+// 4. GET /integrations/inspect/:id - Technical inspection of an external resource
+integrationsRouter.get(
+  '/integrations/inspect/:externalId',
+  requireAuth,
+  requireStaff('MANAGE_SETTINGS'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { externalId } = req.params;
+      const isYt = externalId.startsWith('yt_');
+      const cleanId = externalId.replace(/^yt_/, '').trim();
+
+      if (isYt || externalId.length > 5) {
+        const { youtubeMusicProvider } = await import('../../services/externalMusic/youtubeMusicProvider.ts');
+        const { externalMusicConfig } = await import('../../services/externalMusic/externalMusicConfig.ts');
+
+        const details = await youtubeMusicProvider.getTrackDetails(cleanId);
+
+        if (details) {
+          return res.json({
+            provider: details.provider,
+            providerTrackId: details.providerTrackId,
+            title: details.title,
+            artist: details.artist,
+            durationSeconds: details.durationSeconds,
+            youtubeUrl: (details as any).youtubeUrl || null,
+            lyricsProviderAvailable: externalMusicConfig.isLyricsEnabled('genius') ? 'Genius' : 'Native Fallback',
+          });
+        }
+      }
+
+      // Try generic ProviderManager search for games/movies if not music
+      const managerResult = await providerManager.getDetails('TMDB', externalId, 'MOVIE') 
+        || await providerManager.getDetails('RAWG', externalId, 'GAME');
+      
+      if (managerResult) {
+        return res.json({
+          provider: managerResult.provider,
+          externalId: managerResult.externalId,
+          title: managerResult.title,
+          author: (managerResult as any).developer || (managerResult as any).director || null,
+          type: managerResult.type,
+        });
+      }
+
+      res.status(404).json({ error: 'Объект не найден' });
+    } catch (err: any) {
+      console.error('[Integrations Router] Inspect error:', err);
+      res.status(500).json({ error: 'Ошибка инспекции внешнего ресурса' });
     }
   }
 );

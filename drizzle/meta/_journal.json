@@ -43,6 +43,27 @@
       "when": 1789700000000,
       "tag": "0005_music_rejection_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789780000000,
+      "tag": "0006_music_listening_stats_and_pts",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789860000000,
+      "tag": "0007_music_favorites_library",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790437349263,
+      "tag": "0008_artist_subscriptions",
+      "breakpoints": true
     }
   ]
 }

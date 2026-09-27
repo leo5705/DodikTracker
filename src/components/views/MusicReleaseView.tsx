@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
-import { useMusicPlayer, Track } from '../../context/MusicPlayerContext.tsx';
+import { useMusicPlayer, Track, TrackSource } from '../../context/MusicPlayerContext.tsx';
 import {
   Disc,
   Play,
@@ -25,7 +25,16 @@ import {
   CheckCircle2,
   Headphones,
   Heart,
+  Flag,
+  Plus,
 } from 'lucide-react';
+import { ReportModal } from '../modals/ReportModal.tsx';
+import { AddToPlaylistModal } from '../modals/AddToPlaylistModal.tsx';
+import { LiveLyrics } from '../music/LiveLyrics.tsx';
+import { TrackActionsMenu } from '../music/TrackActionsMenu.tsx';
+import { ArtistLinks } from '../music/ArtistLinks.tsx';
+import { MusicTrackRow } from '../music/MusicTrackRow.tsx';
+import { getBestMusicImageUrl } from '../../utils/musicImageUtils.ts';
 
 interface Genre {
   id: number;
@@ -94,7 +103,7 @@ const REVIEW_CRITERIA = [
 export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) => {
   const { navigate } = useRouter();
   const { dbUser, authFetch } = useAuth();
-  const { playTrack, currentTrack, isPlaying } = useMusicPlayer();
+  const { playTrack, currentTrack, isPlaying, currentTime, seek } = useMusicPlayer();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -115,8 +124,8 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
   const [reviewSort, setReviewSort] = useState<'newest' | 'highest' | 'lowest'>('newest');
 
   // Track accordion toggles for lyrics & notes
-  const [expandedLyricsTrackId, setExpandedLyricsTrackId] = useState<number | null>(null);
-  const [expandedNoteTrackId, setExpandedNoteTrackId] = useState<number | null>(null);
+  const [expandedLyricsTrackId, setExpandedLyricsTrackId] = useState<number | string | null>(null);
+  const [expandedNoteTrackId, setExpandedNoteTrackId] = useState<number | string | null>(null);
 
   // Accordion for expanded review score details in review cards
   const [expandedReviewIds, setExpandedReviewIds] = useState<number[]>([]);
@@ -142,6 +151,12 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
   // Delete review state
   const [isDeletingReview, setIsDeletingReview] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Report modal state
+  const [reportModalReview, setReportModalReview] = useState<Review | null>(null);
+
+  // Add to playlist modal state
+  const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
 
   useEffect(() => {
     fetchRelease();
@@ -328,10 +343,25 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
     );
   };
 
+  const getFullReleaseTracks = (): Track[] => {
+    if (!release || !tracks || tracks.length === 0) return [];
+    return tracks.map((t) => ({
+      ...t,
+      source: (t.source || 'dodik') as TrackSource,
+      releaseId: release.id,
+      releaseTitle: release.title,
+      releaseCover: release.cover,
+      releaseSlug: release.slug,
+      artistId: release.artistId,
+      artistName: t.artistName || release.stageName || 'Исполнитель',
+      artistSlug: release.artistSlug || '',
+    }));
+  };
+
   const handlePlayFirstTrack = () => {
-    if (!tracks || tracks.length === 0 || !release) return;
-    const firstTrack = tracks[0];
-    playTrack(firstTrack, tracks, {
+    const fullTracks = getFullReleaseTracks();
+    if (fullTracks.length === 0 || !release) return;
+    playTrack(fullTracks[0], fullTracks, {
       id: release.id,
       title: release.title,
       cover: release.cover,
@@ -343,7 +373,20 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
 
   const handlePlaySpecificTrack = (track: Track) => {
     if (!release) return;
-    playTrack(track, tracks, {
+    const fullTracks = getFullReleaseTracks();
+    const matchedTrack = fullTracks.find((t) => t.id === track.id) || {
+      ...track,
+      source: (track.source || 'dodik') as TrackSource,
+      releaseId: release.id,
+      releaseTitle: release.title,
+      releaseCover: release.cover,
+      releaseSlug: release.slug,
+      artistId: release.artistId,
+      artistName: track.artistName || release.stageName || 'Исполнитель',
+      artistSlug: release.artistSlug || '',
+    };
+
+    playTrack(matchedTrack, fullTracks.length > 0 ? fullTracks : [matchedTrack], {
       id: release.id,
       title: release.title,
       cover: release.cover,
@@ -613,7 +656,7 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
           <div className="relative group w-56 h-56 md:w-64 md:h-64 rounded-2xl overflow-hidden shrink-0 shadow-2xl border border-white/10 bg-slate-900">
             {release.cover ? (
               <img
-                src={release.cover}
+                src={getBestMusicImageUrl(release.cover, 'large')}
                 alt={release.title}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
               />
@@ -668,12 +711,14 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
                   {release.stageName.charAt(0).toUpperCase()}
                 </div>
               )}
-              <button
-                onClick={() => navigate(`/music/artist/${release.artistSlug}`)}
-                className="text-lg font-bold text-purple-300 hover:text-purple-200 hover:underline transition-colors cursor-pointer"
-              >
-                {release.stageName}
-              </button>
+              <div className="text-lg font-bold text-purple-300">
+                <ArtistLinks
+                  artistName={release.stageName}
+                  artistSlug={release.artistSlug}
+                  artistId={release.artistId}
+                  linkClassName="hover:text-purple-200 hover:underline"
+                />
+              </div>
             </div>
 
             {/* Release Metadata */}
@@ -788,170 +833,53 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
             </div>
           ) : (
             <div className="space-y-2">
-              {tracks.map((trk, index) => {
-                const isCurrent = currentTrack?.id === trk.id;
-                const isCurrentPlaying = isCurrent && isPlaying;
-                const hasLyrics = Boolean(trk.lyrics && trk.lyrics.trim());
-                const hasAuthorNote = Boolean(trk.authorNote && trk.authorNote.trim());
-                const isLyricsExpanded = expandedLyricsTrackId === trk.id;
-                const isNoteExpanded = expandedNoteTrackId === trk.id;
-
-                return (
-                  <div
-                    key={trk.id}
-                    className={`rounded-2xl border transition-all ${
-                      isCurrent
-                        ? 'bg-purple-950/30 border-purple-500/40 shadow-lg shadow-purple-900/10'
-                        : 'bg-[#151932]/60 hover:bg-[#181D3B] border-[#1E2442]/60'
-                    }`}
-                  >
-                    {/* Main track row */}
-                    <div className="p-3 md:p-4 flex items-center gap-3 md:gap-4">
-                      {/* Track number & Play button */}
-                      <button
-                        onClick={() => handlePlaySpecificTrack(trk)}
-                        className="w-9 h-9 rounded-xl bg-slate-800/80 hover:bg-purple-600 text-slate-300 hover:text-white flex items-center justify-center shrink-0 transition-all cursor-pointer group"
-                      >
-                        {isCurrentPlaying ? (
-                          <Pause className="w-4 h-4 fill-current text-purple-400 group-hover:text-white" />
-                        ) : (
-                          <Play className="w-4 h-4 fill-current ml-0.5 text-slate-400 group-hover:text-white" />
-                        )}
-                      </button>
-
-                      <span className="text-xs font-mono text-slate-500 w-5 text-center hidden sm:inline">
-                        {String(index + 1).padStart(2, '0')}
-                      </span>
-
-                      {/* Title & Badges */}
-                      <div className="flex-1 min-w-0 pr-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span
-                            onClick={() => handlePlaySpecificTrack(trk)}
-                            className={`font-semibold text-sm cursor-pointer hover:underline truncate ${
-                              isCurrent ? 'text-purple-300 font-bold' : 'text-slate-100'
-                            }`}
-                          >
-                            {trk.title}
-                          </span>
-                          {trk.explicit && (
-                            <span className="px-1.5 py-0.2 text-[9px] font-black rounded bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                              18+
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Track Action Toggles (Lyrics & Note) */}
-                      <div className="flex items-center gap-1 sm:gap-2">
-                        {hasLyrics && (
-                          <button
-                            onClick={() =>
-                              setExpandedLyricsTrackId(isLyricsExpanded ? null : trk.id)
-                            }
-                            className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors cursor-pointer ${
-                              isLyricsExpanded
-                                ? 'bg-purple-600 text-white'
-                                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
-                            }`}
-                          >
-                            <FileText className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">Текст</span>
-                          </button>
-                        )}
-
-                        {hasAuthorNote && (
-                          <button
-                            onClick={() =>
-                              setExpandedNoteTrackId(isNoteExpanded ? null : trk.id)
-                            }
-                            className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors cursor-pointer ${
-                              isNoteExpanded
-                                ? 'bg-indigo-600 text-white'
-                                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
-                            }`}
-                          >
-                            <Info className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">Заметка</span>
-                          </button>
-                        )}
-
-                        {trk.listenCount !== undefined && trk.listenCount > 0 && (
-                          <span
-                            className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-950/40 border border-purple-500/20 text-[11px] font-mono text-purple-300/90"
-                            title="Квалифицированные прослушивания"
-                          >
-                            <Headphones className="w-3 h-3 text-purple-400" />
-                            <span>{trk.listenCount.toLocaleString('ru-RU')}</span>
-                          </span>
-                        )}
-
-                        <span className="text-xs font-mono text-slate-400 ml-2 w-10 text-right">
-                          {formatDuration(trk.duration)}
-                        </span>
-
-                        {/* Favorite Track Button */}
-                        {dbUser && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleToggleFavoriteTrack(trk);
-                            }}
-                            className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ml-1 ${
-                              trk.isFavorite
-                                ? 'text-rose-400 bg-rose-500/15 border border-rose-500/30'
-                                : 'text-slate-500 hover:text-rose-400 hover:bg-slate-800'
-                            }`}
-                            title={trk.isFavorite ? 'Удалить из любимых треков' : 'Добавить в любимые треки'}
-                          >
-                            <Heart className={`w-3.5 h-3.5 ${trk.isFavorite ? 'fill-rose-500 text-rose-500' : ''}`} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Expandable Lyrics Area */}
-                    {hasLyrics && isLyricsExpanded && (
-                      <div className="px-4 pb-4 pt-1 border-t border-purple-500/20 bg-purple-950/10 rounded-b-2xl">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold text-purple-300 flex items-center gap-1">
-                            <FileText className="w-3.5 h-3.5" /> Текст песни
-                          </span>
-                          <button
-                            onClick={() => setExpandedLyricsTrackId(null)}
-                            className="text-xs text-slate-400 hover:text-white"
-                          >
-                            Скрыть
-                          </button>
-                        </div>
-                        <pre className="text-xs text-slate-300 font-sans whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto p-3 bg-slate-900/60 rounded-xl border border-slate-800">
-                          {trk.lyrics}
-                        </pre>
-                      </div>
-                    )}
-
-                    {/* Expandable Author Note Area */}
-                    {hasAuthorNote && isNoteExpanded && (
-                      <div className="px-4 pb-4 pt-1 border-t border-indigo-500/20 bg-indigo-950/10 rounded-b-2xl">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold text-indigo-300 flex items-center gap-1">
-                            <Info className="w-3.5 h-3.5" /> Авторская заметка
-                          </span>
-                          <button
-                            onClick={() => setExpandedNoteTrackId(null)}
-                            className="text-xs text-slate-400 hover:text-white"
-                          >
-                            Скрыть
-                          </button>
-                        </div>
-                        <p className="text-xs text-slate-300 italic leading-relaxed p-3 bg-slate-900/60 rounded-xl border border-slate-800">
-                          "{trk.authorNote}"
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {tracks.map((trk, index) => (
+                <MusicTrackRow
+                  key={`rel-track-${trk.id || index}-${index}`}
+                  track={{
+                    id: trk.id,
+                    source: 'dodik',
+                    title: trk.title,
+                    artistName: trk.artistName || release.stageName,
+                    artists: (trk as any).artists || (release as any).artists,
+                    artistSlug: release.artistSlug,
+                    artistId: release.artistId,
+                    releaseId: release.id,
+                    releaseTitle: release.title,
+                    releaseCover: release.cover || null,
+                    releaseSlug: release.slug,
+                    audioFile: trk.audioFile,
+                    duration: trk.duration,
+                    explicit: trk.explicit,
+                    lyrics: trk.lyrics,
+                    trackNumber: trk.trackNumber || index + 1,
+                    listenCount: trk.listenCount,
+                    isFavorite: trk.isFavorite,
+                  }}
+                  index={index + 1}
+                  showIndex={true}
+                  showCover={false}
+                  queueContext={tracks.map((t) => ({
+                    id: t.id,
+                    source: 'dodik',
+                    title: t.title,
+                    artistName: t.artistName || release.stageName,
+                    artists: (t as any).artists || (release as any).artists,
+                    artistSlug: release.artistSlug,
+                    artistId: release.artistId,
+                    releaseId: release.id,
+                    releaseTitle: release.title,
+                    releaseCover: release.cover || null,
+                    releaseSlug: release.slug,
+                    audioFile: t.audioFile,
+                    duration: t.duration,
+                    explicit: t.explicit,
+                    lyrics: t.lyrics,
+                    trackNumber: t.trackNumber,
+                    isFavorite: t.isFavorite,
+                  }))}
+                />
+              ))}
             </div>
           )}
         </section>
@@ -1197,11 +1125,11 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
               </div>
             ) : (
               <div className="space-y-4">
-                {reviews.map((rev) => {
+                {reviews.map((rev, idx) => {
                   const isAccordionOpen = expandedReviewIds.includes(rev.id);
                   return (
                     <div
-                      key={rev.id}
+                      key={`rel-rev-${rev.id || idx}-${idx}`}
                       className="p-5 rounded-2xl bg-[#151932]/70 border border-[#1E2442] space-y-3 shadow-md"
                     >
                       <div className="flex items-center justify-between">
@@ -1236,8 +1164,8 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
                         </p>
                       )}
 
-                      {/* Accordion toggle button for criteria */}
-                      <div className="pt-1">
+                      {/* Accordion toggle button for criteria & Report action */}
+                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between flex-wrap gap-2">
                         <button
                           onClick={() => toggleReviewAccordion(rev.id)}
                           className="text-xs font-semibold text-purple-400 hover:text-purple-300 flex items-center gap-1 transition cursor-pointer"
@@ -1253,17 +1181,28 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
                           )}
                         </button>
 
-                        {isAccordionOpen && (
-                          <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-xs font-mono animate-in fade-in">
-                            <div><span className="text-slate-400">Музыка:</span> <strong className="text-purple-300">{rev.musicScore}</strong></div>
-                            <div><span className="text-slate-400">Исполнение:</span> <strong className="text-cyan-300">{rev.performanceScore}</strong></div>
-                            <div><span className="text-slate-400">Продакшн:</span> <strong className="text-indigo-300">{rev.productionScore}</strong></div>
-                            <div><span className="text-slate-400">Текст:</span> <strong className="text-blue-300">{rev.lyricsScore}</strong></div>
-                            <div><span className="text-slate-400">Атмосфера:</span> <strong className="text-emerald-300">{rev.atmosphereScore}</strong></div>
-                            <div><span className="text-slate-400">Целостность:</span> <strong className="text-amber-300">{rev.cohesionScore}</strong></div>
-                          </div>
+                        {dbUser && dbUser.id !== rev.userId && (
+                          <button
+                            onClick={() => setReportModalReview(rev)}
+                            className="text-xs text-slate-500 hover:text-red-400 flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-red-500/10 transition-colors cursor-pointer"
+                            title="Пожаловаться на отзыв"
+                          >
+                            <Flag className="w-3.5 h-3.5" />
+                            <span>Пожаловаться</span>
+                          </button>
                         )}
                       </div>
+
+                      {isAccordionOpen && (
+                        <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-xs font-mono animate-in fade-in">
+                          <div><span className="text-slate-400">Музыка:</span> <strong className="text-purple-300">{rev.musicScore}</strong></div>
+                          <div><span className="text-slate-400">Исполнение:</span> <strong className="text-cyan-300">{rev.performanceScore}</strong></div>
+                          <div><span className="text-slate-400">Продакшн:</span> <strong className="text-indigo-300">{rev.productionScore}</strong></div>
+                          <div><span className="text-slate-400">Текст:</span> <strong className="text-blue-300">{rev.lyricsScore}</strong></div>
+                          <div><span className="text-slate-400">Атмосфера:</span> <strong className="text-emerald-300">{rev.atmosphereScore}</strong></div>
+                          <div><span className="text-slate-400">Целостность:</span> <strong className="text-amber-300">{rev.cohesionScore}</strong></div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1284,6 +1223,28 @@ export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) =
           </div>
         </section>
       </div>
+
+      {/* REPORT MODAL */}
+      {reportModalReview && (
+        <ReportModal
+          isOpen={true}
+          onClose={() => setReportModalReview(null)}
+          targetType="MUSIC_REVIEW"
+          targetId={reportModalReview.id}
+          targetTitle={`Рецензия на релиз «${release?.title || 'Музыкальный релиз'}» (${reportModalReview.overallScore.toFixed(1)}/100)`}
+          targetAuthorName={reportModalReview.username}
+          targetContentPreview={reportModalReview.text || `Оценка: ${reportModalReview.overallScore.toFixed(1)}/100`}
+        />
+      )}
+
+      {/* ADD TO PLAYLIST MODAL */}
+      {addToPlaylistTrack && (
+        <AddToPlaylistModal
+          isOpen={Boolean(addToPlaylistTrack)}
+          onClose={() => setAddToPlaylistTrack(null)}
+          track={addToPlaylistTrack}
+        />
+      )}
 
       {/* REVIEW FORM MODAL */}
       {isReviewModalOpen && (

@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
+import { LyricsEditorField } from '../music/LyricsEditorField.tsx';
 
 interface ArtistProfile {
   id: number;
@@ -368,7 +369,7 @@ export const MusicStudioView: React.FC = () => {
   // Fetch all releases for Releases tab
   const fetchAllReleases = useCallback(async () => {
     try {
-      const res = await authFetch('/api/music/releases?limit=100');
+      const res = await authFetch('/api/music/studio/releases?limit=100');
       if (res.ok) {
         const data = await res.json();
         setReleases(data.releases || []);
@@ -2283,16 +2284,11 @@ export const MusicStudioView: React.FC = () => {
                   />
                 </div>
 
-                <div>
-                  <label className="text-[10px] font-mono text-white font-bold uppercase">Текст трека (Lyrics)</label>
-                  <textarea
-                    rows={2}
-                    value={trackForm.lyrics}
-                    onChange={(e) => setTrackForm({ ...trackForm, lyrics: e.target.value })}
-                    placeholder="Текст песни..."
-                    className="w-full p-2.5 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-white focus:outline-none focus:border-purple-500 resize-none font-mono"
-                  />
-                </div>
+                <LyricsEditorField
+                  value={trackForm.lyrics || ''}
+                  onChange={(val) => setTrackForm({ ...trackForm, lyrics: val })}
+                  trackTitle={trackForm.title}
+                />
 
                 <div className="flex items-center justify-between pt-2">
                   <label className="flex items-center gap-2 text-xs font-mono text-white cursor-pointer">

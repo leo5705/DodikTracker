@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
+import { LyricsEditorField } from '../music/LyricsEditorField.tsx';
 
 interface Genre {
   id: number;
@@ -196,9 +197,32 @@ export const MusicReleaseEditorView: React.FC<MusicReleaseEditorProps> = ({
         // Existing release data for Edit mode
         if (mode === 'edit' && releaseId) {
           const relRes = await authFetch(`/api/music/releases/${releaseId}`);
+          if (!relRes.ok) {
+            alert('Релиз не найден или у вас нет прав на его просмотр');
+            navigate('/music/studio');
+            return;
+          }
+
           if (relRes.ok && isMounted) {
             const data = await relRes.json();
             const rel = data.release;
+
+            // Security check: ensure current user is owner or staff
+            const isStaff = dbUser && ['SUPER_ADMIN', 'ADMIN', 'MODERATOR'].includes(dbUser.role);
+            const isOwner = dbUser && rel.artistUserId === dbUser.id;
+            if (!isOwner && !isStaff) {
+              alert('Нет прав на редактирование этого релиза');
+              navigate('/music/studio');
+              return;
+            }
+
+            // Moderation lock check: non-staff cannot edit releases under active review
+            if (rel.status === 'PENDING_REVIEW' && !isStaff) {
+              alert('Релиз находится на модерации и заблокирован для редактирования');
+              navigate('/music/studio');
+              return;
+            }
+
             setTitle(rel.title || '');
             setType(rel.type || 'SINGLE');
             setDescription(rel.description || '');
@@ -1074,18 +1098,11 @@ export const MusicReleaseEditorView: React.FC<MusicReleaseEditorProps> = ({
 
                 {/* Lyrics & Author Note Expandable */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-mono text-[#94A3B8] font-bold uppercase">
-                      Текст трека (Lyrics)
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={tr.lyrics}
-                      onChange={(e) => handleUpdateTrack(idx, { lyrics: e.target.value })}
-                      placeholder="Слова песни..."
-                      className="w-full p-3 rounded-xl bg-[#0B0D20] border border-[#1E2442] text-xs text-white focus:outline-none focus:border-purple-500 resize-none font-mono leading-relaxed"
-                    />
-                  </div>
+                  <LyricsEditorField
+                    value={tr.lyrics}
+                    onChange={(val) => handleUpdateTrack(idx, { lyrics: val })}
+                    trackTitle={tr.title}
+                  />
 
                   <div className="space-y-1">
                     <label className="text-[10px] font-mono text-[#94A3B8] font-bold uppercase">

@@ -21,13 +21,25 @@ import {
   CheckCircle2,
   ArrowUpDown,
   History,
+  ListMusic,
+  Plus,
+  Edit3,
+  Trash2,
+  Globe,
+  Lock,
+  Link as LinkIcon,
+  UserCheck,
+  Users,
 } from 'lucide-react';
 import { MusicNav } from '../music/MusicNav.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useMusicPlayer, Track } from '../../context/MusicPlayerContext.tsx';
+import { PlaylistModal, PlaylistData } from '../modals/PlaylistModal.tsx';
+import { AddToPlaylistModal, AddToPlaylistTrackInfo } from '../modals/AddToPlaylistModal.tsx';
+import { MusicTrackCard } from '../music/MusicTrackCard.tsx';
 
-type LibraryTab = 'tracks' | 'releases' | 'recent' | 'reviews';
+type LibraryTab = 'tracks' | 'releases' | 'playlists' | 'recent' | 'reviews' | 'subscriptions';
 
 interface SummaryData {
   favoriteTracksCount: number;
@@ -35,6 +47,22 @@ interface SummaryData {
   recentTracksCount: number;
   totalListeningSeconds: number;
   reviewsCount: number;
+  playlistsCount?: number;
+}
+
+interface MyPlaylistItem {
+  id: number;
+  userId: number;
+  title: string;
+  description: string | null;
+  cover: string | null;
+  customCover: string | null;
+  firstTrackCover: string | null;
+  visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
+  createdAt: string;
+  updatedAt: string;
+  tracksCount: number;
+  totalDuration: number;
 }
 
 interface FavoriteReleaseItem {
@@ -133,6 +161,22 @@ export const MusicLibraryView: React.FC = () => {
   const [releasesTotalPages, setReleasesTotalPages] = useState(1);
   const [releasesTotal, setReleasesTotal] = useState(0);
 
+  // Playlists tab state
+  const [myPlaylists, setMyPlaylists] = useState<MyPlaylistItem[]>([]);
+  const [loadingMyPlaylists, setLoadingMyPlaylists] = useState(true);
+  const [myPlaylistsSearch, setMyPlaylistsSearch] = useState('');
+  const [myPlaylistsSort, setMyPlaylistsSort] = useState<'updated' | 'newest' | 'title_asc' | 'tracks_count'>('updated');
+  const [myPlaylistsPage, setMyPlaylistsPage] = useState(1);
+  const [myPlaylistsTotalPages, setMyPlaylistsTotalPages] = useState(1);
+  const [myPlaylistsTotal, setMyPlaylistsTotal] = useState(0);
+
+  // Modal states
+  const [isCreatePlaylistModalOpen, setIsCreatePlaylistModalOpen] = useState(false);
+  const [playlistToEdit, setPlaylistToEdit] = useState<MyPlaylistItem | null>(null);
+  const [playlistToDelete, setPlaylistToDelete] = useState<MyPlaylistItem | null>(null);
+  const [deletingPlaylist, setDeletingPlaylist] = useState(false);
+  const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<AddToPlaylistTrackInfo | null>(null);
+
   // Recent tab state
   const [recentTracks, setRecentTracks] = useState<RecentTrackItem[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
@@ -144,6 +188,25 @@ export const MusicLibraryView: React.FC = () => {
   // Reviews tab state
   const [reviews, setReviews] = useState<UserReviewItem[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(true);
+
+  // Subscriptions tab state
+  interface SubscribedDodikArtist {
+    id: number;
+    stageName: string;
+    slug: string;
+    avatar: string | null;
+  }
+
+  interface SubscribedExternalArtist {
+    provider: 'youtube' | 'soundcloud';
+    artistId: string;
+    name: string;
+    avatar: string | null;
+  }
+
+  const [subscribedDodikArtists, setSubscribedDodikArtists] = useState<SubscribedDodikArtist[]>([]);
+  const [subscribedExternalArtists, setSubscribedExternalArtists] = useState<SubscribedExternalArtist[]>([]);
+  const [loadingSubscriptions, setLoadingSubscriptions] = useState(false);
 
   // Fetch summary
   const fetchSummary = useCallback(() => {
@@ -213,6 +276,54 @@ export const MusicLibraryView: React.FC = () => {
       .finally(() => setLoadingReleases(false));
   }, [dbUser, authFetch, releasesPage, releasesSort, releasesType, releasesSearch]);
 
+  // Fetch my playlists
+  const fetchMyPlaylists = useCallback(() => {
+    if (!dbUser) {
+      setLoadingMyPlaylists(false);
+      return;
+    }
+    setLoadingMyPlaylists(true);
+    const params = new URLSearchParams({
+      page: String(myPlaylistsPage),
+      limit: '24',
+      sort: myPlaylistsSort,
+    });
+    if (myPlaylistsSearch.trim()) {
+      params.append('q', myPlaylistsSearch.trim());
+    }
+
+    authFetch(`/api/music/playlists/my?${params.toString()}`)
+      .then((res) => (res.ok ? res.json() : { playlists: [], pagination: { total: 0, totalPages: 1 } }))
+      .then((data) => {
+        setMyPlaylists(data.playlists || []);
+        setMyPlaylistsTotal(data.pagination?.total || 0);
+        setMyPlaylistsTotalPages(data.pagination?.totalPages || 1);
+      })
+      .catch((err) => console.error('Error fetching my playlists:', err))
+      .finally(() => setLoadingMyPlaylists(false));
+  }, [dbUser, authFetch, myPlaylistsPage, myPlaylistsSort, myPlaylistsSearch]);
+
+  // Delete playlist handler
+  const handleDeletePlaylist = async () => {
+    if (!playlistToDelete || deletingPlaylist) return;
+    setDeletingPlaylist(true);
+    try {
+      const res = await authFetch(`/api/music/playlists/${playlistToDelete.id}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setMyPlaylists((prev) => prev.filter((p) => p.id !== playlistToDelete.id));
+        setMyPlaylistsTotal((prev) => Math.max(0, prev - 1));
+        fetchSummary();
+      }
+    } catch (err) {
+      console.error('Error deleting playlist:', err);
+    } finally {
+      setDeletingPlaylist(false);
+      setPlaylistToDelete(null);
+    }
+  };
+
   // Fetch recent tracks
   const fetchRecentTracks = useCallback(() => {
     if (!dbUser) {
@@ -255,6 +366,23 @@ export const MusicLibraryView: React.FC = () => {
       .finally(() => setLoadingReviews(false));
   }, [dbUser, authFetch]);
 
+  // Fetch subscriptions
+  const fetchSubscriptions = useCallback(() => {
+    if (!dbUser) {
+      setLoadingSubscriptions(false);
+      return;
+    }
+    setLoadingSubscriptions(true);
+    authFetch('/api/music/my-subscriptions')
+      .then((res) => (res.ok ? res.json() : { dodikArtists: [], externalArtists: [] }))
+      .then((data) => {
+        setSubscribedDodikArtists(data.dodikArtists || []);
+        setSubscribedExternalArtists(data.externalArtists || []);
+      })
+      .catch((err) => console.error('Error fetching subscribed artists:', err))
+      .finally(() => setLoadingSubscriptions(false));
+  }, [dbUser, authFetch]);
+
   // Initial and reactive loads
   useEffect(() => {
     fetchSummary();
@@ -263,9 +391,11 @@ export const MusicLibraryView: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'tracks') fetchFavoriteTracks();
     if (activeTab === 'releases') fetchFavoriteReleases();
+    if (activeTab === 'playlists') fetchMyPlaylists();
     if (activeTab === 'recent') fetchRecentTracks();
     if (activeTab === 'reviews') fetchUserReviews();
-  }, [activeTab, fetchFavoriteTracks, fetchFavoriteReleases, fetchRecentTracks, fetchUserReviews]);
+    if (activeTab === 'subscriptions') fetchSubscriptions();
+  }, [activeTab, fetchFavoriteTracks, fetchFavoriteReleases, fetchMyPlaylists, fetchRecentTracks, fetchUserReviews, fetchSubscriptions]);
 
   // Global event listeners to keep UI synchronized in real-time
   useEffect(() => {
@@ -479,7 +609,17 @@ export const MusicLibraryView: React.FC = () => {
 
               <div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md">
                 <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-slate-400 font-semibold">
-                  <Disc className="w-3 h-3 text-purple-400" />
+                  <ListMusic className="w-3 h-3 text-purple-400" />
+                  <span>Плейлисты</span>
+                </div>
+                <div className="text-lg font-black text-white font-mono mt-0.5">
+                  {summary.playlistsCount || 0}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md">
+                <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-slate-400 font-semibold">
+                  <Disc className="w-3 h-3 text-indigo-400" />
                   <span>Релизы</span>
                 </div>
                 <div className="text-lg font-black text-white font-mono mt-0.5">
@@ -489,17 +629,7 @@ export const MusicLibraryView: React.FC = () => {
 
               <div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md">
                 <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-slate-400 font-semibold">
-                  <Clock className="w-3 h-3 text-cyan-400" />
-                  <span>История</span>
-                </div>
-                <div className="text-lg font-black text-white font-mono mt-0.5">
-                  {summary.recentTracksCount}
-                </div>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md">
-                <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-slate-400 font-semibold">
-                  <Headphones className="w-3 h-3 text-indigo-400" />
+                  <Headphones className="w-3 h-3 text-cyan-400" />
                   <span>Время</span>
                 </div>
                 <div className="text-lg font-black text-white font-mono mt-0.5 truncate" title={`${summary.totalListeningSeconds} секунд`}>
@@ -536,6 +666,18 @@ export const MusicLibraryView: React.FC = () => {
             </button>
 
             <button
+              onClick={() => setActiveTab('playlists')}
+              className={`px-4 py-2.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
+                activeTab === 'playlists'
+                  ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              <ListMusic className="w-3.5 h-3.5" />
+              <span>Мои плейлисты ({summary.playlistsCount || myPlaylistsTotal || 0})</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('releases')}
               className={`px-4 py-2.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
                 activeTab === 'releases'
@@ -557,6 +699,18 @@ export const MusicLibraryView: React.FC = () => {
             >
               <History className="w-3.5 h-3.5" />
               <span>Недавно слушал ({summary.recentTracksCount})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('subscriptions')}
+              className={`px-4 py-2.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
+                activeTab === 'subscriptions'
+                  ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Подписки ({subscribedDodikArtists.length + subscribedExternalArtists.length})</span>
             </button>
 
             <button
@@ -657,126 +811,17 @@ export const MusicLibraryView: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {tracks.map((trk, index) => {
-                    const isCurrent = currentTrack?.id === trk.id;
-                    const isCurrentPlaying = isCurrent && isPlaying;
-
-                    return (
-                      <div
+                <>
+                  <div className="space-y-2">
+                    {tracks.map((trk) => (
+                      <MusicTrackCard
                         key={trk.id}
-                        className={`group p-3 sm:p-4 rounded-2xl border transition-all flex items-center gap-3 sm:gap-4 ${
-                          isCurrent
-                            ? 'bg-purple-950/30 border-purple-500/40 shadow-lg shadow-purple-900/10'
-                            : 'bg-[#0B0D20] hover:bg-[#121630] border-[#1E2442]/80'
-                        }`}
-                      >
-                        {/* Play/Pause Button */}
-                        <button
-                          onClick={() => {
-                            if (isCurrent) {
-                              togglePlayPause();
-                            } else {
-                              playTrack(trk, tracks);
-                            }
-                          }}
-                          className="w-10 h-10 rounded-xl bg-slate-800/80 hover:bg-purple-600 text-slate-300 hover:text-white flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md"
-                        >
-                          {isCurrentPlaying ? (
-                            <Pause className="w-4 h-4 fill-current text-purple-400 group-hover:text-white" />
-                          ) : (
-                            <Play className="w-4 h-4 fill-current ml-0.5 text-slate-400 group-hover:text-white" />
-                          )}
-                        </button>
-
-                        {/* Cover Image */}
-                        <div
-                          onClick={() => {
-                            if (trk.releaseSlug) navigate(`/music/release/${trk.releaseSlug}`);
-                            else if (trk.releaseId) navigate(`/music/release/${trk.releaseId}`);
-                          }}
-                          className="w-10 h-10 rounded-xl bg-slate-800 overflow-hidden shrink-0 cursor-pointer border border-slate-700/50 hover:scale-105 transition-transform"
-                        >
-                          {trk.releaseCover ? (
-                            <img src={trk.releaseCover} alt={trk.title} className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-purple-950/40 text-purple-400">
-                              <Music2 className="w-4 h-4" />
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Title & Artist */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span
-                              onClick={() => {
-                                if (isCurrent) togglePlayPause();
-                                else playTrack(trk, tracks);
-                              }}
-                              className={`text-xs sm:text-sm font-bold truncate cursor-pointer hover:underline ${
-                                isCurrent ? 'text-purple-300' : 'text-white'
-                              }`}
-                            >
-                              {trk.title}
-                            </span>
-                            {trk.explicit && (
-                              <span className="px-1.5 py-0.2 text-[9px] font-black rounded bg-rose-500/20 text-rose-400 border border-rose-500/30 shrink-0">
-                                18+
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="flex items-center gap-2 text-[11px] text-slate-400 truncate mt-0.5">
-                            <span
-                              onClick={() => {
-                                if (trk.artistSlug) navigate(`/music/artist/${trk.artistSlug}`);
-                              }}
-                              className="hover:text-purple-300 hover:underline cursor-pointer"
-                            >
-                              {trk.artistName || 'Исполнитель'}
-                            </span>
-                            {trk.releaseTitle && (
-                              <>
-                                <span className="text-slate-600">·</span>
-                                <span
-                                  onClick={() => {
-                                    if (trk.releaseSlug) navigate(`/music/release/${trk.releaseSlug}`);
-                                    else if (trk.releaseId) navigate(`/music/release/${trk.releaseId}`);
-                                  }}
-                                  className="hover:text-purple-300 hover:underline cursor-pointer truncate hidden sm:inline"
-                                >
-                                  {trk.releaseTitle}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Listen counter */}
-                        {trk.listenCount !== undefined && trk.listenCount > 0 && (
-                          <div className="hidden md:flex items-center gap-1 text-[11px] font-mono text-purple-300/80 shrink-0">
-                            <Headphones className="w-3.5 h-3.5 text-purple-400" />
-                            <span>{trk.listenCount.toLocaleString('ru-RU')}</span>
-                          </div>
-                        )}
-
-                        {/* Duration */}
-                        <div className="text-xs font-mono text-slate-400 w-12 text-right shrink-0">
-                          {formatDuration(trk.duration)}
-                        </div>
-
-                        {/* Favorite button */}
-                        <button
-                          onClick={() => handleRemoveFavoriteTrack(trk)}
-                          className="p-2 rounded-xl text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-all cursor-pointer shrink-0"
-                          title="Удалить из любимых"
-                        >
-                          <Heart className="w-4 h-4 fill-rose-500 text-rose-500" />
-                        </button>
-                      </div>
-                    );
-                  })}
+                        track={{ ...trk, isFavorite: true }}
+                        queueContext={tracks}
+                        variant="row"
+                      />
+                    ))}
+                  </div>
 
                   {/* Pagination */}
                   {tracksTotalPages > 1 && (
@@ -800,7 +845,7 @@ export const MusicLibraryView: React.FC = () => {
                       </button>
                     </div>
                   )}
-                </div>
+                </>
               )}
             </div>
           )}
@@ -981,6 +1026,222 @@ export const MusicLibraryView: React.FC = () => {
             </div>
           )}
 
+          {/* TAB 2.5: MY PLAYLISTS */}
+          {activeTab === 'playlists' && (
+            <div className="space-y-4">
+              {/* Controls bar */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442]">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIsCreatePlaylistModalOpen(true)}
+                    className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-mono text-xs font-bold flex items-center gap-2 cursor-pointer shadow-lg shadow-purple-600/20 transition-all"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Создать плейлист</span>
+                  </button>
+
+                  <button
+                    onClick={() => navigate('/music/playlists')}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 font-mono text-xs font-bold transition-all cursor-pointer flex items-center gap-2"
+                  >
+                    <Globe className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Каталог плейлистов</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                  {/* Search */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Поиск по плейлистам..."
+                      value={myPlaylistsSearch}
+                      onChange={(e) => {
+                        setMyPlaylistsSearch(e.target.value);
+                        setMyPlaylistsPage(1);
+                      }}
+                      className="w-full sm:w-56 pl-8 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+
+                  {/* Sort */}
+                  <div className="flex items-center gap-1.5">
+                    <ArrowUpDown className="w-3.5 h-3.5 text-slate-500 shrink-0 hidden sm:inline" />
+                    <select
+                      value={myPlaylistsSort}
+                      onChange={(e) => {
+                        setMyPlaylistsSort(e.target.value as any);
+                        setMyPlaylistsPage(1);
+                      }}
+                      className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono text-slate-300 focus:outline-none focus:border-purple-500 cursor-pointer"
+                    >
+                      <option value="updated">По обновлению</option>
+                      <option value="newest">Сначала новые</option>
+                      <option value="tracks_count">По трекам</option>
+                      <option value="title_asc">По названию (А-Я)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Playlists Grid */}
+              {loadingMyPlaylists ? (
+                <div className="py-20 text-center text-[#94A3B8] flex flex-col items-center justify-center gap-3">
+                  <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+                  <span className="text-xs font-mono font-semibold">Загрузка ваших плейлистов...</span>
+                </div>
+              ) : myPlaylists.length === 0 ? (
+                <div className="p-12 text-center bg-[#0B0D20] border border-[#1E2442] rounded-3xl space-y-4">
+                  <ListMusic className="w-12 h-12 text-purple-500/40 mx-auto" />
+                  <div className="space-y-1">
+                    <h3 className="text-base font-bold text-white font-mono">
+                      {myPlaylistsSearch ? 'Ничего не найдено' : 'У вас пока нет плейлистов'}
+                    </h3>
+                    <p className="text-xs text-slate-400 max-w-md mx-auto">
+                      {myPlaylistsSearch
+                        ? 'Попробуйте изменить поисковый запрос.'
+                        : 'Создавайте собственные подборки треков, настраивайте приватность и делитесь любимой музыкой.'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setIsCreatePlaylistModalOpen(true)}
+                    className="px-5 py-2.5 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-mono text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Создать первый плейлист</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {myPlaylists.map((pl) => (
+                    <div
+                      key={pl.id}
+                      onClick={() => navigate(`/music/playlist/${pl.id}`)}
+                      className="group p-4 rounded-3xl bg-[#0B0D20] hover:bg-[#121632] border border-[#1E2442] hover:border-purple-500/40 transition-all cursor-pointer flex flex-col justify-between relative shadow-lg"
+                    >
+                      {/* Cover */}
+                      <div className="relative aspect-square w-full rounded-2xl overflow-hidden bg-slate-900 border border-slate-800">
+                        {pl.cover ? (
+                          <img
+                            src={pl.cover}
+                            alt={pl.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-purple-950/40 to-slate-900 text-purple-400">
+                            <ListMusic className="w-12 h-12 opacity-60" />
+                          </div>
+                        )}
+
+                        {/* Top Badges */}
+                        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between">
+                          <span
+                            className={`px-2 py-0.5 text-[9px] font-black tracking-wider rounded-md border flex items-center gap-1 ${
+                              pl.visibility === 'PRIVATE'
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                                : pl.visibility === 'UNLISTED'
+                                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+                                : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                            }`}
+                          >
+                            {pl.visibility === 'PRIVATE' ? (
+                              <>
+                                <Lock className="w-2.5 h-2.5" />
+                                <span>Приватный</span>
+                              </>
+                            ) : pl.visibility === 'UNLISTED' ? (
+                              <>
+                                <LinkIcon className="w-2.5 h-2.5" />
+                                <span>По ссылке</span>
+                              </>
+                            ) : (
+                              <>
+                                <Globe className="w-2.5 h-2.5" />
+                                <span>Публичный</span>
+                              </>
+                            )}
+                          </span>
+
+                          <span className="px-2 py-0.5 text-[9px] font-mono font-bold rounded-md bg-black/70 backdrop-blur-md text-white border border-white/10">
+                            {pl.tracksCount} трек.
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Content */}
+                      <div className="pt-3 space-y-1">
+                        <h4 className="font-bold text-sm text-white group-hover:text-purple-300 transition truncate">
+                          {pl.title}
+                        </h4>
+                        {pl.description ? (
+                          <p className="text-[11px] text-slate-400 line-clamp-1">{pl.description}</p>
+                        ) : (
+                          <p className="text-[11px] text-slate-500 font-mono">
+                            {formatDuration(pl.totalDuration)}
+                          </p>
+                        )}
+
+                        {/* Quick actions for playlist */}
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
+                          <span className="text-[10px] font-mono text-slate-500">
+                            {formatRelativeTime(pl.updatedAt)}
+                          </span>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPlaylistToEdit(pl);
+                              }}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                              title="Редактировать"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPlaylistToDelete(pl);
+                              }}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer"
+                              title="Удалить"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Pagination */}
+              {myPlaylistsTotalPages > 1 && (
+                <div className="pt-4 flex items-center justify-center gap-2">
+                  <button
+                    onClick={() => setMyPlaylistsPage((p) => Math.max(1, p - 1))}
+                    disabled={myPlaylistsPage <= 1}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 disabled:opacity-40 text-xs font-mono text-white cursor-pointer"
+                  >
+                    Назад
+                  </button>
+                  <span className="text-xs font-mono text-slate-400">
+                    Страница {myPlaylistsPage} из {myPlaylistsTotalPages}
+                  </span>
+                  <button
+                    onClick={() => setMyPlaylistsPage((p) => Math.min(myPlaylistsTotalPages, p + 1))}
+                    disabled={myPlaylistsPage >= myPlaylistsTotalPages}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 disabled:opacity-40 text-xs font-mono text-white cursor-pointer"
+                  >
+                    Вперёд
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* TAB 3: RECENTLY PLAYED */}
           {activeTab === 'recent' && (
             <div className="space-y-4">
@@ -1038,135 +1299,18 @@ export const MusicLibraryView: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {recentTracks.map((trk) => {
-                    const isCurrent = currentTrack?.id === trk.id;
-                    const isCurrentPlaying = isCurrent && isPlaying;
-
-                    return (
-                      <div
+                <>
+                  <div className="space-y-2">
+                    {recentTracks.map((trk) => (
+                      <MusicTrackCard
                         key={trk.id}
-                        className={`group p-3 sm:p-4 rounded-2xl border transition-all flex items-center gap-3 sm:gap-4 ${
-                          isCurrent
-                            ? 'bg-purple-950/30 border-purple-500/40 shadow-lg shadow-purple-900/10'
-                            : 'bg-[#0B0D20] hover:bg-[#121630] border-[#1E2442]/80'
-                        }`}
-                      >
-                        {/* Play button */}
-                        <button
-                          onClick={() => {
-                            if (isCurrent) {
-                              togglePlayPause();
-                            } else {
-                              playTrack(trk, recentTracks);
-                            }
-                          }}
-                          className="w-10 h-10 rounded-xl bg-slate-800/80 hover:bg-purple-600 text-slate-300 hover:text-white flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md"
-                        >
-                          {isCurrentPlaying ? (
-                            <Pause className="w-4 h-4 fill-current text-purple-400 group-hover:text-white" />
-                          ) : (
-                            <Play className="w-4 h-4 fill-current ml-0.5 text-slate-400 group-hover:text-white" />
-                          )}
-                        </button>
-
-                        {/* Cover Image */}
-                        <div
-                          onClick={() => {
-                            if (trk.releaseSlug) navigate(`/music/release/${trk.releaseSlug}`);
-                            else if (trk.releaseId) navigate(`/music/release/${trk.releaseId}`);
-                          }}
-                          className="w-10 h-10 rounded-xl bg-slate-800 overflow-hidden shrink-0 cursor-pointer border border-slate-700/50 hover:scale-105 transition-transform"
-                        >
-                          {trk.releaseCover ? (
-                            <img src={trk.releaseCover} alt={trk.title} className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-purple-950/40 text-purple-400">
-                              <Music2 className="w-4 h-4" />
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Title & Artist */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span
-                              onClick={() => {
-                                if (isCurrent) togglePlayPause();
-                                else playTrack(trk, recentTracks);
-                              }}
-                              className={`text-xs sm:text-sm font-bold truncate cursor-pointer hover:underline ${
-                                isCurrent ? 'text-purple-300' : 'text-white'
-                              }`}
-                            >
-                              {trk.title}
-                            </span>
-                            {trk.explicit && (
-                              <span className="px-1.5 py-0.2 text-[9px] font-black rounded bg-rose-500/20 text-rose-400 border border-rose-500/30 shrink-0">
-                                18+
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="flex items-center gap-2 text-[11px] text-slate-400 truncate mt-0.5">
-                            <span
-                              onClick={() => {
-                                if (trk.artistSlug) navigate(`/music/artist/${trk.artistSlug}`);
-                              }}
-                              className="hover:text-purple-300 hover:underline cursor-pointer"
-                            >
-                              {trk.artistName || 'Исполнитель'}
-                            </span>
-                            {trk.releaseTitle && (
-                              <>
-                                <span className="text-slate-600">·</span>
-                                <span
-                                  onClick={() => {
-                                    if (trk.releaseSlug) navigate(`/music/release/${trk.releaseSlug}`);
-                                    else if (trk.releaseId) navigate(`/music/release/${trk.releaseId}`);
-                                  }}
-                                  className="hover:text-purple-300 hover:underline cursor-pointer truncate hidden sm:inline"
-                                >
-                                  {trk.releaseTitle}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Last Listened Date Badge */}
-                        <div className="flex flex-col items-end shrink-0 text-right">
-                          <span className="text-xs font-mono text-purple-300 flex items-center gap-1 font-medium">
-                            <Clock className="w-3 h-3 text-purple-400" />
-                            {formatRelativeTime(trk.lastListenedAt)}
-                          </span>
-                          {trk.userListenCount && trk.userListenCount > 1 && (
-                            <span className="text-[10px] text-slate-500 font-mono">
-                              прослушан {trk.userListenCount} раз
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Duration */}
-                        <div className="text-xs font-mono text-slate-400 w-10 text-right shrink-0 hidden sm:block">
-                          {formatDuration(trk.duration)}
-                        </div>
-
-                        {/* Favorite button (adds/removes to favorites) */}
-                        <button
-                          onClick={() => handleToggleRecentTrackFavorite(trk)}
-                          className={`p-2 rounded-xl transition-all cursor-pointer shrink-0 ${
-                            trk.isFavorite
-                              ? 'text-rose-400 bg-rose-500/15 border border-rose-500/30'
-                              : 'text-slate-500 hover:text-rose-400 hover:bg-slate-800'
-                          }`}
-                          title={trk.isFavorite ? 'Удалить из любимых' : 'Добавить в любимые'}
-                        >
-                          <Heart className={`w-4 h-4 ${trk.isFavorite ? 'fill-rose-500 text-rose-500' : ''}`} />
-                        </button>
-                      </div>
-                    );
-                  })}
+                        track={trk}
+                        queueContext={recentTracks}
+                        variant="row"
+                        explanation={`Прослушано ${formatRelativeTime(trk.lastListenedAt)}`}
+                      />
+                    ))}
+                  </div>
 
                   {/* Pagination */}
                   {recentTotalPages > 1 && (
@@ -1190,7 +1334,7 @@ export const MusicLibraryView: React.FC = () => {
                       </button>
                     </div>
                   )}
-                </div>
+                </>
               )}
             </div>
           )}
@@ -1297,6 +1441,177 @@ export const MusicLibraryView: React.FC = () => {
               )}
             </div>
           )}
+
+          {/* TAB: ARTIST SUBSCRIPTIONS */}
+          {activeTab === 'subscriptions' && (
+            <div className="space-y-6">
+              {loadingSubscriptions ? (
+                <div className="py-20 text-center text-[#94A3B8] flex flex-col items-center justify-center gap-3">
+                  <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+                  <span className="text-xs font-mono font-semibold">Загрузка ваших подписок...</span>
+                </div>
+              ) : subscribedDodikArtists.length === 0 && subscribedExternalArtists.length === 0 ? (
+                <div className="p-12 text-center bg-[#0B0D20] border border-[#1E2442] rounded-3xl space-y-4">
+                  <Users className="w-12 h-12 text-purple-500/40 mx-auto" />
+                  <div className="space-y-1">
+                    <h3 className="text-base font-bold text-white font-mono">Вы пока не подписаны ни на одного исполнителя</h3>
+                    <p className="text-xs text-slate-400 max-w-md mx-auto">
+                      Подписывайтесь на любимых артистов (как локальных, так и внешних), чтобы получать мгновенные уведомления о выходе новых релизов и отслеживать их в календаре.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => navigate('/music/artists')}
+                    className="px-5 py-2.5 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-mono text-xs font-bold transition-all cursor-pointer inline-block"
+                  >
+                    Найти исполнителей
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  {/* Local Dodik Artists */}
+                  {subscribedDodikArtists.length > 0 && (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wider flex items-center gap-2">
+                        <Flame className="w-4 h-4 text-purple-400" />
+                        <span>Локальные музыканты ({subscribedDodikArtists.length})</span>
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                        {subscribedDodikArtists.map((art) => (
+                          <div
+                            key={art.id}
+                            onClick={() => navigate(`/music/artist/${art.slug || art.id}`)}
+                            className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442]/80 hover:border-purple-500/40 hover:bg-[#121632] text-center transition-all cursor-pointer group shadow-lg"
+                          >
+                            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden mx-auto bg-slate-800 border border-slate-700/50 group-hover:scale-105 transition-transform mb-3">
+                              {art.avatar ? (
+                                <img src={art.avatar} alt={art.stageName} className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-purple-400 bg-purple-950/20">
+                                  <Users className="w-8 h-8" />
+                                </div>
+                              )}
+                            </div>
+                            <h4 className="text-xs font-bold text-white truncate group-hover:text-purple-300">
+                              {art.stageName}
+                            </h4>
+                            <span className="text-[10px] text-slate-500 font-mono mt-1 block">
+                              Dodik Artist
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* External Artists */}
+                  {subscribedExternalArtists.length > 0 && (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wider flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-indigo-400" />
+                        <span>Внешние исполнители ({subscribedExternalArtists.length})</span>
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                        {subscribedExternalArtists.map((art, idx) => (
+                          <div
+                            key={idx}
+                            onClick={() => navigate(`/music/external/artist/${art.provider}/${art.artistId}`)}
+                            className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442]/80 hover:border-purple-500/40 hover:bg-[#121632] text-center transition-all cursor-pointer group shadow-lg"
+                          >
+                            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden mx-auto bg-slate-800 border border-slate-700/50 group-hover:scale-105 transition-transform mb-3">
+                              {art.avatar ? (
+                                <img src={art.avatar} alt={art.name} className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-indigo-400 bg-indigo-950/20">
+                                  <Users className="w-8 h-8" />
+                                </div>
+                              )}
+                            </div>
+                            <h4 className="text-xs font-bold text-white truncate group-hover:text-purple-300">
+                              {art.name}
+                            </h4>
+                            <div className="mt-1 flex items-center justify-center">
+                              {art.provider === 'youtube' ? (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-500/10 text-red-400 border border-red-500/20 uppercase font-mono">
+                                  YouTube
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 uppercase font-mono">
+                                  SoundCloud
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Create / Edit Playlist Modal */}
+      {(isCreatePlaylistModalOpen || playlistToEdit) && (
+        <PlaylistModal
+          isOpen={isCreatePlaylistModalOpen || Boolean(playlistToEdit)}
+          onClose={() => {
+            setIsCreatePlaylistModalOpen(false);
+            setPlaylistToEdit(null);
+          }}
+          playlist={playlistToEdit}
+          onSaved={(saved) => {
+            fetchMyPlaylists();
+            fetchSummary();
+          }}
+        />
+      )}
+
+      {/* Add To Playlist Modal */}
+      {addToPlaylistTrack && (
+        <AddToPlaylistModal
+          isOpen={Boolean(addToPlaylistTrack)}
+          onClose={() => setAddToPlaylistTrack(null)}
+          track={addToPlaylistTrack}
+          onPlaylistChanged={() => {
+            fetchMyPlaylists();
+            fetchSummary();
+          }}
+        />
+      )}
+
+      {/* Delete Playlist Confirmation Modal */}
+      {playlistToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#080A18]/80 backdrop-blur-md animate-in fade-in">
+          <div className="w-full max-w-sm rounded-3xl bg-[#0F1328] border border-[#232B54] p-6 text-center space-y-4 shadow-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 mx-auto flex items-center justify-center">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white">Удалить плейлист?</h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Плейлист «{playlistToDelete.title}» будет удалён безвозвратно. Треки в медиатеке не пострадают.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setPlaylistToDelete(null)}
+                className="flex-1 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={handleDeletePlaylist}
+                disabled={deletingPlaylist}
+                className="flex-1 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/30"
+              >
+                {deletingPlaylist ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Удалить</span>}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

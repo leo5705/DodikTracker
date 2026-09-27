@@ -36,6 +36,8 @@ import { NewsDetailView } from './components/views/NewsDetailView.tsx';
 import { MusicStudioView } from './components/views/MusicStudioView.tsx';
 import { MusicReleaseEditorView } from './components/views/MusicReleaseEditorView.tsx';
 import { ArtistProfileView } from './components/views/ArtistProfileView.tsx';
+import { ExternalArtistProfileView } from './components/views/ExternalArtistProfileView.tsx';
+import { ExternalReleaseView } from './components/views/ExternalReleaseView.tsx';
 import { MusicReleaseView } from './components/views/MusicReleaseView.tsx';
 import { MusicHomeView } from './components/views/MusicHomeView.tsx';
 import { MusicReleasesView } from './components/views/MusicReleasesView.tsx';
@@ -44,6 +46,10 @@ import { MusicArtistsView } from './components/views/MusicArtistsView.tsx';
 import { MusicGenresView } from './components/views/MusicGenresView.tsx';
 import { MusicSearchView } from './components/views/MusicSearchView.tsx';
 import { MusicLibraryView } from './components/views/MusicLibraryView.tsx';
+import { MusicPlaylistsView } from './components/views/MusicPlaylistsView.tsx';
+import { MusicPlaylistView } from './components/views/MusicPlaylistView.tsx';
+import { MusicPlaylistImportView } from './components/views/MusicPlaylistImportView.tsx';
+import { MusicSectionLayout } from './components/music/MusicSectionLayout.tsx';
 import { MusicPlayerProvider } from './context/MusicPlayerContext.tsx';
 import { AuthGatekeeper } from './components/auth/AuthGatekeeper.tsx';
 import { ResetPasswordView } from './components/auth/ResetPasswordView.tsx';
@@ -189,42 +195,83 @@ function MainApp() {
         return <NewsDetailView key={route.params.slug} slug={route.params.slug} />;
 
       case 'music-home':
-        return <MusicHomeView />;
+        return <MusicSectionLayout><MusicHomeView /></MusicSectionLayout>;
 
       case 'music-releases':
-        return <MusicReleasesView />;
+        return <MusicSectionLayout><MusicReleasesView /></MusicSectionLayout>;
 
       case 'music-new':
-        return <MusicNewReleasesView />;
+        return <MusicSectionLayout><MusicNewReleasesView /></MusicSectionLayout>;
 
       case 'music-artists':
-        return <MusicArtistsView />;
+        return <MusicSectionLayout><MusicArtistsView /></MusicSectionLayout>;
 
       case 'music-genres':
-        return <MusicGenresView />;
+        return <MusicSectionLayout><MusicGenresView /></MusicSectionLayout>;
 
       case 'music-search':
-        return <MusicSearchView />;
+        return <MusicSectionLayout><MusicSearchView /></MusicSectionLayout>;
 
       case 'music-library':
-        return <MusicLibraryView />;
+        return <MusicSectionLayout><MusicLibraryView /></MusicSectionLayout>;
 
       case 'music-studio':
-        return <MusicStudioView />;
+        return <MusicSectionLayout><MusicStudioView /></MusicSectionLayout>;
 
       case 'music-release-editor':
         return (
-          <MusicReleaseEditorView
-            mode={(route.params.mode as 'new' | 'edit') || 'new'}
-            releaseId={route.params.id}
-          />
+          <MusicSectionLayout>
+            <MusicReleaseEditorView
+              mode={(route.params.mode as 'new' | 'edit') || 'new'}
+              releaseId={route.params.id}
+            />
+          </MusicSectionLayout>
         );
 
       case 'music-artist':
-        return <ArtistProfileView key={route.params.idOrSlug} idOrSlug={route.params.idOrSlug} />;
+        return (
+          <MusicSectionLayout>
+            <ArtistProfileView key={route.params.idOrSlug} idOrSlug={route.params.idOrSlug} />
+          </MusicSectionLayout>
+        );
+
+      case 'music-external-artist':
+        return (
+          <MusicSectionLayout>
+            <ExternalArtistProfileView
+              key={`${route.params.provider}-${route.params.artistId}`}
+              provider={route.params.provider as any}
+              artistId={route.params.artistId}
+            />
+          </MusicSectionLayout>
+        );
 
       case 'music-release':
-        return <MusicReleaseView key={route.params.idOrSlug} idOrSlug={route.params.idOrSlug} />;
+        return (
+          <MusicSectionLayout>
+            <MusicReleaseView key={route.params.idOrSlug} idOrSlug={route.params.idOrSlug} />
+          </MusicSectionLayout>
+        );
+
+      case 'music-external-release':
+        return (
+          <MusicSectionLayout>
+            <ExternalReleaseView
+              key={`${route.params.provider}-${route.params.releaseId}`}
+              provider={route.params.provider as any}
+              releaseId={route.params.releaseId}
+            />
+          </MusicSectionLayout>
+        );
+
+      case 'music-playlists':
+        return <MusicSectionLayout><MusicPlaylistsView /></MusicSectionLayout>;
+
+      case 'music-playlists-import-txt' as any:
+        return <MusicSectionLayout><MusicPlaylistImportView /></MusicSectionLayout>;
+
+      case 'music-playlist':
+        return <MusicSectionLayout><MusicPlaylistView key={route.params.id} id={route.params.id} /></MusicSectionLayout>;
 
       case 'notifications':
         return <NotificationCenterView onNavigate={navigate} />;
