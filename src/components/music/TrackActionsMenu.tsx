@@ -311,11 +311,16 @@ export const TrackActionsMenu: React.FC<TrackActionsMenuProps> = ({
     e.stopPropagation();
     setIsOpen(false);
     if (track.artistSlug) {
-      navigate(`/music/artist/${track.artistSlug}`);
+      navigate(`/music/artist/${encodeURIComponent(track.artistSlug)}`);
     } else if (track.artistId) {
-      navigate(`/music/external/artist/youtube/${track.artistId}`);
+      const idStr = String(track.artistId);
+      if (idStr.startsWith('yt_') || idStr.startsWith('UC')) {
+        navigate(`/music/external/artist/youtube/${idStr.replace(/^yt_/, '')}`);
+      } else {
+        navigate(`/music/artist/${encodeURIComponent(idStr)}`);
+      }
     } else if (track.artistName || track.artist) {
-      navigate(`/music/search?q=${encodeURIComponent(track.artistName || track.artist || '')}`);
+      navigate(`/music/artist/${encodeURIComponent(track.artistName || track.artist || '')}`);
     }
   };
 

@@ -185,6 +185,7 @@ export const GlobalMusicPlayer: React.FC = () => {
                   <div className="text-[11px] text-[#94A3B8] truncate mt-0.5 font-mono flex items-center gap-1">
                     <ArtistLinks
                       artistName={artistName}
+                      artists={(currentTrack as any).artists}
                       artistId={currentTrack.artistId}
                       artistSlug={currentTrack.artistSlug}
                       className="hover:underline hover:text-white transition-colors"
@@ -486,9 +487,14 @@ export const GlobalMusicPlayer: React.FC = () => {
                               <h5 className={`text-xs font-bold truncate ${isCurrent ? 'text-white' : 'text-slate-200'}`}>
                                 {t.title}
                               </h5>
-                              <p className="text-[10px] text-[#94A3B8] truncate mt-0.5">
-                                {t.artistName || artistName}
-                              </p>
+                              <div className="text-[10px] text-[#94A3B8] truncate mt-0.5">
+                                <ArtistLinks
+                                  artistName={t.artistName || artistName}
+                                  artists={(t as any).artists}
+                                  artistSlug={t.artistSlug}
+                                  artistId={t.artistId}
+                                />
+                              </div>
                             </div>
                           </div>
 

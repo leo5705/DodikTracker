@@ -146,6 +146,7 @@ export const TrackInsightsPanel: React.FC<{
                   <div className="text-xs text-[#A78BFA] font-bold truncate">
                     <ArtistLinks
                       artistName={artistName}
+                      artists={(currentTrack as any).artists}
                       artistSlug={currentTrack.artistSlug}
                       artistId={currentTrack.artistId}
                     />

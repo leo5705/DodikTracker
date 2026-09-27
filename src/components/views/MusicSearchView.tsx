@@ -13,6 +13,7 @@ import {
 import { MusicNav } from '../music/MusicNav.tsx';
 import { MusicReleaseCard, ReleaseCardData } from '../music/MusicReleaseCard.tsx';
 import { MusicTrackCard, AnyTrackItem } from '../music/MusicTrackCard.tsx';
+import { ArtistLinks } from '../music/ArtistLinks.tsx';
 import { getBestMusicImageUrl } from '../../utils/musicImageUtils.ts';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
@@ -441,7 +442,9 @@ export const MusicSearchView: React.FC = () => {
                           <h4 className="text-sm font-bold text-white font-mono truncate group-hover:text-purple-300 transition-colors">
                             {rel.title}
                           </h4>
-                          <p className="text-xs text-slate-400 truncate">{rel.artist}</p>
+                          <div className="text-xs text-slate-400 truncate">
+                            <ArtistLinks artistName={rel.artist} />
+                          </div>
                           {rel.year && <p className="text-[10px] font-mono text-slate-500">{rel.year}</p>}
                         </div>
                       </div>

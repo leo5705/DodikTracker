@@ -406,15 +406,12 @@ musicRouter.get('/artists', optionalAuth, async (req: AuthRequest, res: Response
  */
 musicRouter.get('/artists/:idOrSlug', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const param = req.params.idOrSlug;
-    const numId = Number(param);
+    const rawParam = req.params.idOrSlug;
+    const decodedParam = decodeURIComponent(rawParam).trim();
+    const numId = Number(decodedParam);
     const isNum = !isNaN(numId) && numId > 0;
 
-    const condition = isNum
-      ? eq(artistProfiles.id, numId)
-      : eq(artistProfiles.slug, param);
-
-    const found = await db
+    let found = await db
       .select({
         id: artistProfiles.id,
         userId: artistProfiles.userId,
@@ -431,8 +428,37 @@ musicRouter.get('/artists/:idOrSlug', optionalAuth, async (req: AuthRequest, res
       })
       .from(artistProfiles)
       .leftJoin(users, eq(artistProfiles.userId, users.id))
-      .where(condition)
+      .where(isNum ? eq(artistProfiles.id, numId) : or(eq(artistProfiles.slug, decodedParam), eq(artistProfiles.slug, rawParam)))
       .limit(1);
+
+    if (found.length === 0 && !isNum) {
+      const cleanSlug = slugify(decodedParam);
+      found = await db
+        .select({
+          id: artistProfiles.id,
+          userId: artistProfiles.userId,
+          stageName: artistProfiles.stageName,
+          slug: artistProfiles.slug,
+          avatar: artistProfiles.avatar,
+          description: artistProfiles.description,
+          status: artistProfiles.status,
+          createdAt: artistProfiles.createdAt,
+          updatedAt: artistProfiles.updatedAt,
+          username: users.username,
+          userAvatar: users.avatar,
+          userRole: users.role,
+        })
+        .from(artistProfiles)
+        .leftJoin(users, eq(artistProfiles.userId, users.id))
+        .where(
+          or(
+            ilike(artistProfiles.slug, cleanSlug),
+            ilike(artistProfiles.stageName, decodedParam),
+            ilike(artistProfiles.stageName, `%${decodedParam}%`)
+          )
+        )
+        .limit(1);
+    }
 
     if (found.length === 0) {
       return res.status(404).json({ error: 'Исполнитель не найден' });

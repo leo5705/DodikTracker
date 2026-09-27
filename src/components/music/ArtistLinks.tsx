@@ -20,23 +20,35 @@ export interface ArtistLinksProps {
 
 /**
  * Splits compound artist strings (e.g. "Artist A, Artist B & Artist C feat. Artist D")
- * or takes an array of artists, returning individual artist tokens.
+ * or takes an array of artists, returning individual, deduplicated artist tokens.
  */
 export function parseArtists(
   artistName?: string | null,
   artists?: (string | ArtistItem)[]
 ): ArtistItem[] {
+  const result: ArtistItem[] = [];
+  const seenNames = new Set<string>();
+
+  const addArtist = (item: ArtistItem) => {
+    const clean = item.name.trim();
+    if (!clean) return;
+    const key = clean.toLowerCase();
+    if (!seenNames.has(key)) {
+      seenNames.add(key);
+      result.push({ ...item, name: clean });
+    }
+  };
+
   if (Array.isArray(artists) && artists.length > 0) {
-    const list: ArtistItem[] = [];
     for (const a of artists) {
       if (typeof a === 'string') {
         const trimmed = a.trim();
-        if (trimmed) list.push({ name: trimmed });
+        if (trimmed) addArtist({ name: trimmed });
       } else if (a && a.name) {
-        list.push(a);
+        addArtist(a);
       }
     }
-    if (list.length > 0) return list;
+    if (result.length > 0) return result;
   }
 
   if (!artistName || typeof artistName !== 'string') {
@@ -61,12 +73,17 @@ export function parseArtists(
     return [{ name: trimmed }];
   }
 
-  return parts.map((name) => ({ name }));
+  for (const name of parts) {
+    addArtist({ name });
+  }
+
+  return result.length > 0 ? result : [{ name: trimmed }];
 }
 
 /**
  * Uniform artist link renderer across all music views, player, cards, rows, and queue.
  * Displays all authors: "Artist A · Artist B · Artist C" with proper navigation.
+ * Renders HTML `<a>` tags for SPA routing on normal click and middle click / open in new tab support.
  */
 export const ArtistLinks: React.FC<ArtistLinksProps> = ({
   artistName,
@@ -81,65 +98,78 @@ export const ArtistLinks: React.FC<ArtistLinksProps> = ({
   const { navigate } = useRouter();
   const parsed = parseArtists(artistName, artists);
 
-  const handleClick = (item: ArtistItem, index: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    if (onClickArtist) {
-      onClickArtist(item.name, e);
-      return;
-    }
-
-    // 1. Direct slug provided on item
+  const getArtistUrl = (item: ArtistItem, index: number): string => {
     if (item.slug) {
-      navigate(`/music/artist/${item.slug}`);
-      return;
+      return `/music/artist/${encodeURIComponent(item.slug)}`;
     }
-
-    // 2. Direct id provided on item
     if (item.id) {
       const idStr = String(item.id);
       if (idStr.startsWith('yt_') || idStr.startsWith('UC')) {
-        navigate(`/music/external/artist/youtube/${idStr.replace(/^yt_/, '')}`);
-      } else {
-        navigate(`/music/artist/${idStr}`);
+        return `/music/external/artist/youtube/${idStr.replace(/^yt_/, '')}`;
       }
-      return;
+      return `/music/artist/${encodeURIComponent(idStr)}`;
     }
-
-    // 3. If primary artist (first item) and parent passed artistSlug / artistId
     if (index === 0) {
-      if (artistSlug) {
-        navigate(`/music/artist/${artistSlug}`);
-        return;
-      }
+      if (artistSlug) return `/music/artist/${encodeURIComponent(artistSlug)}`;
       if (artistId) {
         const idStr = String(artistId);
         if (idStr.startsWith('yt_') || idStr.startsWith('UC')) {
-          navigate(`/music/external/artist/youtube/${idStr.replace(/^yt_/, '')}`);
-        } else {
-          navigate(`/music/artist/${idStr}`);
+          return `/music/external/artist/youtube/${idStr.replace(/^yt_/, '')}`;
         }
-        return;
+        return `/music/artist/${encodeURIComponent(idStr)}`;
       }
     }
-
-    // 4. Default: navigate to search query for this specific artist
-    navigate(`/music/search?q=${encodeURIComponent(item.name)}`);
+    if (
+      item.name &&
+      item.name !== 'Исполнитель' &&
+      item.name !== 'Исполнитель не указан' &&
+      item.name !== 'Неизвестный исполнитель'
+    ) {
+      return `/music/artist/${encodeURIComponent(item.name)}`;
+    }
+    return '';
   };
 
   return (
     <span className={`inline-flex items-center flex-wrap gap-0.5 ${className}`}>
       {parsed.map((item, idx) => {
         const isLast = idx === parsed.length - 1;
+        const targetUrl = getArtistUrl(item, idx);
+
+        if (!targetUrl) {
+          return (
+            <React.Fragment key={`${item.name}-${idx}`}>
+              <span className={linkClassName}>{item.name}</span>
+              {!isLast && (
+                <span className="text-slate-500 font-normal select-none px-0.5">
+                  {separator}
+                </span>
+              )}
+            </React.Fragment>
+          );
+        }
+
         return (
           <React.Fragment key={`${item.name}-${idx}`}>
-            <span
-              onClick={(e) => handleClick(item, idx, e)}
+            <a
+              href={targetUrl}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onClickArtist) {
+                  e.preventDefault();
+                  onClickArtist(item.name, e);
+                  return;
+                }
+                if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+                  e.preventDefault();
+                  navigate(targetUrl);
+                }
+              }}
               className={`hover:text-purple-300 hover:underline cursor-pointer transition-colors ${linkClassName}`}
               title={`Исполнитель: ${item.name}`}
             >
               {item.name}
-            </span>
+            </a>
             {!isLast && (
               <span className="text-slate-500 font-normal select-none px-0.5">
                 {separator}

@@ -38,6 +38,7 @@ import { useMusicPlayer, Track } from '../../context/MusicPlayerContext.tsx';
 import { PlaylistModal, PlaylistData } from '../modals/PlaylistModal.tsx';
 import { AddToPlaylistModal, AddToPlaylistTrackInfo } from '../modals/AddToPlaylistModal.tsx';
 import { MusicTrackCard } from '../music/MusicTrackCard.tsx';
+import { ArtistLinks } from '../music/ArtistLinks.tsx';
 
 type LibraryTab = 'tracks' | 'releases' | 'playlists' | 'recent' | 'reviews' | 'subscriptions';
 
@@ -1387,9 +1388,13 @@ export const MusicLibraryView: React.FC = () => {
                           <h4 className="text-sm font-bold text-white truncate hover:text-purple-300">
                             {rev.releaseTitle}
                           </h4>
-                          <p className="text-xs text-slate-400 truncate">
-                            {rev.artistStageName}
-                          </p>
+                          <div className="text-xs text-slate-400 truncate mt-0.5">
+                            <ArtistLinks
+                              artistName={rev.artistStageName}
+                              artistSlug={rev.artistSlug}
+                              artistId={rev.artistId}
+                            />
+                          </div>
                           <span className="text-[10px] text-slate-500 font-mono">
                             {formatRelativeTime(rev.createdAt)}
                           </span>

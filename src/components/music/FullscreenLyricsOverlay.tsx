@@ -611,6 +611,7 @@ export const FullscreenLyricsOverlay: React.FC = () => {
                   <div className="text-[11px] text-purple-300 font-medium truncate">
                     <ArtistLinks
                       artistName={artistName}
+                      artists={(currentTrack as any).artists}
                       artistSlug={currentTrack.artistSlug}
                       artistId={currentTrack.artistId}
                     />

@@ -188,18 +188,13 @@ export const ExternalReleaseView: React.FC<ExternalReleaseViewProps> = ({ provid
             {release.title}
           </h1>
 
-          <div className="text-sm font-medium">
+          <div className="text-sm font-medium flex items-center justify-center md:justify-start gap-1">
             <span className="text-slate-400">Исполнитель:</span>{' '}
-            {release.artistId ? (
-              <span
-                onClick={() => navigate(`/music/external/artist/${provider}/${release.artistId}`)}
-                className="text-purple-400 hover:text-purple-300 font-bold hover:underline cursor-pointer"
-              >
-                {release.artist}
-              </span>
-            ) : (
-              <span className="text-slate-200 font-bold">{release.artist}</span>
-            )}
+            <ArtistLinks
+              artistName={release.artist}
+              artistId={release.artistId}
+              linkClassName="text-purple-400 hover:text-purple-300 font-bold hover:underline"
+            />
           </div>
 
           <div className="flex items-center justify-center md:justify-start gap-3 text-xs font-mono text-slate-400">

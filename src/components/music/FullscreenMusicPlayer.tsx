@@ -317,6 +317,7 @@ export const FullscreenMusicPlayer: React.FC = () => {
                 <div className="text-xs sm:text-sm font-medium text-slate-300 flex items-center justify-center flex-wrap gap-2">
                   <ArtistLinks
                     artistName={artistName}
+                    artists={(currentTrack as any).artists}
                     artistSlug={artistSlug}
                     artistId={currentTrack.artistId}
                     linkClassName="hover:text-purple-300"
@@ -552,6 +553,7 @@ export const FullscreenMusicPlayer: React.FC = () => {
                               <div className="text-xs text-slate-400 truncate mt-0.5">
                                 <ArtistLinks
                                   artistName={t.artistName || artistName}
+                                  artists={(t as any).artists}
                                   artistSlug={t.artistSlug}
                                   artistId={t.artistId}
                                 />

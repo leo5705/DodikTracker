@@ -181,6 +181,7 @@ export const BottomMusicPlayer: React.FC<{
             <div className="text-[11px] text-[#94A3B8] truncate">
               <ArtistLinks
                 artistName={artistName}
+                artists={(currentTrack as any).artists}
                 artistSlug={currentTrack.artistSlug}
                 artistId={currentTrack.artistId}
                 linkClassName="hover:text-purple-300 transition-colors"

@@ -28,6 +28,7 @@ import {
 import { MusicNav } from '../music/MusicNav.tsx';
 import { MusicReleaseCard, ReleaseCardData } from '../music/MusicReleaseCard.tsx';
 import { MusicTrackCard, AnyTrackItem } from '../music/MusicTrackCard.tsx';
+import { ArtistLinks } from '../music/ArtistLinks.tsx';
 import { getBestMusicImageUrl } from '../../utils/musicImageUtils.ts';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
@@ -493,12 +494,14 @@ export const MusicHomeView: React.FC = () => {
                 <h2 className="text-2xl sm:text-4xl font-black text-white font-mono tracking-tight leading-tight">
                   {hero.title}
                 </h2>
-                <button
-                  onClick={() => navigate(`/music/artist/${hero.artistSlug || hero.artistId}`)}
-                  className="text-base text-purple-300 hover:text-white font-semibold mt-1 transition-colors inline-block"
-                >
-                  {hero.stageName || 'Исполнитель'}
-                </button>
+                <div className="mt-1">
+                  <ArtistLinks
+                    artistName={hero.stageName}
+                    artistSlug={hero.artistSlug}
+                    artistId={hero.artistId}
+                    linkClassName="text-base text-purple-300 hover:text-white font-semibold transition-colors"
+                  />
+                </div>
               </div>
 
               {/* Stats Bar */}

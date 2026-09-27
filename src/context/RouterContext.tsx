@@ -134,11 +134,11 @@ export function parseRoute(rawPathname: string): RouteMatch {
     };
   }
 
-  const musicArtistMatch = cleanPath.match(/^\/music\/artist\/([a-zA-Z0-9_.-]+)$/);
+  const musicArtistMatch = cleanPath.match(/^\/music\/artist\/([^\/]+)$/);
   if (musicArtistMatch) {
     return {
       name: 'music-artist',
-      params: { ...queryParams, idOrSlug: musicArtistMatch[1] },
+      params: { ...queryParams, idOrSlug: decodeURIComponent(musicArtistMatch[1]) },
       pathname: cleanPath,
     };
   }
