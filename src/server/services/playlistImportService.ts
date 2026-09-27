@@ -450,8 +450,47 @@ export async function searchExternalSources(
  * 2. External YouTube Music catalog
  * 3. Handles status classification (LOCAL_FOUND, EXTERNAL_FOUND, EXTERNAL_NOT_FOUND, AMBIGUOUS_RESULT, SOURCE_UNAVAILABLE)
  */
+/**
+ * Executes async tasks with a limit on concurrent operations.
+ */
+async function pooledMap<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  const promises: Promise<void>[] = [];
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const currentIndex = index++;
+      const item = items[currentIndex];
+      try {
+        results[currentIndex] = await fn(item, currentIndex);
+      } catch (err) {
+        console.error(`pooledMap worker error at index ${currentIndex}:`, err);
+      }
+    }
+  }
+
+  for (let i = 0; i < Math.min(concurrency, items.length); i++) {
+    promises.push(worker());
+  }
+
+  await Promise.all(promises);
+  return results;
+}
+
+/**
+ * Multi-source playlist track matching:
+ * 1. Local Dodik Tracker catalog
+ * 2. External YouTube Music catalog
+ * 3. Handles status classification (LOCAL_FOUND, EXTERNAL_FOUND, EXTERNAL_NOT_FOUND, AMBIGUOUS_RESULT, SOURCE_UNAVAILABLE)
+ * Runs external queries in parallel with controlled concurrency limit (5) and de-duplicates identical tracks.
+ */
 export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<ParsePlaylistResult> {
-  const parsedResults: ParsedTrackResult[] = [];
+  const parsedResults: ParsedTrackResult[] = new Array(rawTracks.length);
   const unmatchedList: Array<{ artist: string; title: string; reason: string; rawLine: string }> = [];
 
   // Pre-fetch all local published tracks and releases
@@ -478,7 +517,11 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
     .innerJoin(artistProfiles, eq(musicTracks.artistId, artistProfiles.id))
     .where(eq(musicTracks.status, 'PUBLISHED'));
 
-  for (const item of rawTracks) {
+  const externalSearchIndices: number[] = [];
+
+  // Step 1: Perform in-memory local matching (extremely fast)
+  for (let i = 0; i < rawTracks.length; i++) {
+    const item = rawTracks[i];
     const rawArtist = item.artist || '';
     const rawTitle = item.title || '';
     const normArtist = normalizeString(rawArtist);
@@ -487,7 +530,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
     const artistTokens = extractArtistTokens(rawArtist);
 
     if (!normTitle && !normArtist) {
-      parsedResults.push({
+      parsedResults[i] = {
         rawLine: item.rawLine,
         artist: rawArtist,
         title: rawTitle,
@@ -497,19 +540,14 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
         reason: 'Пустая строка или не распознано название трека',
         track: null,
         candidates: [],
-      });
-      unmatchedList.push({
-        artist: rawArtist,
-        title: rawTitle,
-        reason: 'Пустая строка или не распознано название трека',
-        rawLine: item.rawLine,
-      });
+      } as any;
+      (parsedResults[i] as any).matchStatus = 'EXTERNAL_NOT_FOUND';
       continue;
     }
 
     let localCandidate: typeof allLocalTracks[0] | null = null;
 
-    // 1. Exact local match
+    // Exact local match
     localCandidate = allLocalTracks.find((lt) => {
       const ltTitleNorm = normalizeString(lt.title);
       const ltArtistNorm = normalizeString(lt.artistName || '');
@@ -519,7 +557,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
       return ltTitleNorm === normTitle;
     }) || null;
 
-    // 2. Normalized local match with clean titles
+    // Normalized local match with clean titles
     if (!localCandidate) {
       localCandidate = allLocalTracks.find((lt) => {
         const ltTitleNorm = normalizeString(lt.title);
@@ -545,7 +583,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
       }) || null;
     }
 
-    // 3. Inverted local match
+    // Inverted local match
     if (!localCandidate && normArtist && normTitle) {
       localCandidate = allLocalTracks.find((lt) => {
         const ltTitleNorm = normalizeString(lt.title);
@@ -554,7 +592,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
       }) || null;
     }
 
-    // 4. Local fuzzy match
+    // Local fuzzy match
     if (!localCandidate) {
       let bestSim = 0;
       let bestCandidate: typeof allLocalTracks[0] | null = null;
@@ -615,7 +653,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
         playable: true,
       };
 
-      parsedResults.push({
+      parsedResults[i] = {
         rawLine: item.rawLine,
         artist: rawArtist,
         title: rawTitle,
@@ -624,53 +662,87 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
         matched: true,
         track: matchedTrack,
         candidates: [matchedTrack],
-      });
-      continue;
-    }
-
-    // LOCAL_NOT_FOUND -> PROCEED TO EXTERNAL SOURCE (YouTube Music)
-    const extSearchResult = await searchExternalSources(rawArtist, rawTitle, item.album);
-
-    if (extSearchResult.status === 'AMBIGUOUS_RESULT' || extSearchResult.status === 'EXTERNAL_FOUND') {
-      const isMatched = extSearchResult.status === 'EXTERNAL_FOUND';
-      parsedResults.push({
-        rawLine: item.rawLine,
-        artist: rawArtist,
-        title: rawTitle,
-        album: item.album,
-        status: extSearchResult.status,
-        matched: isMatched,
-        reason: extSearchResult.reason,
-        track: extSearchResult.selected,
-        candidates: extSearchResult.candidates,
-      });
-
-      if (!isMatched && extSearchResult.status !== 'AMBIGUOUS_RESULT') {
-        unmatchedList.push({
-          artist: rawArtist || 'Неизвестный исполнитель',
-          title: rawTitle || item.rawLine,
-          reason: extSearchResult.reason || 'Не найдено во внешних источниках',
-          rawLine: item.rawLine,
-        });
-      }
+      } as any;
+      (parsedResults[i] as any).matchStatus = 'LOCAL_FOUND';
     } else {
-      parsedResults.push({
-        rawLine: item.rawLine,
-        artist: rawArtist,
-        title: rawTitle,
-        album: item.album,
-        status: extSearchResult.status,
-        matched: false,
-        reason: extSearchResult.reason || 'Трек отсутствует в каталогах',
-        track: null,
-        candidates: extSearchResult.candidates || [],
-      });
+      externalSearchIndices.push(i);
+    }
+  }
 
+  // Step 2: Group and deduplicate external searches within this import session
+  const CONCURRENCY_LIMIT = 5;
+  const searchGroups = new Map<string, number[]>();
+
+  for (const idx of externalSearchIndices) {
+    const item = rawTracks[idx];
+    const key = `${normalizeString(item.artist || '')}::${normalizeString(item.title || '')}`;
+    if (!searchGroups.has(key)) {
+      searchGroups.set(key, []);
+    }
+    searchGroups.get(key)!.push(idx);
+  }
+
+  const uniqueKeys = Array.from(searchGroups.keys());
+  const externalSearchResults = new Map<string, any>();
+
+  // Run searches in parallel with controlled concurrency limit
+  await pooledMap(uniqueKeys, CONCURRENCY_LIMIT, async (key) => {
+    const indices = searchGroups.get(key)!;
+    const firstIdx = indices[0];
+    const item = rawTracks[firstIdx];
+    const result = await searchExternalSources(item.artist || '', item.title || '', item.album);
+    externalSearchResults.set(key, result);
+  });
+
+  // Apply resolved external candidates back to parsed results
+  for (const [key, indices] of searchGroups.entries()) {
+    const extSearchResult = externalSearchResults.get(key)!;
+
+    for (const idx of indices) {
+      const item = rawTracks[idx];
+      const rawArtist = item.artist || '';
+      const rawTitle = item.title || '';
+
+      if (extSearchResult.status === 'AMBIGUOUS_RESULT' || extSearchResult.status === 'EXTERNAL_FOUND') {
+        const isMatched = extSearchResult.status === 'EXTERNAL_FOUND';
+        parsedResults[idx] = {
+          rawLine: item.rawLine,
+          artist: rawArtist,
+          title: rawTitle,
+          album: item.album,
+          status: extSearchResult.status,
+          matched: isMatched,
+          reason: extSearchResult.reason,
+          track: extSearchResult.selected,
+          candidates: extSearchResult.candidates,
+        } as any;
+        (parsedResults[idx] as any).matchStatus = extSearchResult.status;
+      } else {
+        parsedResults[idx] = {
+          rawLine: item.rawLine,
+          artist: rawArtist,
+          title: rawTitle,
+          album: item.album,
+          status: extSearchResult.status,
+          matched: false,
+          reason: extSearchResult.reason || 'Трек отсутствует в каталогах',
+          track: null,
+          candidates: extSearchResult.candidates || [],
+        } as any;
+        (parsedResults[idx] as any).matchStatus = extSearchResult.status;
+      }
+    }
+  }
+
+  // Compile unmatched track listings
+  for (let i = 0; i < parsedResults.length; i++) {
+    const res = parsedResults[i];
+    if (!res.matched) {
       unmatchedList.push({
-        artist: rawArtist || 'Неизвестный исполнитель',
-        title: rawTitle || item.rawLine,
-        reason: extSearchResult.reason || 'Трек отсутствует в каталогах',
-        rawLine: item.rawLine,
+        artist: res.artist || 'Неизвестный исполнитель',
+        title: res.title || res.rawLine,
+        reason: res.reason || 'Трек отсутствует в каталогах',
+        rawLine: res.rawLine,
       });
     }
   }
