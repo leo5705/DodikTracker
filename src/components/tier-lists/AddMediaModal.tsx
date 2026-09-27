@@ -106,7 +106,7 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
           setErrorMessage('Ошибка при поиске');
         }
       } catch (err: any) {
-        if (err.name !== 'AbortError') {
+        if (err.name !== 'AbortError' && !controller.signal.aborted) {
           setErrorMessage('Не удалось выполнить поиск');
         }
       } finally {

@@ -115,7 +115,7 @@ export const MusicSearchView: React.FC = () => {
           setResults(json);
         })
         .catch((err) => {
-          if (err.name !== 'AbortError') {
+          if (err.name !== 'AbortError' && !controller.signal.aborted) {
             console.error('Failed to search music:', err);
             setError('Ошибка при загрузке результатов поиска');
           }

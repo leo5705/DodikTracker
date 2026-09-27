@@ -57,6 +57,7 @@ export const GlobalMusicPlayer: React.FC = () => {
     toggleRepeat,
     toggleFavoriteTrack,
     setPlayerState,
+    playerState,
     isInsightsOpen,
     toggleInsights,
     releaseInfo,
@@ -145,7 +146,8 @@ export const GlobalMusicPlayer: React.FC = () => {
               {/* 1. LEFT: COVER + TRACK INFO + HEART BUTTON */}
               <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 sm:max-w-[36%]">
                 {/* Artwork -> Click opens Fullscreen player */}
-                <div
+                <motion.div
+                  layoutId="global-player-cover"
                   onClick={() => setPlayerState('fullscreen')}
                   className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden bg-[#11152A] shrink-0 border border-[#1E2442] cursor-pointer group shadow-sm"
                   title="Открыть полноэкранный плеер"
@@ -164,7 +166,7 @@ export const GlobalMusicPlayer: React.FC = () => {
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <Maximize2 className="w-3.5 h-3.5 text-white" />
                   </div>
-                </div>
+                </motion.div>
 
                 {/* Metadata: Title, Artist, Release */}
                 <div className="min-w-0 flex-1 leading-tight">
@@ -208,7 +210,7 @@ export const GlobalMusicPlayer: React.FC = () => {
                 {/* HEART (LIKE) BUTTON - PLACED IMMEDIATELY NEXT TO COVER & TRACK INFO */}
                 <button
                   type="button"
-                  onClick={() => toggleFavoriteTrack(currentTrack.id)}
+                  onClick={() => toggleFavoriteTrack(currentTrack.id, currentTrack.isFavorite)}
                   className={`p-1.5 rounded-lg transition-all shrink-0 cursor-pointer ${
                     currentTrack.isFavorite
                       ? 'text-rose-400 bg-rose-500/15 border border-rose-500/30 shadow-sm'
@@ -523,8 +525,10 @@ export const GlobalMusicPlayer: React.FC = () => {
       </div>
 
       {/* Track insights drawer panel */}
-      {isInsightsOpen && currentTrack && (
-        <TrackInsightsPanel onClose={() => toggleInsights()} />
+      {isInsightsOpen && currentTrack && playerState === 'mini' && (
+        <div className="mt-4 pt-3 border-t border-[#1E2442] w-full max-w-[1400px] mx-auto">
+          <TrackInsightsPanel className="h-[680px]" onClose={() => toggleInsights()} />
+        </div>
       )}
 
       {/* Add to Playlist Modal */}

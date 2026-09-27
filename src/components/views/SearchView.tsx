@@ -271,7 +271,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
           setHasMore(hasMoreIncoming);
         }
       } catch (err: any) {
-        if (err.name === 'AbortError') return;
+        if (err.name === 'AbortError' || controller.signal.aborted) return;
         console.error('Search fetch failed:', err);
         if (append) {
           setLoadMoreError(err.message || 'Не удалось подгрузить следующие результаты');

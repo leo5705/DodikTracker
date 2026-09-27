@@ -90,6 +90,86 @@ export const MusicHomeView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loadingHero, setLoadingHero] = useState(false);
 
+  // Dynamic regional trends state
+  const [trendsRegion, setTrendsRegion] = useState<'global' | 'RU'>('global');
+  const [trendsTracks, setTrendsTracks] = useState<AnyTrackItem[]>([]);
+  const [trendsUpdatedAt, setTrendsUpdatedAt] = useState<number | null>(null);
+  const [trendsLoading, setTrendsLoading] = useState(false);
+  const [trendsError, setTrendsError] = useState<string | null>(null);
+
+  // Format timestamp into clean Russian relative or time string
+  const formatRussianTime = (timestamp: number | null) => {
+    if (!timestamp) return '';
+    const now = Date.now();
+    const diffSec = Math.floor((now - timestamp) / 1000);
+    if (diffSec < 60) {
+      return 'Обновлено только что';
+    }
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) {
+      return `Обновлено ${diffMin} ${
+        diffMin === 1
+          ? 'минуту'
+          : [2, 3, 4].includes(diffMin % 10) && ![12, 13, 14].includes(diffMin % 100)
+          ? 'минуты'
+          : 'минут'
+      } назад`;
+    }
+    const date = new Date(timestamp);
+    const hrs = date.getHours().toString().padStart(2, '0');
+    const mins = date.getMinutes().toString().padStart(2, '0');
+    return `Обновлено сегодня в ${hrs}:${mins}`;
+  };
+
+  // Synchronize initial trends state when main home data loads
+  useEffect(() => {
+    if (data?.trendingHits && data.trendingHits.length > 0 && trendsTracks.length === 0) {
+      setTrendsTracks(data.trendingHits);
+      setTrendsUpdatedAt((data as any).trendingHitsUpdatedAt || Date.now());
+    }
+  }, [data]);
+
+  // Load trends dynamically on region change or manual refresh
+  useEffect(() => {
+    let active = true;
+
+    // Skip redundant network call if global is already preloaded from initial home load
+    if (trendsRegion === 'global' && data?.trendingHits && trendsTracks.length > 0 && trendsUpdatedAt !== null) {
+      return;
+    }
+
+    const loadRegionTrends = async () => {
+      setTrendsLoading(true);
+      setTrendsError(null);
+      try {
+        const res = await fetch(`/api/music/trends?region=${trendsRegion}`);
+        if (!res.ok) {
+          throw new Error('API failed');
+        }
+        const json = await res.json();
+        if (active) {
+          setTrendsTracks(json.tracks || []);
+          setTrendsUpdatedAt(json.updatedAt || null);
+        }
+      } catch (err: any) {
+        console.error('Failed to fetch regional trends:', err);
+        if (active) {
+          setTrendsError('Не удалось обновить тренды. Пожалуйста, попробуйте позже.');
+        }
+      } finally {
+        if (active) {
+          setTrendsLoading(false);
+        }
+      }
+    };
+
+    loadRegionTrends();
+
+    return () => {
+      active = false;
+    };
+  }, [trendsRegion]);
+
   const handleRefreshForYou = async () => {
     setRefreshingForYou(true);
     try {
@@ -913,34 +993,112 @@ export const MusicHomeView: React.FC = () => {
           )}
         </>
       )}
-      {trendingHits.length > 0 && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
-                <Globe className="w-5 h-5 text-rose-400" />
-                <span>Мировые хиты и тренды</span>
-              </h3>
-              <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
-                Популярные мировые композиции YouTube Music
-              </p>
-            </div>
-            <button
-              onClick={() => navigate('/music/search?q=chart%20hits')}
-              className="text-xs font-mono text-purple-400 hover:text-purple-300 flex items-center gap-1 font-bold cursor-pointer"
-            >
-              <span>Показать ещё</span>
-              <ChevronRight className="w-4 h-4" />
-            </button>
+      {/* DYNAMIC REGIONAL TRENDS */}
+      <div className="space-y-5 p-5 sm:p-6 rounded-3xl bg-[#090C1F] border border-[#1E2442] shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#1E2442]/60">
+          <div className="space-y-1">
+            <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
+              <Flame className="w-5 h-5 text-amber-500 animate-pulse" />
+              <span>Музыкальные тренды</span>
+            </h3>
+            <p className="text-xs text-[#94A3B8] font-mono">
+              Самые актуальные и набирающие популярность композиции
+            </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {dedupeTracks(trendingHits.slice(0, 9)).map((track, idx) => (
-              <MusicTrackCard key={getStableTrackKey(track, idx)} track={track} queueContext={trendingHits} variant="row" />
-            ))}
+          <div className="flex items-center gap-3">
+            {/* Region Switcher */}
+            <div className="inline-flex rounded-xl bg-[#0F132C] p-1 border border-[#1E2442]">
+              <button
+                onClick={() => setTrendsRegion('global')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  trendsRegion === 'global'
+                    ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/20'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>🌍</span>
+                <span>Мир</span>
+              </button>
+              <button
+                onClick={() => setTrendsRegion('RU')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  trendsRegion === 'RU'
+                    ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/20'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>🇷🇺</span>
+                <span>Россия</span>
+              </button>
+            </div>
           </div>
         </div>
-      )}
+
+        {/* Loader or Error or Tracks */}
+        {trendsLoading ? (
+          <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-3 font-mono">
+            <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
+            <span className="text-xs">Загрузка трендов региона...</span>
+          </div>
+        ) : trendsError ? (
+          <div className="flex flex-col items-center justify-center py-10 text-center gap-3">
+            <AlertCircle className="w-8 h-8 text-red-400" />
+            <div className="space-y-1">
+              <p className="text-sm font-bold text-white font-mono">{trendsError}</p>
+              <p className="text-xs text-slate-400">Пожалуйста, проверьте соединение или повторите попытку</p>
+            </div>
+            <button
+              onClick={() => {
+                const current = trendsRegion;
+                setTrendsRegion(current === 'global' ? 'RU' : 'global');
+                setTimeout(() => setTrendsRegion(current), 50);
+              }}
+              className="px-4 py-1.5 rounded-xl bg-[#1E2442] hover:bg-[#262E53] text-slate-200 text-xs font-mono font-bold transition cursor-pointer"
+            >
+              Обновить
+            </button>
+          </div>
+        ) : trendsTracks.length === 0 ? (
+          <div className="text-center py-10 text-xs text-slate-500 font-mono">
+            Нет доступных трендов для данного региона
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {dedupeTracks(trendsTracks.slice(0, 9)).map((track, idx) => {
+                const rankNum = (track as any).rank || idx + 1;
+                const movement = (track as any).trendMovement || 'stable';
+                
+                return (
+                  <div key={getStableTrackKey(track, idx)} className="relative group">
+                    {/* Rank Badge overlay on the top corner */}
+                    <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1 bg-[#090C1F]/90 backdrop-blur border border-[#1E2442] text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg text-slate-300">
+                      <span>#{rankNum}</span>
+                      {movement === 'up' && <span className="text-emerald-400">↑</span>}
+                      {movement === 'down' && <span className="text-rose-400">↓</span>}
+                      {movement === 'stable' && <span className="text-slate-400">•</span>}
+                    </div>
+
+                    <MusicTrackCard track={track} queueContext={trendsTracks} variant="row" />
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bottom row: Time stamp of the update */}
+            {trendsUpdatedAt && (
+              <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-[#1E2442]/30">
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-slate-500" />
+                  <span>{formatRussianTime(trendsUpdatedAt)}</span>
+                </div>
+                <span className="text-slate-500">Регион: {trendsRegion === 'global' ? 'Global' : 'Russia (RU)'}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* POPULAR DODIK COMMUNITY TRACKS (IF ANY) */}
       {popularDodikTracks.length > 0 && (

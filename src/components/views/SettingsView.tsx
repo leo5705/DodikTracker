@@ -56,6 +56,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
 
   // Music state
   const [musicLyricsProvider, setMusicLyricsProvider] = useState('auto');
+  const [musicCrossfadeEnabled, setMusicCrossfadeEnabled] = useState(false);
+  const [musicCrossfadeDuration, setMusicCrossfadeDuration] = useState(4);
 
   // Telegram & Notifications state
   const { soundEnabled, setSoundEnabled, triggerTestToast } = useNotifications();
@@ -96,6 +98,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
       setStatisticsVisibility(dbUser.statisticsVisibility || 'PUBLIC');
       setShowAdultContent(Boolean(dbUser.showAdultContent));
       setMusicLyricsProvider(dbUser.musicLyricsProvider || 'auto');
+      setMusicCrossfadeEnabled(Boolean((dbUser as any).musicCrossfadeEnabled));
+      setMusicCrossfadeDuration((dbUser as any).musicCrossfadeDuration !== undefined ? Number((dbUser as any).musicCrossfadeDuration) : 4);
       setTelegramChatId(dbUser.telegramChatId || '');
       if (dbUser.notificationSettings) {
         setNotificationSettings(dbUser.notificationSettings);
@@ -185,6 +189,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
           statisticsVisibility,
           showAdultContent,
           musicLyricsProvider,
+          musicCrossfadeEnabled,
+          musicCrossfadeDuration,
           telegramChatId: telegramChatId.trim() || null,
           notificationSettings: JSON.stringify(notificationSettings)
         }),
@@ -581,6 +587,52 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateProfile })
                 <p className="text-xs text-[#64748B] mt-2">
                   Определяет, откуда приложение пытается получить текст песни, если для трека доступно несколько источников.
                 </p>
+              </div>
+
+              {/* Плавный переход (Crossfade) */}
+              <div className="pt-5 border-t border-[#1E2442] space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <span className="text-sm font-bold text-white block">Плавный переход между треками (Crossfade)</span>
+                    <p className="text-xs text-[#94A3B8]">
+                      Плавное затухание громкости текущей песни с одновременным нарастанием громкости следующего трека при автоматическом переходе.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={musicCrossfadeEnabled}
+                      onChange={(e) => setMusicCrossfadeEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-[#0B0D20] border border-[#1E2442] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[3px] after:left-[3px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4.5 after:w-4.5 after:transition-all peer-checked:bg-[#7C3AED]"></div>
+                  </label>
+                </div>
+
+                {musicCrossfadeEnabled && (
+                  <div className="p-4 rounded-xl bg-[#0B0D20] border border-[#1E2442] space-y-3 animate-in fade-in slide-in-from-top-1">
+                    <div className="flex items-center justify-between text-xs font-semibold">
+                      <span className="text-[#CBD5E1]">Длительность перехода:</span>
+                      <span className="text-[#A78BFA] font-mono font-bold text-sm bg-purple-950/60 px-2 py-0.5 rounded border border-purple-900/50">
+                        {musicCrossfadeDuration} {musicCrossfadeDuration === 1 ? 'секунда' : [2,3,4].includes(musicCrossfadeDuration) ? 'секунды' : 'секунд'}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="1"
+                      max="12"
+                      step="1"
+                      value={musicCrossfadeDuration}
+                      onChange={(e) => setMusicCrossfadeDuration(parseInt(e.target.value, 10))}
+                      className="w-full h-1.5 bg-[#151932] border border-[#1E2442] rounded-lg appearance-none cursor-pointer accent-[#7C3AED]"
+                    />
+                    <div className="flex items-center justify-between text-[10px] text-[#64748B] font-mono">
+                      <span>1 сек</span>
+                      <span>6 сек</span>
+                      <span>12 сек</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

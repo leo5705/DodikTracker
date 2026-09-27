@@ -38,6 +38,64 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+const overlayVariants: any = {
+  hidden: {
+    opacity: 0,
+    backdropFilter: 'blur(0px)',
+  },
+  visible: {
+    opacity: 1,
+    backdropFilter: 'blur(24px)',
+    transition: {
+      duration: 0.5,
+      ease: [0.16, 1, 0.3, 1],
+      when: 'beforeChildren',
+      staggerChildren: 0.08,
+    },
+  },
+  exit: {
+    opacity: 0,
+    backdropFilter: 'blur(0px)',
+    transition: {
+      duration: 0.4,
+      ease: [0.16, 1, 0.3, 1],
+      when: 'afterChildren',
+      staggerChildren: 0.05,
+      staggerDirection: -1,
+    },
+  },
+};
+
+const topBarVariants: any = {
+  hidden: { y: -20, opacity: 0 },
+  visible: { y: 0, opacity: 1, transition: { duration: 0.4, ease: 'easeOut' } },
+  exit: { y: -20, opacity: 0, transition: { duration: 0.3, ease: 'easeIn' } },
+};
+
+const playerContainerVariants: any = {
+  hidden: { opacity: 0, scale: 0.95 },
+  visible: { opacity: 1, scale: 1, transition: { duration: 0.5, ease: 'easeOut' } },
+  exit: { opacity: 0, scale: 0.95, transition: { duration: 0.3, ease: 'easeIn' } },
+};
+
+const leftColumnVariants: any = {
+  hidden: { scale: 0.95, opacity: 0 },
+  visible: { scale: 1, opacity: 1, transition: { duration: 0.5, ease: 'easeOut' } },
+  exit: { scale: 0.95, opacity: 0, transition: { duration: 0.3, ease: 'easeIn' } },
+};
+
+const controlsVariants: any = {
+  hidden: { y: 15, opacity: 0 },
+  visible: { y: 0, opacity: 1, transition: { duration: 0.4, ease: 'easeOut' } },
+  exit: { y: 15, opacity: 0, transition: { duration: 0.3, ease: 'easeIn' } },
+};
+
+const rightColumnVariants: any = {
+  hidden: { x: 20, opacity: 0 },
+  visible: { x: 0, opacity: 1, transition: { duration: 0.5, ease: 'easeOut' } },
+  exit: { x: 20, opacity: 0, transition: { duration: 0.3, ease: 'easeIn' } },
+};
+
 export const FullscreenMusicPlayer: React.FC = () => {
   const { navigate } = useRouter();
   const { dbUser } = useAuth();
@@ -77,6 +135,8 @@ export const FullscreenMusicPlayer: React.FC = () => {
   } = useMusicPlayer();
 
   const [lyricsLoading, setLyricsLoading] = useState(false);
+  const [showLyricsSection, setShowLyricsSection] = useState(true);
+  const [showGeniusSection, setShowGeniusSection] = useState(true);
   const modalRef = useRef<HTMLDivElement>(null);
 
   // Prevent outer modal container from scrolling
@@ -86,9 +146,9 @@ export const FullscreenMusicPlayer: React.FC = () => {
     }
   };
 
-  // Load lyrics when lyrics tab is open
+  // Load lyrics when lyrics or insights tab is open
   useEffect(() => {
-    if (playerState === 'fullscreen' && activeTab === 'lyrics' && currentTrack && !currentTrack.lyrics && !lyricsLoading) {
+    if (playerState === 'fullscreen' && (activeTab === 'lyrics' || (activeTab as any) === 'insights') && currentTrack && !currentTrack.lyrics && !lyricsLoading) {
       setLyricsLoading(true);
       const qParams = new URLSearchParams();
       if (currentTrack.title) qParams.set('title', currentTrack.title);
@@ -146,10 +206,10 @@ export const FullscreenMusicPlayer: React.FC = () => {
           key="fullscreen-music-player-overlay"
           ref={modalRef}
           onScroll={handleModalScroll}
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.96 }}
-          transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+          variants={overlayVariants}
+          initial="hidden"
+          animate="visible"
+          exit="exit"
           className="fixed inset-0 z-50 bg-[#080A18]/98 backdrop-blur-3xl flex flex-col justify-between overflow-hidden select-none w-[100vw] h-[100dvh]"
           style={{
             paddingTop: 'max(1rem, env(safe-area-inset-top, 16px))',
@@ -169,7 +229,10 @@ export const FullscreenMusicPlayer: React.FC = () => {
           />
 
           {/* Top Bar - Dedicated z-30 layer, persistent sticky header */}
-          <header className="sticky top-0 z-30 max-w-6xl mx-auto w-full px-2 sm:px-6 pb-3 flex items-center justify-between border-b border-slate-800/60 shrink-0 pointer-events-auto bg-[#080A18]/90 backdrop-blur-md">
+          <motion.header
+            variants={topBarVariants}
+            className="sticky top-0 z-30 max-w-6xl mx-auto w-full px-2 sm:px-6 pb-3 flex items-center justify-between border-b border-slate-800/60 shrink-0 pointer-events-auto bg-[#080A18]/90 backdrop-blur-md"
+          >
             <div className="flex items-center gap-2">
               <motion.button
                 type="button"
@@ -262,17 +325,21 @@ export const FullscreenMusicPlayer: React.FC = () => {
                 <span className="hidden md:inline">Иммерсивный текст</span>
               </motion.button>
             </div>
-          </header>
+          </motion.header>
 
           {/* Main Grid Content */}
-          <div className="relative z-10 max-w-6xl mx-auto w-full px-2 sm:px-6 py-3 sm:py-6 flex-1 grid grid-cols-1 md:grid-cols-12 gap-6 sm:gap-8 items-center min-h-0 overflow-y-auto custom-scrollbar">
+          <motion.div
+            variants={playerContainerVariants}
+            className="relative z-10 max-w-6xl mx-auto w-full px-2 sm:px-6 py-3 sm:py-6 flex-1 grid grid-cols-1 md:grid-cols-12 gap-6 sm:gap-8 items-center min-h-0 overflow-y-auto custom-scrollbar"
+          >
             {/* Left Column: Artwork & Main Playback controls */}
-            <div className="md:col-span-6 lg:col-span-5 flex flex-col items-center text-center space-y-4 sm:space-y-5">
+            <motion.div
+              variants={leftColumnVariants}
+              className="md:col-span-6 lg:col-span-5 flex flex-col items-center text-center space-y-4 sm:space-y-5"
+            >
               {/* Cover Art */}
               <motion.div
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                layoutId="global-player-cover"
                 className="relative w-48 h-48 sm:w-72 sm:h-72 rounded-3xl overflow-hidden bg-slate-950 border border-purple-500/30 shadow-[0_0_60px_rgba(147,51,234,0.25)] group shrink-0"
               >
                 {cover ? (
@@ -494,10 +561,13 @@ export const FullscreenMusicPlayer: React.FC = () => {
                   className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
                 />
               </div>
-            </div>
+            </motion.div>
 
-            {/* Right Column: Tab Content Panel (Queue / LiveLyrics / Author Note) */}
-            <div className="md:col-span-6 lg:col-span-7 h-full flex flex-col bg-slate-900/50 border border-slate-800/80 rounded-3xl p-4 sm:p-5 backdrop-blur-xl max-h-[460px] sm:max-h-[520px] overflow-hidden">
+            {/* Right Column: Tab Content Panel (Queue / LiveLyrics / Author Note / Genius Insights) */}
+            <motion.div
+              variants={rightColumnVariants}
+              className="md:col-span-6 lg:col-span-7 h-full flex flex-col bg-slate-900/50 border border-slate-800/80 rounded-3xl p-5 sm:p-6 backdrop-blur-xl min-h-[480px] h-[580px] sm:h-[680px] max-h-[80vh] overflow-hidden"
+            >
               {activeTab === 'queue' && (
                 <div className="flex flex-col h-full min-h-0">
                   <div className="flex items-center justify-between mb-3 shrink-0 pb-2 border-b border-slate-800">
@@ -569,7 +639,7 @@ export const FullscreenMusicPlayer: React.FC = () => {
                             <button
                               type="button"
                               onClick={async () => {
-                                await toggleFavoriteTrack(t.id);
+                                await toggleFavoriteTrack(t.id, t.isFavorite);
                               }}
                               className={`p-1.5 rounded-lg border transition cursor-pointer ${
                                 t.isFavorite
@@ -609,48 +679,142 @@ export const FullscreenMusicPlayer: React.FC = () => {
                 </div>
               )}
 
-              {activeTab === 'lyrics' && (
+              {(activeTab === 'lyrics' || (activeTab as any) === 'insights') && (
                 <div className="flex flex-col h-full min-h-0">
-                  <div className="flex items-center justify-between mb-3 shrink-0 pb-2 border-b border-slate-800">
-                    <h4 className="font-bold text-base text-white flex items-center gap-2">
-                      <FileText className="w-5 h-5 text-purple-400" />
-                      <span>Текст песни «{currentTrack.title}»</span>
-                    </h4>
-                    <motion.button
-                      type="button"
-                      whileHover={{ scale: 1.04 }}
-                      whileTap={{ scale: 0.96 }}
-                      onClick={openLyrics}
-                      className="px-2.5 py-1 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
-                      title="Открыть текст на весь экран"
-                      aria-label="Открыть текст на весь экран"
-                    >
-                      <Maximize2 className="w-3.5 h-3.5" />
-                      <span>На весь экран</span>
-                    </motion.button>
+                  {/* Top Independent Toggle Row */}
+                  <div className="flex items-center justify-between gap-3 mb-3 pb-2 border-b border-slate-800 shrink-0">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-purple-400" />
+                      <span className="text-xs sm:text-sm font-bold text-slate-200">Панели информации</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* Lyrics toggle */}
+                      <button
+                        onClick={() => setShowLyricsSection(!showLyricsSection)}
+                        className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition flex items-center gap-1 cursor-pointer border ${
+                          showLyricsSection
+                            ? 'bg-purple-600/30 text-purple-300 border-purple-500/40 hover:bg-purple-600/50'
+                            : 'bg-slate-800 text-slate-400 border-slate-700/50 hover:bg-slate-700'
+                        }`}
+                        title={showLyricsSection ? 'Скрыть текст песни' : 'Показать текст песни'}
+                      >
+                        <FileText className="w-3 h-3 text-purple-400" />
+                        <span className="hidden sm:inline">Текст:</span>
+                        <span className="font-extrabold uppercase">{showLyricsSection ? 'Вкл' : 'Выкл'}</span>
+                      </button>
+
+                      {/* Genius toggle */}
+                      <button
+                        onClick={() => setShowGeniusSection(!showGeniusSection)}
+                        className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition flex items-center gap-1 cursor-pointer border ${
+                          showGeniusSection
+                            ? 'bg-amber-500/25 text-amber-300 border-amber-500/45 hover:bg-amber-500/35'
+                            : 'bg-slate-800 text-slate-400 border-slate-700/50 hover:bg-slate-700'
+                        }`}
+                        title={showGeniusSection ? 'Скрыть факты Genius' : 'Показать факты Genius'}
+                      >
+                        <Sparkles className="w-3 h-3 text-amber-400" />
+                        <span className="hidden sm:inline">Genius:</span>
+                        <span className="font-extrabold uppercase">{showGeniusSection ? 'Вкл' : 'Выкл'}</span>
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="flex-1 overflow-hidden bg-slate-950/60 rounded-2xl border border-slate-800/80">
-                    <LiveLyrics
-                      lyrics={currentTrack.lyrics}
-                      currentTime={currentTime}
-                      isPlaying={isPlaying}
-                      onSeekToLine={seek}
-                      isLoading={lyricsLoading}
-                      trackInfo={{
-                        title: currentTrack.title,
-                        artist: currentTrack.artistName,
-                        cover: cover,
-                        source: currentTrack.source,
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
+                  {/* Split Layout Container */}
+                  <div className="flex-1 min-h-0 h-full overflow-hidden">
+                    <div className={`grid gap-4 h-full min-h-0 w-full overflow-hidden ${
+                      showLyricsSection && showGeniusSection ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'
+                    }`}>
+                      {/* Lyrics Panel */}
+                      {showLyricsSection && (
+                        <motion.div
+                          key="lyrics-pane"
+                          initial={{ opacity: 0, scale: 0.98 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.98 }}
+                          transition={{ duration: 0.2 }}
+                          className="flex flex-col min-h-0 h-full bg-slate-950/40 rounded-2xl border border-slate-800/80 overflow-hidden"
+                        >
+                          <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800/50 shrink-0 bg-slate-900/40">
+                            <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                              <FileText className="w-3.5 h-3.5 text-purple-400" />
+                              Текст песни
+                            </span>
+                            <motion.button
+                              type="button"
+                              whileHover={{ scale: 1.04 }}
+                              whileTap={{ scale: 0.96 }}
+                              onClick={openLyrics}
+                              className="px-2 py-0.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 text-[10px] font-bold transition flex items-center gap-1 cursor-pointer"
+                              title="Иммерсивный полноэкранный текст"
+                            >
+                              <Maximize2 className="w-3 h-3" />
+                              <span>Иммерсивный</span>
+                            </motion.button>
+                          </div>
+                          <div className="flex-1 overflow-hidden">
+                            <LiveLyrics
+                              lyrics={currentTrack.lyrics}
+                              currentTime={currentTime}
+                              isPlaying={isPlaying}
+                              onSeekToLine={seek}
+                              isLoading={lyricsLoading}
+                              trackInfo={{
+                                title: currentTrack.title,
+                                artist: currentTrack.artistName,
+                                cover: cover,
+                                source: currentTrack.source,
+                              }}
+                            />
+                          </div>
+                        </motion.div>
+                      )}
 
-              {(activeTab as any) === 'insights' && (
-                <div className="flex flex-col h-full min-h-0">
-                  <TrackInsightsPanel className="h-full" />
+                      {/* Genius Panel */}
+                      {showGeniusSection && (
+                        <motion.div
+                          key="genius-pane"
+                          initial={{ opacity: 0, scale: 0.98 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.98 }}
+                          transition={{ duration: 0.2 }}
+                          className="flex flex-col min-h-0 h-full overflow-hidden"
+                        >
+                          <TrackInsightsPanel className="h-full" />
+                        </motion.div>
+                      )}
+
+                      {/* Both Hidden Placeholder */}
+                      {!showLyricsSection && !showGeniusSection && (
+                        <motion.div
+                          key="hidden-pane"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="flex flex-col items-center justify-center h-full p-8 text-center text-slate-500 bg-slate-950/20 border border-slate-800/40 rounded-2xl"
+                        >
+                          <Info className="w-9 h-9 text-slate-600 mb-2" />
+                          <h5 className="text-xs sm:text-sm font-bold text-slate-400 font-mono">Все панели информационной вкладки скрыты</h5>
+                          <p className="text-[11px] text-slate-500 mt-1 max-w-xs leading-relaxed">
+                            Используйте переключатели вверху, чтобы вернуть отображение слов песни или деталей Genius.
+                          </p>
+                          <div className="flex gap-2 mt-4">
+                            <button
+                              onClick={() => setShowLyricsSection(true)}
+                              className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition cursor-pointer"
+                            >
+                              Показать Текст
+                            </button>
+                            <button
+                              onClick={() => setShowGeniusSection(true)}
+                              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition cursor-pointer"
+                            >
+                              Показать Genius
+                            </button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -674,8 +838,8 @@ export const FullscreenMusicPlayer: React.FC = () => {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         </motion.div>
       )}
     </AnimatePresence>

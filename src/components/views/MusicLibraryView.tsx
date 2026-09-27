@@ -403,12 +403,11 @@ export const MusicLibraryView: React.FC = () => {
     const handleFavTrackChanged = (e: any) => {
       const { trackId, isFavorite } = e.detail || {};
       if (trackId) {
-        setTracks((prev) => {
-          if (!isFavorite) {
-            return prev.filter((t) => t.id !== trackId);
-          }
-          return prev.map((t) => (t.id === trackId ? { ...t, isFavorite } : t));
-        });
+        if (!isFavorite) {
+          setTracks((prev) => prev.filter((t) => t.id !== trackId));
+        } else {
+          fetchFavoriteTracks();
+        }
         setRecentTracks((prev) =>
           prev.map((t) => (t.id === trackId ? { ...t, isFavorite } : t))
         );
@@ -419,12 +418,11 @@ export const MusicLibraryView: React.FC = () => {
     const handleFavReleaseChanged = (e: any) => {
       const { releaseId, isFavorite } = e.detail || {};
       if (releaseId) {
-        setReleases((prev) => {
-          if (!isFavorite) {
-            return prev.filter((r) => r.id !== releaseId);
-          }
-          return prev.map((r) => (r.id === releaseId ? { ...r, isFavorite } : r));
-        });
+        if (!isFavorite) {
+          setReleases((prev) => prev.filter((r) => r.id !== releaseId));
+        } else {
+          fetchFavoriteReleases();
+        }
         fetchSummary();
       }
     };
@@ -435,7 +433,7 @@ export const MusicLibraryView: React.FC = () => {
       window.removeEventListener('music:favorite_track_changed', handleFavTrackChanged);
       window.removeEventListener('music:favorite_release_changed', handleFavReleaseChanged);
     };
-  }, [fetchSummary]);
+  }, [fetchSummary, fetchFavoriteTracks, fetchFavoriteReleases]);
 
   // Toggle favorite for a track from list
   const handleRemoveFavoriteTrack = async (trk: Track) => {

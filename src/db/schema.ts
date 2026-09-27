@@ -31,6 +31,8 @@ export const users = pgTable('users', {
   notificationSettings: text('notification_settings').notNull().default('{"friendRequests":true,"friendReviews":true,"likes":true,"comments":true,"newReleases":true,"lists":true}'),
   showAdultContent: boolean('show_adult_content').notNull().default(false),
   musicLyricsProvider: text('music_lyrics_provider').notNull().default('auto'), // 'auto' | 'youtube' | 'genius'
+  musicCrossfadeEnabled: boolean('music_crossfade_enabled').notNull().default(false),
+  musicCrossfadeDuration: integer('music_crossfade_duration').notNull().default(4), // default 4s
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 }, (table) => ({

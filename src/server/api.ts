@@ -1637,11 +1637,17 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
       notificationSettings,
       showAdultContent,
       musicLyricsProvider,
+      musicCrossfadeEnabled,
+      musicCrossfadeDuration,
       } = req.body;
 
     // Validation
     if (musicLyricsProvider && !['auto', 'youtube', 'genius'].includes(musicLyricsProvider)) {
       return res.status(400).json({ error: 'Неверный источник текста' });
+    }
+
+    if (musicCrossfadeDuration !== undefined && (typeof musicCrossfadeDuration !== 'number' || musicCrossfadeDuration < 0 || musicCrossfadeDuration > 12)) {
+      return res.status(400).json({ error: 'Неверная длительность кроссфейда (0–12 секунд)' });
     }
 
     if (bio && String(bio).length > 500) {
@@ -1674,6 +1680,8 @@ apiRouter.put('/auth/profile', requireAuth, async (req: AuthRequest, res: Respon
         notificationSettings: notificationSettings !== undefined ? notificationSettings : user.notificationSettings,
         showAdultContent: typeof showAdultContent === 'boolean' ? showAdultContent : user.showAdultContent,
         musicLyricsProvider: musicLyricsProvider || user.musicLyricsProvider,
+        musicCrossfadeEnabled: typeof musicCrossfadeEnabled === 'boolean' ? musicCrossfadeEnabled : user.musicCrossfadeEnabled,
+        musicCrossfadeDuration: typeof musicCrossfadeDuration === 'number' ? musicCrossfadeDuration : user.musicCrossfadeDuration,
         
         updatedAt: new Date(),
       })

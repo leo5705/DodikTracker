@@ -147,7 +147,8 @@ export const BottomMusicPlayer: React.FC<{
         {/* 1. Left: Track Metadata & Favorite */}
         <div className="flex items-center gap-3 min-w-0 flex-1 sm:flex-initial sm:w-[280px] lg:w-[320px]">
           {/* Artwork with expand button */}
-          <div
+          <motion.div
+            layoutId="global-player-cover"
             onClick={openFullscreen}
             className="relative w-12 h-12 rounded-xl overflow-hidden bg-[#151932] border border-[#1E2442] shrink-0 cursor-pointer group/art shadow-md"
             title="Открыть полноэкранный плеер"
@@ -162,7 +163,7 @@ export const BottomMusicPlayer: React.FC<{
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/art:opacity-100 flex items-center justify-center transition-opacity">
               <Maximize2 className="w-4 h-4 text-white" />
             </div>
-          </div>
+          </motion.div>
 
           <div className="min-w-0 flex-1 leading-tight space-y-0.5">
             <div className="flex items-center gap-1.5">
@@ -191,7 +192,7 @@ export const BottomMusicPlayer: React.FC<{
 
           {/* Favorite button */}
           <button
-            onClick={() => toggleFavoriteTrack()}
+            onClick={() => toggleFavoriteTrack(currentTrack.id, currentTrack.isFavorite)}
             className={`p-2 rounded-xl transition-colors cursor-pointer shrink-0 ${
               isCurrentTrackFavorite
                 ? 'text-rose-400 hover:text-rose-300'

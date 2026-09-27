@@ -461,11 +461,21 @@ export const FullscreenLyricsOverlay: React.FC = () => {
               <div className="h-32 shrink-0" />
             </div>
 
-            {/* Optional Side Panel for Genius Insights in Lyrics Overlay */}
+            {/* Optional Side Panel or Mobile Modal for Genius Insights in Lyrics Overlay */}
             {showInsightsOverlay && (
-              <aside className="hidden lg:block w-[360px] 2xl:w-[400px] border-l border-white/10 bg-[#0B0D20]/95 backdrop-blur-2xl p-4 overflow-y-auto custom-scrollbar z-20">
-                <TrackInsightsPanel onClose={() => setShowInsightsOverlay(false)} />
-              </aside>
+              <>
+                {/* Desktop spacious side panel */}
+                <aside className="hidden lg:block w-[480px] xl:w-[560px] 2xl:w-[640px] max-w-[45vw] border-l border-white/10 bg-[#0B0D20]/95 backdrop-blur-2xl p-4 sm:p-6 overflow-y-auto custom-scrollbar z-20 shrink-0">
+                  <TrackInsightsPanel onClose={() => setShowInsightsOverlay(false)} />
+                </aside>
+
+                {/* Mobile / Tablet Slide-over modal */}
+                <div className="lg:hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center">
+                  <div className="w-full max-w-xl h-[85vh] my-auto">
+                    <TrackInsightsPanel isFloating onClose={() => setShowInsightsOverlay(false)} />
+                  </div>
+                </div>
+              </>
             )}
           </div>
 
@@ -620,7 +630,7 @@ export const FullscreenLyricsOverlay: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={() => toggleFavoriteTrack()}
+                  onClick={() => toggleFavoriteTrack(currentTrack.id, currentTrack.isFavorite)}
                   className={`p-2 rounded-xl transition cursor-pointer shrink-0 hidden sm:inline-flex ${
                     currentTrack.isFavorite
                       ? 'bg-rose-500/20 text-rose-400'

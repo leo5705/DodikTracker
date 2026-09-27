@@ -229,7 +229,7 @@ export const MusicTrackRow: React.FC<MusicTrackRowProps> = ({
 
   const handleToggleFavorite = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const next = await toggleFavoriteTrack(playerTrack.id);
+    const next = await toggleFavoriteTrack(playerTrack.id, isFav);
     setIsFav(next);
   };
 

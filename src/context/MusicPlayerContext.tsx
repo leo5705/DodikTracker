@@ -265,7 +265,7 @@ interface MusicPlayerContextType {
   setIsFullscreen: React.Dispatch<React.SetStateAction<boolean>>;
   closePlayer: () => void;
   isCurrentTrackFavorite: boolean;
-  toggleFavoriteTrack: (trackId?: number | string) => Promise<boolean>;
+  toggleFavoriteTrack: (trackId?: number | string, isFavOverride?: boolean) => Promise<boolean>;
   updateTrackLyrics: (lyrics: string) => void;
 }
 
@@ -395,6 +395,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   }, [playerState]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const crossfadeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const crossfadeStartedRef = useRef<boolean>(false);
+  const crossfadeTimerRef = useRef<any>(null);
   const ytPlayerRef = useRef<any>(null);
   const currentTrackRef = useRef<Track | null>(null);
   const repeatModeRef = useRef<RepeatMode>('OFF');
@@ -506,6 +509,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     const audio = new Audio();
     audioRef.current = audio;
 
+    const audio2 = new Audio();
+    crossfadeAudioRef.current = audio2;
+
     const generateSessionId = () => {
       if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
         return crypto.randomUUID();
@@ -513,7 +519,10 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       return 'sess_' + Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
     };
 
-    const handlePlay = () => {
+    const handlePlay = (e: Event) => {
+      const audioNode = e.currentTarget as HTMLAudioElement;
+      if (audioNode !== audioRef.current) return;
+
       const track = currentTrackRef.current;
       // CRITICAL: Skip listen sessions for YouTube tracks
       if (!track || track.source === 'youtube') return;
@@ -538,37 +547,66 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       }
     };
 
-    const handlePause = () => {
+    const handlePause = (e: Event) => {
+      const audioNode = e.currentTarget as HTMLAudioElement;
+      if (audioNode !== audioRef.current) return;
+
       if (playbackSessionRef.current) {
         playbackSessionRef.current.lastTick = 0;
       }
     };
 
-    const handleSeeking = () => {
+    const handleSeeking = (e: Event) => {
+      const audioNode = e.currentTarget as HTMLAudioElement;
+      if (audioNode !== audioRef.current) return;
+
       if (playbackSessionRef.current) {
         playbackSessionRef.current.lastTick = 0;
       }
     };
 
-    const handleSeeked = () => {
-      if (playbackSessionRef.current && !audio.paused) {
+    const handleSeeked = (e: Event) => {
+      const audioNode = e.currentTarget as HTMLAudioElement;
+      if (audioNode !== audioRef.current) return;
+
+      if (playbackSessionRef.current && !audioNode.paused) {
         playbackSessionRef.current.lastTick = Date.now();
       }
     };
 
-    const handleTimeUpdate = () => {
+    const handleTimeUpdate = (e: Event) => {
+      const audioNode = e.currentTarget as HTMLAudioElement;
+      if (audioNode !== audioRef.current) return;
+
       const cur = currentTrackRef.current;
       const isExternal = cur?.source === 'youtube' || (typeof cur?.id === 'string' && cur.id.startsWith('yt_')) || Boolean(cur?.videoId);
       if (isExternal) return;
 
-      setCurrentTime(audio.currentTime);
-      setDuration(audio.duration || 0);
+      setCurrentTime(audioNode.currentTime);
+      setDuration(audioNode.duration || 0);
+
+      // Check crossfade trigger conditions:
+      const isCrossfadeEnabled = Boolean((dbUser as any)?.musicCrossfadeEnabled);
+      const crossfadeDuration = (dbUser as any)?.musicCrossfadeDuration !== undefined ? Number((dbUser as any)?.musicCrossfadeDuration) : 4;
+      
+      const curTime = audioNode.currentTime;
+      const dur = audioNode.duration || 0;
+
+      if (
+        isCrossfadeEnabled &&
+        dur > 0 &&
+        dur - curTime <= crossfadeDuration &&
+        !crossfadeStartedRef.current &&
+        queueRef.current.length > 0
+      ) {
+        triggerCrossfadeTransition();
+      }
 
       const session = playbackSessionRef.current;
       const track = currentTrackRef.current;
 
       // CRITICAL: Check track.source !== 'youtube' and not external
-      if (!audio.paused && !audio.ended && session && track && !isExternal && track.source !== 'youtube' && session.trackId === track.id) {
+      if (!audioNode.paused && !audioNode.ended && session && track && !isExternal && track.source !== 'youtube' && session.trackId === track.id) {
         const now = Date.now();
         if (session.lastTick > 0) {
           const delta = (now - session.lastTick) / 1000;
@@ -579,12 +617,12 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         session.lastTick = now;
 
         if (!session.reported) {
-          const dur = audio.duration || track.duration || 180;
+          const durSec = audioNode.duration || track.duration || 180;
           let threshold = 30;
-          if (dur < 30) {
-            threshold = Math.max(5, Math.floor(dur * 0.5));
+          if (durSec < 30) {
+            threshold = Math.max(5, Math.floor(durSec * 0.5));
           } else {
-            threshold = Math.min(30, Math.max(10, Math.floor(dur * 0.5)));
+            threshold = Math.min(30, Math.max(10, Math.floor(durSec * 0.5)));
           }
 
           if (session.accumulatedSeconds >= threshold) {
@@ -618,7 +656,10 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       }
     };
 
-    const handleEnded = () => {
+    const handleEnded = (e: Event) => {
+      const audioNode = e.currentTarget as HTMLAudioElement;
+      if (audioNode !== audioRef.current) return;
+
       const cur = currentTrackRef.current;
       const isExternal = cur?.source === 'youtube' || (typeof cur?.id === 'string' && cur.id.startsWith('yt_')) || Boolean(cur?.videoId);
       if (!isExternal) {
@@ -627,9 +668,12 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     };
 
     const handleError = (e: Event) => {
+      const audioNode = e.currentTarget as HTMLAudioElement;
+      if (audioNode !== audioRef.current) return;
+
       const cur = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
       if (!cur || cur.source === 'youtube') return;
-      const src = audio.getAttribute('src');
+      const src = audioNode.getAttribute('src');
       // If external track or no audio file src was set, ignore HTMLAudioElement error event
       if (!src || src === '' || src === window.location.href) {
         return;
@@ -656,6 +700,14 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('error', handleError);
 
+    audio2.addEventListener('play', handlePlay);
+    audio2.addEventListener('pause', handlePause);
+    audio2.addEventListener('seeking', handleSeeking);
+    audio2.addEventListener('seeked', handleSeeked);
+    audio2.addEventListener('timeupdate', handleTimeUpdate);
+    audio2.addEventListener('ended', handleEnded);
+    audio2.addEventListener('error', handleError);
+
     return () => {
       audio.removeEventListener('play', handlePlay);
       audio.removeEventListener('pause', handlePause);
@@ -665,6 +717,15 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('error', handleError);
       audio.pause();
+
+      audio2.removeEventListener('play', handlePlay);
+      audio2.removeEventListener('pause', handlePause);
+      audio2.removeEventListener('seeking', handleSeeking);
+      audio2.removeEventListener('seeked', handleSeeked);
+      audio2.removeEventListener('timeupdate', handleTimeUpdate);
+      audio2.removeEventListener('ended', handleEnded);
+      audio2.removeEventListener('error', handleError);
+      audio2.pause();
     };
   }, []);
 
@@ -954,6 +1015,110 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       });
   };
 
+  const getNextTrackIndex = () => {
+    const latestQueue = queueRef.current;
+    const prevIndex = queueIndexRef.current;
+    const curRepeat = repeatModeRef.current;
+
+    if (latestQueue.length === 0) return -1;
+
+    let nextIdx = -1;
+    if (isShuffleRef.current && latestQueue.length > 1) {
+      do {
+        nextIdx = Math.floor(Math.random() * latestQueue.length);
+      } while (nextIdx === prevIndex);
+    } else if (prevIndex + 1 < latestQueue.length) {
+      nextIdx = prevIndex + 1;
+    } else if (curRepeat === 'ALL') {
+      nextIdx = 0;
+    } else if (curRepeat === 'ONE') {
+      nextIdx = prevIndex;
+    }
+    return nextIdx;
+  };
+
+  const triggerCrossfadeTransition = () => {
+    if (crossfadeStartedRef.current) return;
+
+    const nextIdx = getNextTrackIndex();
+    if (nextIdx < 0) return;
+
+    const rawNextTrack = queueRef.current[nextIdx];
+    const nextTrack = normalizePlayerTrack(rawNextTrack);
+
+    const isNextExternal = nextTrack.source === 'youtube' || (typeof nextTrack.id === 'string' && nextTrack.id.startsWith('yt_')) || Boolean(nextTrack.videoId);
+    if (isNextExternal) {
+      return; // crossfade only local/dodik files
+    }
+
+    const nextAudioSrc = (nextTrack.audioFile || '').trim();
+    if (!nextAudioSrc) return;
+
+    crossfadeStartedRef.current = true;
+    console.info(`[MusicPlayer] Initiating crossfade from current track to next track: «${nextTrack.title}»`);
+
+    const fadeOutAudio = audioRef.current;
+    const fadeInAudio = crossfadeAudioRef.current;
+
+    if (!fadeOutAudio || !fadeInAudio) return;
+
+    fadeInAudio.src = nextAudioSrc;
+    fadeInAudio.currentTime = 0;
+    fadeInAudio.volume = 0;
+
+    fadeInAudio.play()
+      .then(() => {
+        const crossfadeDuration = (dbUser as any)?.musicCrossfadeDuration !== undefined ? Number((dbUser as any)?.musicCrossfadeDuration) : 4;
+        const steps = 20;
+        const intervalTime = (crossfadeDuration * 1000) / steps;
+        let currentStep = 0;
+
+        const maxVolume = isMutedRef.current ? 0 : volumeRef.current;
+
+        if (crossfadeTimerRef.current) {
+          clearInterval(crossfadeTimerRef.current);
+        }
+
+        crossfadeTimerRef.current = setInterval(() => {
+          currentStep++;
+          const ratio = currentStep / steps;
+
+          // Fade out old track
+          fadeOutAudio.volume = Math.max(0, maxVolume * (1 - ratio));
+
+          // Fade in new track
+          fadeInAudio.volume = Math.min(maxVolume, maxVolume * ratio);
+
+          if (currentStep >= steps) {
+            clearInterval(crossfadeTimerRef.current);
+            crossfadeTimerRef.current = null;
+
+            fadeOutAudio.pause();
+            fadeOutAudio.removeAttribute('src');
+            fadeOutAudio.load();
+
+            // Swap active node references
+            audioRef.current = fadeInAudio;
+            crossfadeAudioRef.current = fadeOutAudio;
+
+            fadeInAudio.volume = maxVolume;
+
+            setCurrentTrack(nextTrack);
+            setQueueIndex(nextIdx);
+            setCurrentTime(0);
+            setDuration(nextTrack.duration || 0);
+
+            crossfadeStartedRef.current = false;
+            console.info(`[MusicPlayer] Crossfade completed. Active track is now «${nextTrack.title}»`);
+          }
+        }, intervalTime);
+      })
+      .catch((err) => {
+        console.warn('[MusicPlayer] Failed to play crossfade track:', err);
+        crossfadeStartedRef.current = false;
+      });
+  };
+
   const handleAutoAdvance = (skipRepeatOne = false) => {
     const curRepeat = repeatModeRef.current;
     const curTrack = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
@@ -1011,6 +1176,18 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   const playTrackInternal = (rawTrack: Track, rawQueue?: Track[], newRelease?: ReleaseInfo | null) => {
+    // Clear crossfade timers and stop fading-in audio to prevent bleeding
+    if (crossfadeTimerRef.current) {
+      clearInterval(crossfadeTimerRef.current);
+      crossfadeTimerRef.current = null;
+    }
+    if (crossfadeAudioRef.current) {
+      crossfadeAudioRef.current.pause();
+      crossfadeAudioRef.current.removeAttribute('src');
+      crossfadeAudioRef.current.load();
+    }
+    crossfadeStartedRef.current = false;
+
     const track = normalizePlayerTrack(rawTrack);
     const finalQueue = rawQueue && rawQueue.length > 0 ? rawQueue.map(normalizePlayerTrack) : [track];
     const trackIdx = finalQueue.findIndex((t) => t.id === track.id);
@@ -1218,6 +1395,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   const seek = (seconds: number) => {
+    crossfadeStartedRef.current = false;
     setCurrentTime(seconds);
     const cur = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
     if (cur?.source === 'youtube') {
@@ -1318,14 +1496,14 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     return () => window.removeEventListener('music:favorite_track_changed', handleFavChange);
   }, []);
 
-  const toggleFavoriteTrack = async (trackId?: number | string): Promise<boolean> => {
+  const toggleFavoriteTrack = async (trackId?: number | string, isFavOverride?: boolean): Promise<boolean> => {
     const targetId = trackId || currentTrack?.id;
     if (!targetId || !dbUser) return false;
 
     const targetTrack = targetId === currentTrack?.id ? currentTrack : queue.find((t) => t.id === targetId);
 
     if (targetTrack?.source === 'youtube' || typeof targetId === 'string') {
-      const currentlyFav = Boolean(targetTrack?.isFavorite);
+      const currentlyFav = isFavOverride !== undefined ? isFavOverride : Boolean(targetTrack?.isFavorite);
       const nextFav = !currentlyFav;
       if (currentTrack && currentTrack.id === targetId) {
         setCurrentTrack((prev) => (prev ? { ...prev, isFavorite: nextFav } : prev));
@@ -1337,7 +1515,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     const numId = Number(targetId);
     if (isNaN(numId)) return false;
 
-    const currentlyFav = Boolean(targetTrack?.isFavorite);
+    const currentlyFav = isFavOverride !== undefined ? isFavOverride : Boolean(targetTrack?.isFavorite);
     const nextFav = !currentlyFav;
 
     if (currentTrack && currentTrack.id === targetId) {

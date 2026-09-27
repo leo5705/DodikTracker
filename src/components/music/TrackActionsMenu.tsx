@@ -263,7 +263,7 @@ export const TrackActionsMenu: React.FC<TrackActionsMenuProps> = ({
   const handleToggleFavorite = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(false);
-    const newFavState = await toggleFavoriteTrack(track.id);
+    const newFavState = await toggleFavoriteTrack(track.id, isFav);
     setIsFav(newFavState);
     if (newFavState) {
       showToast('Трек добавлен в любимое', 'success');
