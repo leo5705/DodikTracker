@@ -2,8 +2,8 @@
  * Helper utilities for stable keys and deduplication across Dodik Music
  */
 
-export function getStableTrackKey(track: any, index?: number): string {
-  if (!track) return `track-fallback-${index ?? 0}`;
+export function getStableTrackBaseKey(track: any): string {
+  if (!track) return 'track-fallback';
 
   // Internal track with numeric or DB ID
   if (track.id !== undefined && track.id !== null) {
@@ -29,14 +29,19 @@ export function getStableTrackKey(track: any, index?: number): string {
   const title = (track.title || track.name || '').trim().toLowerCase();
   const artist = (track.artist || track.artistName || '').trim().toLowerCase();
   if (title || artist) {
-    return `meta-tr-${title}-${artist}-${index ?? 0}`;
+    return `meta-tr-${title}-${artist}`;
   }
 
-  return `track-fallback-${index ?? 0}`;
+  return 'track-fallback';
 }
 
-export function getStableArtistKey(art: any, index?: number): string {
-  if (!art) return `artist-fallback-${index ?? 0}`;
+export function getStableTrackKey(track: any, index?: number): string {
+  const baseKey = getStableTrackBaseKey(track);
+  return index !== undefined ? `${baseKey}-${index}` : baseKey;
+}
+
+export function getStableArtistBaseKey(art: any): string {
+  if (!art) return 'artist-fallback';
 
   if (art.id !== undefined && art.id !== null) {
     const idStr = String(art.id).trim();
@@ -58,14 +63,19 @@ export function getStableArtistKey(art: any, index?: number): string {
 
   const name = (art.stageName || art.name || '').trim().toLowerCase();
   if (name) {
-    return `meta-art-${name}-${index ?? 0}`;
+    return `meta-art-${name}`;
   }
 
-  return `artist-fallback-${index ?? 0}`;
+  return 'artist-fallback';
 }
 
-export function getStableReleaseKey(rel: any, index?: number): string {
-  if (!rel) return `release-fallback-${index ?? 0}`;
+export function getStableArtistKey(art: any, index?: number): string {
+  const baseKey = getStableArtistBaseKey(art);
+  return index !== undefined ? `${baseKey}-${index}` : baseKey;
+}
+
+export function getStableReleaseBaseKey(rel: any): string {
+  if (!rel) return 'release-fallback';
 
   if (rel.id !== undefined && rel.id !== null) {
     const idStr = String(rel.id).trim();
@@ -88,10 +98,15 @@ export function getStableReleaseKey(rel: any, index?: number): string {
   const title = (rel.title || '').trim().toLowerCase();
   const artist = (rel.artist || rel.artistName || '').trim().toLowerCase();
   if (title || artist) {
-    return `meta-rel-${title}-${artist}-${index ?? 0}`;
+    return `meta-rel-${title}-${artist}`;
   }
 
-  return `release-fallback-${index ?? 0}`;
+  return 'release-fallback';
+}
+
+export function getStableReleaseKey(rel: any, index?: number): string {
+  const baseKey = getStableReleaseBaseKey(rel);
+  return index !== undefined ? `${baseKey}-${index}` : baseKey;
 }
 
 /**
@@ -104,7 +119,7 @@ export function dedupeTracks<T>(tracks: T[], customKeyFn?: (item: T, idx: number
 
   tracks.forEach((item, idx) => {
     if (!item) return;
-    const key = customKeyFn ? customKeyFn(item, idx) : getStableTrackKey(item, idx);
+    const key = customKeyFn ? customKeyFn(item, idx) : getStableTrackBaseKey(item);
     if (!seen.has(key)) {
       seen.add(key);
       result.push(item);
@@ -122,9 +137,9 @@ export function dedupeArtists<T>(artists: T[]): T[] {
   const seen = new Set<string>();
   const result: T[] = [];
 
-  artists.forEach((item, idx) => {
+  artists.forEach((item) => {
     if (!item) return;
-    const key = getStableArtistKey(item, idx);
+    const key = getStableArtistBaseKey(item);
     if (!seen.has(key)) {
       seen.add(key);
       result.push(item);
@@ -142,9 +157,9 @@ export function dedupeReleases<T>(releases: T[]): T[] {
   const seen = new Set<string>();
   const result: T[] = [];
 
-  releases.forEach((item, idx) => {
+  releases.forEach((item) => {
     if (!item) return;
-    const key = getStableReleaseKey(item, idx);
+    const key = getStableReleaseBaseKey(item);
     if (!seen.has(key)) {
       seen.add(key);
       result.push(item);

@@ -6328,12 +6328,114 @@ const parsePlaylistImportHandler = async (req: AuthRequest, res: Response) => {
 musicRouter.post('/playlists/import/parse', optionalAuth, parsePlaylistImportHandler);
 musicRouter.post('/playlists/import-txt/parse', optionalAuth, parsePlaylistImportHandler);
 
+/**
+ * Helper to ensure an external YouTube track is safely registered in musicTracks
+ * so it can be stored in musicPlaylistTracks with a valid foreign key.
+ */
+async function ensureExternalTrackRegistered(
+  userId: number,
+  trackData: {
+    videoId: string;
+    title: string;
+    artistName: string;
+    album?: string | null;
+    coverUrl?: string | null;
+    duration?: number | null;
+  }
+): Promise<number | null> {
+  if (!trackData.videoId) return null;
+  const cleanVideoId = String(trackData.videoId).trim();
+  const audioFileKey = `yt_${cleanVideoId}`;
+
+  // 1. Check if track already exists in musicTracks
+  const [existingTrack] = await db
+    .select({ id: musicTracks.id })
+    .from(musicTracks)
+    .where(or(eq(musicTracks.audioFile, audioFileKey), eq(musicTracks.slug, audioFileKey)))
+    .limit(1);
+
+  if (existingTrack) {
+    return existingTrack.id;
+  }
+
+  // 2. Find or create external artist profile
+  const artistName = String(trackData.artistName || 'Внешний исполнитель').trim();
+  let artistSlug = slugify(artistName);
+
+  const [existingArtist] = await db
+    .select({ id: artistProfiles.id })
+    .from(artistProfiles)
+    .where(ilike(artistProfiles.stageName, artistName))
+    .limit(1);
+
+  let artistId: number;
+  if (existingArtist) {
+    artistId = existingArtist.id;
+  } else {
+    const [createdArtist] = await db
+      .insert(artistProfiles)
+      .values({
+        userId,
+        stageName: artistName,
+        slug: `${artistSlug}-ext-${Math.floor(Math.random() * 899 + 100)}`,
+        status: 'ACTIVE',
+        avatar: trackData.coverUrl || null,
+      })
+      .returning({ id: artistProfiles.id });
+    artistId = createdArtist.id;
+  }
+
+  // 3. Find or create external release
+  const releaseTitle = String(trackData.album || 'YouTube Music').trim();
+  const [existingRelease] = await db
+    .select({ id: musicReleases.id })
+    .from(musicReleases)
+    .where(and(eq(musicReleases.artistId, artistId), ilike(musicReleases.title, releaseTitle)))
+    .limit(1);
+
+  let releaseId: number;
+  if (existingRelease) {
+    releaseId = existingRelease.id;
+  } else {
+    const [createdRelease] = await db
+      .insert(musicReleases)
+      .values({
+        artistId,
+        title: releaseTitle,
+        slug: `${slugify(releaseTitle)}-ext-${Math.floor(Math.random() * 899 + 100)}`,
+        type: 'SINGLE',
+        cover: trackData.coverUrl || null,
+        status: 'PUBLISHED',
+      })
+      .returning({ id: musicReleases.id });
+    releaseId = createdRelease.id;
+  }
+
+  // 4. Create track row in musicTracks
+  const [newTrack] = await db
+    .insert(musicTracks)
+    .values({
+      releaseId,
+      artistId,
+      title: String(trackData.title).trim(),
+      slug: audioFileKey,
+      audioFile: audioFileKey,
+      duration: trackData.duration ? Math.round(Number(trackData.duration)) : null,
+      status: 'PUBLISHED',
+    })
+    .returning({ id: musicTracks.id });
+
+  return newTrack ? newTrack.id : null;
+}
+
 const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
-    const { mode, playlistId: existingPlaylistId, title, description, isCollaborative, trackIds } = req.body;
+    const { mode, playlistId: existingPlaylistId, title, description, isCollaborative, tracks, trackIds } = req.body;
 
-    if (!Array.isArray(trackIds) || trackIds.length === 0) {
+    const trackItems: any[] = Array.isArray(tracks) && tracks.length > 0 ? tracks : Array.isArray(trackIds) ? trackIds : [];
+
+    if (trackItems.length === 0) {
       return res.status(400).json({ error: 'Список треков для импорта пуст' });
     }
 
@@ -6410,18 +6512,40 @@ const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => 
     let added = 0;
     let skipped = 0;
 
-    for (let i = 0; i < trackIds.length; i++) {
-      const rawId = trackIds[i];
-      const numericTrackId = parseInt(String(rawId), 10);
-      if (isNaN(numericTrackId) || numericTrackId <= 0) {
+    for (let i = 0; i < trackItems.length; i++) {
+      const rawItem = trackItems[i];
+      let targetTrackId: number | null = null;
+
+      if (typeof rawItem === 'number' || (typeof rawItem === 'string' && /^\d+$/.test(rawItem))) {
+        targetTrackId = parseInt(String(rawItem), 10);
+      } else if (typeof rawItem === 'object' && rawItem !== null) {
+        if (rawItem.numericTrackId && typeof rawItem.numericTrackId === 'number') {
+          targetTrackId = rawItem.numericTrackId;
+        } else if (rawItem.id && typeof rawItem.id === 'number') {
+          targetTrackId = rawItem.id;
+        } else if (rawItem.videoId || (typeof rawItem.id === 'string' && rawItem.id.startsWith('yt_'))) {
+          const vId = rawItem.videoId || String(rawItem.id).replace(/^yt_/, '');
+          targetTrackId = await ensureExternalTrackRegistered(user.id, {
+            videoId: vId,
+            title: rawItem.title || 'Внешний трек',
+            artistName: rawItem.artistName || rawItem.artist || 'Исполнитель',
+            album: rawItem.album || rawItem.releaseTitle || null,
+            coverUrl: rawItem.coverUrl || rawItem.thumbnail || null,
+            duration: rawItem.duration || rawItem.durationSeconds || null,
+          });
+        }
+      }
+
+      if (!targetTrackId || isNaN(targetTrackId) || targetTrackId <= 0) {
         skipped++;
         continue;
       }
 
+      // Check if track exists in musicTracks
       const [track] = await db
         .select({ id: musicTracks.id, title: musicTracks.title })
         .from(musicTracks)
-        .where(eq(musicTracks.id, numericTrackId))
+        .where(eq(musicTracks.id, targetTrackId))
         .limit(1);
 
       if (!track) {

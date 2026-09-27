@@ -148,9 +148,9 @@ export const BottomMusicPlayer: React.FC<{
         <div className="flex items-center gap-3 min-w-0 flex-1 sm:flex-initial sm:w-[280px] lg:w-[320px]">
           {/* Artwork with expand button */}
           <div
-            onClick={openExpanded}
+            onClick={openFullscreen}
             className="relative w-12 h-12 rounded-xl overflow-hidden bg-[#151932] border border-[#1E2442] shrink-0 cursor-pointer group/art shadow-md"
-            title="Развернуть плеер"
+            title="Открыть полноэкранный плеер"
           >
             {cover ? (
               <img src={cover} alt="" className="w-full h-full object-cover group-hover/art:scale-105 transition-transform" />
@@ -167,7 +167,7 @@ export const BottomMusicPlayer: React.FC<{
           <div className="min-w-0 flex-1 leading-tight space-y-0.5">
             <div className="flex items-center gap-1.5">
               <span
-                onClick={openExpanded}
+                onClick={openFullscreen}
                 className="text-xs sm:text-sm font-bold text-[#F8FAFC] truncate hover:text-[#A78BFA] transition-colors cursor-pointer"
               >
                 {currentTrack.title}
@@ -326,7 +326,7 @@ export const BottomMusicPlayer: React.FC<{
           <button
             onClick={() => {
               setActiveTab('queue');
-              openExpanded();
+              openFullscreen();
             }}
             className="p-2 text-slate-400 hover:text-white hover:bg-[#151932] rounded-xl transition-colors cursor-pointer hidden md:inline-flex"
             title="Очередь воспроизведения"

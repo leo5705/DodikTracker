@@ -18,24 +18,12 @@
     --mobile-nav-height: 4rem;
     --safe-bottom: env(safe-area-inset-bottom, 0px);
     --safe-top: env(safe-area-inset-top, 0px);
-    --music-player-height: 0px;
     --floating-actions-bottom: calc(var(--mobile-nav-height) + var(--safe-bottom) + 0.75rem);
   }
 
   @media (min-width: 768px) {
     :root {
-      --floating-actions-bottom: calc(var(--safe-bottom) + 1.5rem);
-    }
-  }
-
-  .has-bottom-music-player {
-    --music-player-height: 80px;
-    --floating-actions-bottom: calc(var(--music-player-height) + var(--mobile-nav-height) + var(--safe-bottom) + 1.25rem);
-  }
-
-  @media (min-width: 768px) {
-    .has-bottom-music-player {
-      --floating-actions-bottom: calc(var(--music-player-height) + var(--safe-bottom) + 2rem);
+      --floating-actions-bottom: calc(var(--safe-bottom) + 1.25rem);
     }
   }
 

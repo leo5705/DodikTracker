@@ -691,14 +691,9 @@ export const AppShell: React.FC<{
   children: React.ReactNode;
 }> = ({ children }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { currentTrack } = useMusicPlayer();
-  const { route } = useRouter();
-
-  const isMusicSection = route.name.startsWith('music') || route.name.startsWith('music-');
-  const hasBottomPlayer = Boolean(isMusicSection && currentTrack);
 
   return (
-    <div className={`min-h-screen bg-[#080A18] text-[#F8FAFC] flex antialiased ${hasBottomPlayer ? 'has-bottom-music-player' : ''}`}>
+    <div className="min-h-screen bg-[#080A18] text-[#F8FAFC] flex antialiased">
       {/* Permanent Desktop Sidebar */}
       <div className="hidden md:block">
         <Sidebar />
@@ -721,19 +716,14 @@ export const AppShell: React.FC<{
       <div className="flex-1 min-w-0 flex flex-col min-h-screen">
         <TopBar onOpenMobileMenu={() => setMobileMenuOpen(true)} />
 
-        <main
-          className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 2xl:px-10 py-7 max-w-[1760px] 2xl:max-w-[1920px] mx-auto w-full transition-[padding-bottom] duration-300 ease-out"
-          style={{
-            paddingBottom: 'calc(var(--floating-actions-bottom, 76px) + 1rem)',
-          }}
-        >
+        {/* Global Top Music Player */}
+        <GlobalMusicPlayer />
+
+        <main className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 2xl:px-10 py-6 max-w-[1760px] 2xl:max-w-[1920px] mx-auto w-full transition-all">
           {children}
         </main>
 
         <MobileBottomNav />
-
-        {/* Single Global Music Player with Top <-> Bottom Shared Motion Layout */}
-        <GlobalMusicPlayer />
       </div>
     </div>
   );

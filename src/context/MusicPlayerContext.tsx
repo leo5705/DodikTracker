@@ -3,7 +3,6 @@ import { useRouter } from './RouterContext.tsx';
 import { useAuth } from './AuthContext.tsx';
 import { loadYouTubeIframeAPI } from '../utils/youtubeIframeApi.ts';
 import { LiveLyrics } from '../components/music/LiveLyrics.tsx';
-import { ExpandedMusicPlayer } from '../components/music/ExpandedMusicPlayer.tsx';
 import { FullscreenMusicPlayer } from '../components/music/FullscreenMusicPlayer.tsx';
 import { FullscreenLyricsOverlay } from '../components/music/FullscreenLyricsOverlay.tsx';
 import { getBestMusicImageUrl } from '../utils/musicImageUtils.ts';
@@ -197,7 +196,7 @@ export interface GeniusTrackInfo {
   fetchedAt: string;
 }
 
-export type PlayerState = 'mini' | 'expanded' | 'fullscreen' | 'lyrics';
+export type PlayerState = 'mini' | 'fullscreen' | 'lyrics';
 export type PlayerPlaybackStatus = 'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'blocked' | 'error';
 type RepeatMode = 'OFF' | 'ONE' | 'ALL';
 type PlayerTab = 'queue' | 'lyrics' | 'note';
@@ -292,7 +291,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [volume, setVolumeState] = useState<number>(0.8);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [playerState, setPlayerStateInternal] = useState<PlayerState>('mini');
-  const [previousPlayerState, setPreviousPlayerState] = useState<PlayerState>('expanded');
+  const [previousPlayerState, setPreviousPlayerState] = useState<PlayerState>('mini');
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('OFF');
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<PlayerTab>('queue');
@@ -301,7 +300,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     setIsInsightsOpen((prev) => !prev);
   };
 
-  const previousStateRef = useRef<PlayerState>('expanded');
+  const previousStateRef = useRef<PlayerState>('mini');
   const consecutiveErrorsRef = useRef<number>(0);
 
   const clearPlaybackError = () => {
@@ -318,43 +317,38 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     });
   };
 
-  const isExpanded = playerState === 'expanded';
+  const isExpanded = false;
   const isFullscreen = playerState === 'fullscreen';
   const isLyricsOpen = playerState === 'lyrics';
 
-  const openExpanded = () => setPlayerState('expanded');
+  const openExpanded = () => setPlayerState('mini');
   const openFullscreen = () => setPlayerState('fullscreen');
   const openLyrics = () => {
     setPlayerStateInternal((prev) => {
       if (prev !== 'lyrics') {
-        const fallbackPrev = prev === 'mini' ? 'expanded' : prev;
-        previousStateRef.current = fallbackPrev;
-        setPreviousPlayerState(fallbackPrev);
+        previousStateRef.current = 'mini';
+        setPreviousPlayerState('mini');
       }
       return 'lyrics';
     });
   };
 
   const closeExpanded = () => setPlayerState('mini');
-  const closeFullscreen = () => setPlayerState('expanded');
+  const closeFullscreen = () => setPlayerState('mini');
   const closeLyrics = () => {
-    const target = previousStateRef.current && previousStateRef.current !== 'lyrics' ? previousStateRef.current : 'fullscreen';
+    const target = previousStateRef.current && previousStateRef.current !== 'lyrics' ? previousStateRef.current : 'mini';
     setPlayerState(target);
   };
 
-  const setIsExpanded: React.Dispatch<React.SetStateAction<boolean>> = (value) => {
-    setPlayerStateInternal((prev) => {
-      const isExp = prev === 'expanded';
-      const nextBool = typeof value === 'function' ? value(isExp) : value;
-      return nextBool ? 'expanded' : 'mini';
-    });
+  const setIsExpanded: React.Dispatch<React.SetStateAction<boolean>> = () => {
+    setPlayerState('mini');
   };
 
   const setIsFullscreen: React.Dispatch<React.SetStateAction<boolean>> = (value) => {
     setPlayerStateInternal((prev) => {
       const isFull = prev === 'fullscreen';
       const nextBool = typeof value === 'function' ? value(isFull) : value;
-      return nextBool ? 'fullscreen' : 'expanded';
+      return nextBool ? 'fullscreen' : 'mini';
     });
   };
 
@@ -816,12 +810,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
         setPlayerStateInternal((prev) => {
           if (prev === 'lyrics') {
-            return previousStateRef.current && previousStateRef.current !== 'lyrics' ? previousStateRef.current : 'fullscreen';
+            return previousStateRef.current && previousStateRef.current !== 'lyrics' ? previousStateRef.current : 'mini';
           }
           if (prev === 'fullscreen') {
-            return 'expanded';
-          }
-          if (prev === 'expanded') {
             return 'mini';
           }
           return prev;
@@ -1464,7 +1455,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       >
         <div id="dodik-yt-player-container" />
       </div>
-      <ExpandedMusicPlayer />
       <FullscreenMusicPlayer />
       <FullscreenLyricsOverlay />
     </MusicPlayerContext.Provider>

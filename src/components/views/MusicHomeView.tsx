@@ -1015,8 +1015,8 @@ export const MusicHomeView: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {popularReleases.slice(0, 6).map((rel) => (
-              <MusicReleaseCard key={rel.id} release={rel} />
+            {popularReleases.slice(0, 6).map((rel, idx) => (
+              <MusicReleaseCard key={getStableReleaseKey(rel, idx)} release={rel} />
             ))}
           </div>
         </div>
@@ -1042,9 +1042,9 @@ export const MusicHomeView: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {popularArtists.map((art) => (
+            {popularArtists.map((art, idx) => (
               <div
-                key={art.id}
+                key={getStableArtistKey(art, idx)}
                 onClick={() => navigate(`/music/artist/${art.slug || art.id}`)}
                 className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442] hover:border-purple-500/40 transition-all flex items-center gap-3.5 cursor-pointer group shadow-md"
               >

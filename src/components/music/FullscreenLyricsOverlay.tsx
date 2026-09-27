@@ -48,7 +48,6 @@ export const FullscreenLyricsOverlay: React.FC = () => {
     playerState,
     closeLyrics,
     openFullscreen,
-    openExpanded,
     currentTime,
     duration,
     isPlaying,

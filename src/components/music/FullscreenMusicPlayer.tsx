@@ -174,9 +174,9 @@ export const FullscreenMusicPlayer: React.FC = () => {
               <motion.button
                 type="button"
                 whileTap={{ scale: 0.92 }}
-                onClick={() => setPlayerState('expanded')}
+                onClick={() => setPlayerState('mini')}
                 className="p-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition flex items-center gap-1.5 text-xs font-bold cursor-pointer shadow-lg"
-                title="Свернуть в панель"
+                title="Свернуть в мини-плеер"
               >
                 <ChevronDown className="w-4 h-4" />
                 <span className="hidden sm:inline">Свернуть</span>

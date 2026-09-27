@@ -27,29 +27,59 @@ import {
   RefreshCw,
   Info,
   Plus,
+  Youtube,
+  ChevronDown,
+  Search,
 } from 'lucide-react';
 
-interface MatchedTrack {
-  kind: 'dodik';
-  id: number;
-  numericTrackId: number;
+export type MatchStatus =
+  | 'LOCAL_FOUND'
+  | 'EXTERNAL_FOUND'
+  | 'EXTERNAL_NOT_FOUND'
+  | 'SOURCE_UNAVAILABLE'
+  | 'PLAYBACK_UNAVAILABLE'
+  | 'AMBIGUOUS_RESULT';
+
+export interface ExternalCandidate {
+  id: string;
+  videoId?: string;
+  title: string;
+  artist: string;
+  artistName?: string;
+  album?: string;
+  coverUrl?: string | null;
+  thumbnail?: string | null;
+  duration?: number | null;
+  source: string;
+}
+
+export interface MatchedTrack {
+  id: number | string;
+  numericTrackId?: number;
+  videoId?: string;
   title: string;
   artistName: string;
   artistSlug?: string;
   releaseTitle?: string;
+  album?: string;
   coverUrl?: string | null;
+  thumbnail?: string | null;
   duration?: number | null;
-  source: 'dodik';
+  source: 'dodik' | 'youtube' | string;
 }
 
-interface ParsedLine {
+export interface ParsedLine {
   rawLine: string;
   artist: string;
   title: string;
   album?: string;
   matched: boolean;
+  matchStatus: MatchStatus;
   reason?: string;
+  source?: string;
   track: MatchedTrack | null;
+  candidates?: ExternalCandidate[];
+  selectedCandidate?: ExternalCandidate | null;
 }
 
 interface ExistingPlaylistOption {
@@ -78,8 +108,16 @@ export const MusicPlaylistImportView: React.FC = () => {
   const [matchedCount, setMatchedCount] = useState<number>(0);
   const [unmatchedCount, setUnmatchedCount] = useState<number>(0);
 
+  // Candidate selection popup state
+  const [activeCandidatesIdx, setActiveCandidatesIdx] = useState<number | null>(null);
+
+  // Manual search per line state
+  const [manualSearchIdx, setManualSearchIdx] = useState<number | null>(null);
+  const [manualQuery, setManualQuery] = useState<string>('');
+  const [searchingManual, setSearchingManual] = useState<boolean>(false);
+
   // Preview tab filter
-  const [previewFilter, setPreviewFilter] = useState<'all' | 'matched' | 'unmatched'>('all');
+  const [previewFilter, setPreviewFilter] = useState<'all' | 'matched' | 'unmatched' | 'ambiguous'>('all');
 
   // Destination configuration
   const [importTarget, setImportTarget] = useState<'new' | 'existing'>('new');
@@ -115,6 +153,18 @@ export const MusicPlaylistImportView: React.FC = () => {
         .finally(() => setLoadingPlaylists(false));
     }
   }, [dbUser, authFetch]);
+
+  // Recalculate stats whenever parsedResults changes
+  useEffect(() => {
+    if (parsedResults.length > 0) {
+      const total = parsedResults.length;
+      const matched = parsedResults.filter((r) => r.matched).length;
+      const unmatched = total - matched;
+      setTotalCount(total);
+      setMatchedCount(matched);
+      setUnmatchedCount(unmatched);
+    }
+  }, [parsedResults]);
 
   // Handle file upload (.txt, .csv, .tsv, .json)
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -163,9 +213,6 @@ export const MusicPlaylistImportView: React.FC = () => {
 
       setParsedResults(data.tracks || []);
       setUnmatchedTracks(data.unmatchedTracks || []);
-      setTotalCount(data.total || 0);
-      setMatchedCount(data.matchedCount || 0);
-      setUnmatchedCount(data.unmatchedCount || 0);
 
       // Default title if still empty
       if (!playlistTitle) {
@@ -181,24 +228,101 @@ export const MusicPlaylistImportView: React.FC = () => {
     }
   };
 
+  // Select a candidate for an ambiguous line
+  const handleSelectCandidate = (lineIdx: number, candidate: ExternalCandidate) => {
+    setParsedResults((prev) => {
+      const next = [...prev];
+      const item = { ...next[lineIdx] };
+      item.selectedCandidate = candidate;
+      item.matched = true;
+      item.matchStatus = 'EXTERNAL_FOUND';
+      item.track = {
+        id: candidate.videoId ? `yt_${candidate.videoId}` : candidate.id,
+        videoId: candidate.videoId,
+        title: candidate.title,
+        artistName: candidate.artistName || candidate.artist,
+        album: candidate.album || 'YouTube Music',
+        coverUrl: candidate.coverUrl || candidate.thumbnail || null,
+        duration: candidate.duration || null,
+        source: candidate.source || 'youtube',
+      };
+      item.reason = undefined;
+      next[lineIdx] = item;
+      return next;
+    });
+    setActiveCandidatesIdx(null);
+  };
+
+  // Manual search for a track
+  const handlePerformManualSearch = async (lineIdx: number) => {
+    if (!manualQuery.trim()) return;
+    setSearchingManual(true);
+    try {
+      const res = await authFetch(`/api/music/search?q=${encodeURIComponent(manualQuery.trim())}&limit=5`);
+      const data = await res.json();
+      if (res.ok && data.results && data.results.length > 0) {
+        const first = data.results[0];
+        setParsedResults((prev) => {
+          const next = [...prev];
+          const item = { ...next[lineIdx] };
+          item.matched = true;
+          item.matchStatus = first.source === 'dodik' ? 'LOCAL_FOUND' : 'EXTERNAL_FOUND';
+          item.track = {
+            id: first.id,
+            numericTrackId: typeof first.id === 'number' ? first.id : undefined,
+            videoId: first.videoId,
+            title: first.title,
+            artistName: first.artistName || first.artist,
+            album: first.releaseTitle || first.album,
+            coverUrl: first.releaseCover || first.coverUrl || first.thumbnail || null,
+            duration: first.duration || null,
+            source: first.source || 'youtube',
+          };
+          item.candidates = data.results.map((r: any) => ({
+            id: String(r.id),
+            videoId: r.videoId,
+            title: r.title,
+            artist: r.artistName || r.artist || '',
+            artistName: r.artistName || r.artist || '',
+            album: r.releaseTitle || r.album || '',
+            coverUrl: r.releaseCover || r.coverUrl || r.thumbnail || null,
+            duration: r.duration,
+            source: r.source || 'youtube',
+          }));
+          item.reason = undefined;
+          next[lineIdx] = item;
+          return next;
+        });
+        setManualSearchIdx(null);
+      } else {
+        setError('По вашему запросу ничего не найдено');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Ошибка поиска');
+    } finally {
+      setSearchingManual(false);
+    }
+  };
+
   // Play preview track
   const handlePlayPreview = (track: MatchedTrack) => {
     const playerTrack = {
-      id: track.id,
-      source: 'dodik',
+      id: track.videoId ? `yt_${track.videoId}` : track.id,
+      videoId: track.videoId,
+      source: track.source || 'youtube',
       title: track.title,
       artistName: track.artistName,
-      releaseTitle: track.releaseTitle || 'Сингл',
-      releaseCover: track.coverUrl || null,
-      thumbnail: track.coverUrl || null,
+      releaseTitle: track.releaseTitle || track.album || 'Музыкальный трек',
+      releaseCover: track.coverUrl || track.thumbnail || null,
+      thumbnail: track.coverUrl || track.thumbnail || null,
       duration: track.duration || null,
       explicit: false,
       playable: true,
     };
 
     playTrack(playerTrack as any, [playerTrack] as any, {
-      title: track.releaseTitle || 'Сингл',
-      cover: track.coverUrl || null,
+      title: track.releaseTitle || track.album || 'Музыкальный трек',
+      cover: track.coverUrl || track.thumbnail || null,
       slug: '',
       artistName: track.artistName,
       artistSlug: track.artistSlug || '',
@@ -222,13 +346,13 @@ export const MusicPlaylistImportView: React.FC = () => {
       return;
     }
 
-    // Filter only matched local Dodik tracks
-    const matchedTrackIds = parsedResults
-      .filter((r) => r.matched && r.track && r.track.id)
-      .map((r) => r.track!.id);
+    // Filter matched tracks (both local and external found/selected)
+    const matchedItems = parsedResults
+      .filter((r) => r.matched && (r.track || r.selectedCandidate))
+      .map((r) => r.selectedCandidate || r.track);
 
-    if (matchedTrackIds.length === 0) {
-      setError('В загруженном списке не найдено треков из каталога Dodik Tracker. Импорт не может быть выполнен без совпадающих треков.');
+    if (matchedItems.length === 0) {
+      setError('В загруженном списке не найдено совпадений. Выберите подходящие варианты или выполните поиск.');
       return;
     }
 
@@ -238,7 +362,7 @@ export const MusicPlaylistImportView: React.FC = () => {
     try {
       const payload: Record<string, any> = {
         mode: importTarget === 'new' ? 'NEW' : 'EXISTING',
-        trackIds: matchedTrackIds,
+        tracks: matchedItems,
       };
 
       if (importTarget === 'new') {
@@ -264,7 +388,7 @@ export const MusicPlaylistImportView: React.FC = () => {
       }
 
       setSuccessPlaylistId(data.playlistId);
-      setAddedTracksCount(data.added || matchedTrackIds.length);
+      setAddedTracksCount(data.added || matchedItems.length);
       setSkippedTracksCount(data.skipped || 0);
       setStep('summary');
     } catch (err: any) {
@@ -284,8 +408,54 @@ export const MusicPlaylistImportView: React.FC = () => {
   const filteredPreviewTracks = parsedResults.filter((item) => {
     if (previewFilter === 'matched') return item.matched;
     if (previewFilter === 'unmatched') return !item.matched;
+    if (previewFilter === 'ambiguous') return item.matchStatus === 'AMBIGUOUS_RESULT';
     return true;
   });
+
+  const getStatusBadge = (item: ParsedLine) => {
+    switch (item.matchStatus) {
+      case 'LOCAL_FOUND':
+        return (
+          <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 uppercase flex items-center gap-1 font-mono text-[10px] font-bold">
+            <CheckCircle2 className="w-3 h-3" />
+            Каталог Dodik
+          </span>
+        );
+      case 'EXTERNAL_FOUND':
+        return (
+          <span className="px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 uppercase flex items-center gap-1 font-mono text-[10px] font-bold">
+            <Youtube className="w-3 h-3 text-red-400" />
+            YouTube Music
+          </span>
+        );
+      case 'AMBIGUOUS_RESULT':
+        return (
+          <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 uppercase flex items-center gap-1 font-mono text-[10px] font-bold">
+            <AlertTriangle className="w-3 h-3" />
+            Варианты ({item.candidates?.length || 0})
+          </span>
+        );
+      case 'SOURCE_UNAVAILABLE':
+        return (
+          <span className="px-2 py-0.5 rounded bg-orange-500/15 text-orange-400 border border-orange-500/30 uppercase font-mono text-[10px] font-bold">
+            Источник недоступен
+          </span>
+        );
+      case 'PLAYBACK_UNAVAILABLE':
+        return (
+          <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 uppercase font-mono text-[10px] font-bold">
+            Недоступно
+          </span>
+        );
+      case 'EXTERNAL_NOT_FOUND':
+      default:
+        return (
+          <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 uppercase font-mono text-[10px] font-bold">
+            Не найдено
+          </span>
+        );
+    }
+  };
 
   return (
     <div className="space-y-6 pb-24 max-w-5xl mx-auto">
@@ -311,7 +481,7 @@ export const MusicPlaylistImportView: React.FC = () => {
               <span>Импорт плейлиста</span>
             </h1>
             <p className="text-xs text-slate-400 mt-0.5">
-              Импортируйте треки из Яндекс Музыки (YMusicExport), TXT, CSV или JSON файлов
+              Импортируйте треки из TXT, CSV, YMusicExport или внешних музыкальных сервисов
             </p>
           </div>
         </div>
@@ -335,7 +505,7 @@ export const MusicPlaylistImportView: React.FC = () => {
                 : 'text-slate-400'
             }`}
           >
-            2. Анализ и Превью
+            2. Поиск источника
           </span>
           <span className="text-slate-600">→</span>
           <span
@@ -352,17 +522,25 @@ export const MusicPlaylistImportView: React.FC = () => {
 
       {/* Global Error Banner */}
       {error && (
-        <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-3 animate-in fade-in">
-          <XCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-400" />
-          <div className="space-y-0.5">
-            <h5 className="font-bold text-rose-200">Ошибка</h5>
-            <p>{error}</p>
+        <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start justify-between gap-3 animate-in fade-in">
+          <div className="flex items-start gap-3">
+            <XCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-400" />
+            <div className="space-y-0.5">
+              <h5 className="font-bold text-rose-200">Ошибка</h5>
+              <p>{error}</p>
+            </div>
           </div>
+          <button
+            onClick={() => setError(null)}
+            className="text-xs text-rose-400 hover:text-white cursor-pointer"
+          >
+            ✕
+          </button>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* STEP 1: INPUT / FILE UPLOAD & YMUSICEXPORT HELPER BANNER */}
+      {/* STEP 1: INPUT / FILE UPLOAD */}
       {/* ========================================================================= */}
       {step === 'input' && (
         <div className="space-y-6">
@@ -374,17 +552,13 @@ export const MusicPlaylistImportView: React.FC = () => {
               <div className="space-y-2 max-w-2xl">
                 <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-bold font-mono uppercase">
                   <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                  Яндекс Музыка экспорт
+                  Универсальный музыкальный импорт
                 </div>
                 <h3 className="text-base md:text-lg font-bold text-white">
-                  Не знаете, как получить список треков из Яндекс Музыки?
+                  Импортируйте треки из любых списков
                 </h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Для экспорта плейлиста из Яндекс Музыки можно использовать сторонний сервис{' '}
-                  <strong className="text-purple-300">YMusicExport</strong>. После завершения экспорта скачайте полученный файл (TXT или CSV) и загрузите его сюда.
-                </p>
-                <p className="text-[11px] text-slate-400">
-                  ⚠️ <span className="font-medium">Примечание:</span> YMusicExport является независимым сторонним инструментом и не является официальным сервисом Яндекс Музыки.
+                  Система автоматически найдёт указанные исполнители и треки в каталоге и во внешних источниках (YouTube / YouTube Music).
                 </p>
               </div>
 
@@ -394,7 +568,7 @@ export const MusicPlaylistImportView: React.FC = () => {
                 rel="noopener noreferrer"
                 className="shrink-0 px-5 py-3 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold transition flex items-center gap-2 shadow-lg shadow-purple-600/30 cursor-pointer hover:scale-102"
               >
-                <span>Экспортировать из Яндекс Музыки</span>
+                <span>Экспорт из Яндекс Музыки</span>
                 <ExternalLink className="w-4 h-4" />
               </a>
             </div>
@@ -438,10 +612,10 @@ export const MusicPlaylistImportView: React.FC = () => {
                   <span>Поддерживаемые форматы:</span>
                 </div>
                 <div className="font-mono text-[10px] space-y-1 text-slate-400">
-                  <div>• Исполнитель - Название трека</div>
-                  <div>• Исполнитель: Название (Альбом)</div>
-                  <div>• CSV файл с заголовками или без</div>
-                  <div>• JSON список объектов</div>
+                  <div>1. Исполнитель - Название трека</div>
+                  <div>2. Исполнитель: Название (Альбом)</div>
+                  <div>3. CSV файл с заголовками или без</div>
+                  <div>4. Список в любом стандартном текстовом файле</div>
                 </div>
               </div>
             </div>
@@ -455,7 +629,7 @@ export const MusicPlaylistImportView: React.FC = () => {
                     <span>Текст плейлиста</span>
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Или просто вставьте список треков в поле ниже
+                    Вставьте список треков в формате &quot;Artist - Title&quot;
                   </p>
                 </div>
 
@@ -476,7 +650,7 @@ export const MusicPlaylistImportView: React.FC = () => {
                 rows={12}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Вставьте список треков сюда...&#10;Например:&#10;Morgenshtern - Cadillac&#10;Макс Корж - 2 типа людей&#10;Linkin Park - Numb"
+                placeholder="1. nowayback - high enough&#10;2. synthmania - loser slow&#10;3. CHVRCHES - Nightmares&#10;4. twenty one pilots - Navigating&#10;5. Tame Impala - The Less I Know The Better&#10;6. Bad Smith - miss u&#10;7. VIZIOFF - Loser"
                 className="w-full p-4 rounded-2xl bg-[#080A18] border border-[#1E2442] text-xs text-white placeholder-slate-600 font-mono focus:outline-none focus:border-purple-500 transition focus:ring-1 focus:ring-purple-500/20 custom-scrollbar"
               />
 
@@ -486,7 +660,7 @@ export const MusicPlaylistImportView: React.FC = () => {
                 className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-purple-600/25"
               >
                 {parsing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                <span>{parsing ? 'Распознавание треков...' : 'Анализировать и перейти к превью'}</span>
+                <span>{parsing ? 'Поиск во внешних источниках...' : 'Найти треки во всех источниках'}</span>
               </button>
             </div>
           </div>
@@ -506,7 +680,7 @@ export const MusicPlaylistImportView: React.FC = () => {
                 <span>Параметры импорта</span>
               </h3>
               <p className="text-xs text-slate-400 mt-1">
-                Куда сохранить распознанные треки
+                Куда сохранить найденные треки
               </p>
             </div>
 
@@ -570,7 +744,7 @@ export const MusicPlaylistImportView: React.FC = () => {
                   />
                 </div>
 
-                {/* Who can add tracks (Collaboration Setting) */}
+                {/* Who can add tracks */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-200 flex items-center justify-between">
                     <span>Кто может добавлять треки</span>
@@ -686,9 +860,9 @@ export const MusicPlaylistImportView: React.FC = () => {
 
             {/* Catalog info note */}
             <div className="p-3.5 rounded-2xl bg-[#080A18] border border-[#1E2442] text-[11px] text-slate-400 space-y-1">
-              <div className="font-bold text-slate-300">Сопоставление с каталогом Dodik Tracker:</div>
+              <div className="font-bold text-slate-300">Интеграция с источниками воспроизведения:</div>
               <p className="leading-relaxed">
-                В базу данных будут добавлены только треки, найденные в верифицированном каталоге Dodik Tracker (<span className="text-emerald-400 font-bold">{matchedCount} из {totalCount}</span>). Не найденные треки не создают ложных записей.
+                Найдено <span className="text-emerald-400 font-bold">{matchedCount} из {totalCount}</span> треков (Dodik Tracker + YouTube Music). Не найдено: {unmatchedCount}.
               </p>
             </div>
 
@@ -756,98 +930,208 @@ export const MusicPlaylistImportView: React.FC = () => {
               </div>
 
               <span className="text-[11px] font-mono text-slate-400 self-end sm:self-auto">
-                Совпадение: {totalCount > 0 ? Math.round((matchedCount / totalCount) * 100) : 0}%
+                Успех: {totalCount > 0 ? Math.round((matchedCount / totalCount) * 100) : 0}%
               </span>
             </div>
 
             {/* List */}
             <div className="space-y-2 max-h-[75vh] overflow-y-auto pr-1 custom-scrollbar">
-              {filteredPreviewTracks.map((item, idx) => (
-                <div
-                  key={idx}
-                  className={`p-3 rounded-2xl border transition flex items-center justify-between gap-4 ${
-                    item.matched
-                      ? 'bg-[#090A17]/80 border-[#1E2442] hover:bg-[#151932]/30'
-                      : 'bg-rose-950/10 border-rose-900/30'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    {item.matched && item.track ? (
-                      <div className="relative w-10 h-10 rounded-xl overflow-hidden shrink-0 border border-[#1E2442] bg-slate-950">
-                        {item.track.coverUrl ? (
-                          <img
-                            src={item.track.coverUrl}
-                            alt=""
-                            className="w-full h-full object-cover"
-                          />
+              {filteredPreviewTracks.map((item, idx) => {
+                const originalIdx = parsedResults.findIndex((r) => r === item);
+                const isSelectedTrack = item.matched && item.track;
+                const isAmbiguous = item.matchStatus === 'AMBIGUOUS_RESULT';
+                const hasCandidates = item.candidates && item.candidates.length > 0;
+
+                return (
+                  <div
+                    key={idx}
+                    className={`p-3.5 rounded-2xl border transition space-y-2 ${
+                      item.matched
+                        ? 'bg-[#090A17]/80 border-[#1E2442] hover:bg-[#151932]/30'
+                        : isAmbiguous
+                        ? 'bg-amber-950/10 border-amber-500/30'
+                        : 'bg-rose-950/10 border-rose-900/30'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {isSelectedTrack ? (
+                          <div className="relative w-10 h-10 rounded-xl overflow-hidden shrink-0 border border-[#1E2442] bg-slate-950">
+                            {item.track?.coverUrl || item.track?.thumbnail ? (
+                              <img
+                                src={item.track.coverUrl || item.track.thumbnail || ''}
+                                alt=""
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-slate-500">
+                                <Music2 className="w-5 h-5" />
+                              </div>
+                            )}
+                            <button
+                              onClick={() => handlePlayPreview(item.track!)}
+                              className="absolute inset-0 bg-black/60 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer"
+                            >
+                              {currentTrack && (currentTrack.id === item.track?.id || currentTrack.videoId === item.track?.videoId) && isPlaying ? (
+                                <Pause className="w-4 h-4 fill-white" />
+                              ) : (
+                                <Play className="w-4 h-4 fill-white" />
+                              )}
+                            </button>
+                          </div>
                         ) : (
-                          <div className="w-full h-full flex items-center justify-center text-slate-500">
-                            <Music2 className="w-5 h-5" />
+                          <div className="w-10 h-10 rounded-xl border border-rose-500/20 bg-rose-500/10 flex items-center justify-center text-rose-400 shrink-0">
+                            <HelpCircle className="w-5 h-5" />
                           </div>
                         )}
-                        <button
-                          onClick={() => handlePlayPreview(item.track!)}
-                          className="absolute inset-0 bg-black/60 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer"
-                        >
-                          {currentTrack && currentTrack.id === item.track.id && isPlaying ? (
-                            <Pause className="w-4 h-4 fill-white" />
+
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-500 font-mono">#{idx + 1}</span>
+                            <span className="text-xs font-semibold text-slate-300 truncate">
+                              {item.rawLine}
+                            </span>
+                          </div>
+
+                          {isSelectedTrack ? (
+                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                              <span className="text-xs font-bold text-white truncate max-w-[200px]">
+                                {item.track?.title}
+                              </span>
+                              <span className="text-[11px] text-slate-400">·</span>
+                              <span className="text-xs font-semibold text-purple-300 truncate max-w-[150px]">
+                                {item.track?.artistName}
+                              </span>
+                              {item.track?.album && (
+                                <>
+                                  <span className="text-[11px] text-slate-500">·</span>
+                                  <span className="text-[11px] text-slate-400 truncate max-w-[120px]">
+                                    {item.track.album}
+                                  </span>
+                                </>
+                              )}
+                            </div>
                           ) : (
-                            <Play className="w-4 h-4 fill-white" />
+                            <div className="text-[11px] text-rose-400/90 mt-0.5 font-medium">
+                              {item.reason || 'Трек не найден во внешних источниках'}
+                            </div>
                           )}
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="w-10 h-10 rounded-xl border border-rose-500/20 bg-rose-500/10 flex items-center justify-center text-rose-400 shrink-0">
-                        <HelpCircle className="w-5 h-5" />
-                      </div>
-                    )}
-
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-slate-500 font-mono">#{idx + 1}</span>
-                        <span className="text-xs font-semibold text-slate-300 truncate">
-                          {item.rawLine}
-                        </span>
+                        </div>
                       </div>
 
-                      {item.matched && item.track ? (
-                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                          <span className="text-xs font-bold text-white truncate max-w-[200px]">
-                            {item.track.title}
-                          </span>
-                          <span className="text-[11px] text-slate-400">·</span>
-                          <span className="text-xs font-semibold text-purple-300 truncate max-w-[150px]">
-                            {item.track.artistName}
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="text-[11px] text-rose-400/90 mt-0.5 font-medium">
-                          {item.reason || 'Трек отсутствует в каталоге Dodik Tracker'}
-                        </div>
-                      )}
+                      {/* Status Badge & Actions */}
+                      <div className="shrink-0 flex items-center gap-2">
+                        {getStatusBadge(item)}
+
+                        {/* Dropdown button for ambiguous / candidates */}
+                        {hasCandidates && (
+                          <button
+                            onClick={() =>
+                              setActiveCandidatesIdx(
+                                activeCandidatesIdx === originalIdx ? null : originalIdx
+                              )
+                            }
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer flex items-center gap-1 text-[11px]"
+                            title="Посмотреть варианты"
+                          >
+                            <ChevronDown
+                              className={`w-3.5 h-3.5 transition-transform ${
+                                activeCandidatesIdx === originalIdx ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </button>
+                        )}
+
+                        {/* Manual Search button */}
+                        {!item.matched && (
+                          <button
+                            onClick={() => {
+                              setManualSearchIdx(originalIdx);
+                              setManualQuery(`${item.artist} ${item.title}`.trim() || item.rawLine);
+                            }}
+                            className="p-1.5 rounded-lg bg-purple-900/40 hover:bg-purple-800/60 text-purple-300 border border-purple-500/30 transition cursor-pointer text-[10px] font-bold flex items-center gap-1"
+                          >
+                            <Search className="w-3 h-3" />
+                            <span>Поиск</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Status Badge */}
-                  <div className="shrink-0 font-mono text-[10px] font-bold">
-                    {item.matched && item.track ? (
-                      <div className="flex flex-col items-end gap-1">
-                        <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 uppercase flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" />
-                          Найдено
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-normal">
-                          {formatDuration(item.track.duration)}
-                        </span>
+                    {/* Manual Search Inline Box */}
+                    {manualSearchIdx === originalIdx && (
+                      <div className="p-3 rounded-xl bg-[#080A18] border border-purple-500/40 space-y-2 mt-2">
+                        <div className="text-[11px] font-bold text-purple-300 flex items-center justify-between">
+                          <span>Ручной поиск трека:</span>
+                          <button
+                            onClick={() => setManualSearchIdx(null)}
+                            className="text-slate-500 hover:text-slate-300"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={manualQuery}
+                            onChange={(e) => setManualQuery(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handlePerformManualSearch(originalIdx)}
+                            placeholder="Исполнитель Название..."
+                            className="flex-1 px-3 py-1.5 rounded-lg bg-[#0F1123] border border-[#1E2442] text-xs text-white focus:outline-none focus:border-purple-500"
+                          />
+                          <button
+                            onClick={() => handlePerformManualSearch(originalIdx)}
+                            disabled={searchingManual}
+                            className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          >
+                            {searchingManual ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Найти'}
+                          </button>
+                        </div>
                       </div>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 uppercase">
-                        Не найдено
-                      </span>
+                    )}
+
+                    {/* Candidate options list */}
+                    {(activeCandidatesIdx === originalIdx || (isAmbiguous && hasCandidates)) && (
+                      <div className="p-3 rounded-xl bg-[#080A18] border border-amber-500/30 space-y-2 mt-2">
+                        <div className="text-[11px] font-bold text-amber-300 flex items-center justify-between">
+                          <span>Выберите верный вариант:</span>
+                          <span className="text-[10px] text-slate-400">Нажмите для подтверждения</span>
+                        </div>
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
+                          {item.candidates?.map((cand, candIdx) => (
+                            <div
+                              key={candIdx}
+                              onClick={() => handleSelectCandidate(originalIdx, cand)}
+                              className="p-2 rounded-lg bg-[#0F1123] hover:bg-[#1A1F3D] border border-[#1E2442] hover:border-purple-500/50 transition cursor-pointer flex items-center justify-between gap-3 text-xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                {cand.coverUrl || cand.thumbnail ? (
+                                  <img
+                                    src={cand.coverUrl || cand.thumbnail || ''}
+                                    alt=""
+                                    className="w-8 h-8 rounded-lg object-cover shrink-0"
+                                  />
+                                ) : (
+                                  <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center shrink-0 text-slate-400">
+                                    <Music2 className="w-4 h-4" />
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <div className="font-bold text-white truncate">{cand.title}</div>
+                                  <div className="text-[11px] text-purple-300 truncate">{cand.artist}</div>
+                                </div>
+                              </div>
+                              <span className="px-2 py-1 rounded bg-purple-600/30 text-purple-200 text-[10px] font-bold shrink-0">
+                                Выбрать
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -866,7 +1150,7 @@ export const MusicPlaylistImportView: React.FC = () => {
               <div className="space-y-1">
                 <h3 className="text-xl font-black text-white">Импорт плейлиста завершён!</h3>
                 <p className="text-xs text-slate-300">
-                  Все найденные треки были успешно импортированы и сохранены в вашей коллекции.
+                  Все найденные треки были успешно привязаны и импортированы в ваш плейлист.
                 </p>
               </div>
             </div>
@@ -879,17 +1163,17 @@ export const MusicPlaylistImportView: React.FC = () => {
               </div>
 
               <div className="p-4 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 space-y-1">
-                <span className="text-[10px] uppercase font-bold text-emerald-400 font-mono">Найдено в каталоге</span>
+                <span className="text-[10px] uppercase font-bold text-emerald-400 font-mono">Найдено треков</span>
                 <div className="text-xl font-black text-emerald-300 font-mono">{matchedCount}</div>
               </div>
 
               <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-500/40 space-y-1">
-                <span className="text-[10px] uppercase font-bold text-emerald-300 font-mono">Импортировано</span>
+                <span className="text-[10px] uppercase font-bold text-emerald-300 font-mono">Добавлено</span>
                 <div className="text-xl font-black text-emerald-200 font-mono">{addedTracksCount}</div>
               </div>
 
               <div className="p-4 rounded-2xl bg-rose-950/20 border border-rose-500/30 space-y-1">
-                <span className="text-[10px] uppercase font-bold text-rose-400 font-mono">Не найдено</span>
+                <span className="text-[10px] uppercase font-bold text-rose-400 font-mono font-mono">Не найдено</span>
                 <div className="text-xl font-black text-rose-300 font-mono">{unmatchedCount}</div>
               </div>
             </div>
@@ -931,7 +1215,7 @@ export const MusicPlaylistImportView: React.FC = () => {
                   <span>Список не найденных треков ({unmatchedTracks.length})</span>
                 </h4>
                 <span className="text-[11px] text-slate-400">
-                  Треки отсутствуют в каталоге Dodik Tracker
+                  Треки не обнаружены ни во внешних источниках, ни в локальной базе
                 </span>
               </div>
 

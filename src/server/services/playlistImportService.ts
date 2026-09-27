@@ -1,6 +1,18 @@
 import { db } from '../../db/index.ts';
 import { musicTracks, artistProfiles, musicReleases } from '../../db/schema.ts';
-import { eq } from 'drizzle-orm';
+import { eq, ilike, or, and } from 'drizzle-orm';
+import { youtubeMusicService, YouTubeTrackDTO } from './youtubeMusicService.ts';
+
+export type MusicSourceType = 'dodik' | 'youtube' | 'custom' | string;
+
+export type ImportMatchStatus =
+  | 'LOCAL_FOUND'
+  | 'LOCAL_NOT_FOUND'
+  | 'EXTERNAL_FOUND'
+  | 'EXTERNAL_NOT_FOUND'
+  | 'SOURCE_UNAVAILABLE'
+  | 'PLAYBACK_UNAVAILABLE'
+  | 'AMBIGUOUS_RESULT';
 
 export interface RawParsedTrack {
   artist: string;
@@ -11,18 +23,24 @@ export interface RawParsedTrack {
 }
 
 export interface MatchedTrackDTO {
-  kind: 'dodik';
-  id: number;
-  numericTrackId: number;
+  kind: 'dodik' | 'external' | 'youtube';
+  id: string | number;
+  numericTrackId?: number;
+  videoId?: string;
+  youtubeUrl?: string;
   title: string;
   artistName: string;
   artists?: string[];
   artistSlug?: string;
-  artistId?: number;
+  artistId?: number | string;
   releaseTitle?: string;
+  album?: string;
   coverUrl?: string | null;
+  thumbnail?: string | null;
   duration?: number | null;
-  source: 'dodik';
+  source: MusicSourceType;
+  sourceLabel?: string;
+  playable?: boolean;
 }
 
 export interface ParsedTrackResult {
@@ -30,9 +48,11 @@ export interface ParsedTrackResult {
   artist: string;
   title: string;
   album?: string;
+  status: ImportMatchStatus;
   matched: boolean;
   reason?: string;
   track: MatchedTrackDTO | null;
+  candidates?: MatchedTrackDTO[];
 }
 
 export interface ParsePlaylistResult {
@@ -78,14 +98,14 @@ export function extractArtistTokens(artistStr: string): string[] {
 
 /**
  * Cleans track title by stripping out secondary noise:
- * e.g. "Song (feat. Artist)", "Song [Official Video]", "Song (Remix)", "01. Song", "OST ...", "Live"
+ * e.g. "Song (feat. Artist)", "Song [Official Video]", "Song (Remix)", "01. Song", "OST ..."
  */
 export function cleanTitle(rawTitle: string): string {
   if (!rawTitle) return '';
   let title = rawTitle;
   // Remove leading numbers: "01. ", "1 - ", "[01] ", "1.1 "
   title = title.replace(/^(\[\d+\]|\d+[\.\)\-\]\s]+)/, '');
-  // Remove trailing bracketed info like [Official Audio], (Video), (Remix), [OST], (Live), (Explicit)
+  // Remove trailing bracketed info
   title = title.replace(/\s*[\(\[](official\s*(audio|video|music\s*video)|audio|video|lyrics|клип|премьера|hd|hq|18\+|explicit|ost|саундтрек|soundtrack|live|концерт|remix|ремикс|edit|mix|acoustic|акустика|slowed|reverb)[\)\]]/gi, '');
   // Remove feat/ft in brackets
   title = title.replace(/\s*[\(\[](feat\.?|ft\.?|featuring|с уч\.?|с участием)\s+[^\)\]]+[\)\]]/gi, '');
@@ -95,7 +115,7 @@ export function cleanTitle(rawTitle: string): string {
 }
 
 /**
- * Calculates string similarity (Levenshtein-based Dice coefficient)
+ * Calculates string similarity (Levenshtein/Dice coefficient)
  */
 export function calculateSimilarity(s1: string, s2: string): number {
   const norm1 = normalizeString(s1);
@@ -131,8 +151,7 @@ export function calculateSimilarity(s1: string, s2: string): number {
 }
 
 /**
- * Parser that extracts track entries from Raw Text, CSV (comma/semicolon/tab), TSV, or JSON
- * Specially tuned for YMusicExport (Яндекс Музыка экспорт) and other playlist tools
+ * Parser that extracts track entries from Raw Text, CSV, TSV, or JSON
  */
 export function parseRawInput(content: string): RawParsedTrack[] {
   if (!content || typeof content !== 'string') return [];
@@ -179,7 +198,7 @@ export function parseRawInput(content: string): RawParsedTrack[] {
           .filter((t): t is RawParsedTrack => t !== null);
       }
     } catch {
-      // Not JSON, continue to CSV/TXT parsing
+      // Continue
     }
   }
 
@@ -187,7 +206,6 @@ export function parseRawInput(content: string): RawParsedTrack[] {
   const lines = cleanedContent.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return [];
 
-  // Detect delimiter from first line
   const firstLine = lines[0];
   const delimiters = [';', '\t', ','];
   let detectedDelim: string | null = null;
@@ -241,7 +259,7 @@ export function parseRawInput(content: string): RawParsedTrack[] {
     }
   }
 
-  // 3. Fallback: Parse line-by-line as TXT / TSV / custom format (including YMusicExport text list)
+  // 3. Fallback: Line-by-line parser
   const results: RawParsedTrack[] = [];
   for (const line of lines) {
     if (!line) continue;
@@ -250,7 +268,6 @@ export function parseRawInput(content: string): RawParsedTrack[] {
     let title = '';
     let album: string | undefined = undefined;
 
-    // Check tab separator first
     if (line.includes('\t')) {
       const parts = line.split('\t').map((p) => p.trim());
       if (parts.length >= 2) {
@@ -266,7 +283,6 @@ export function parseRawInput(content: string): RawParsedTrack[] {
         if (parts[2]) album = parts[2];
       }
     } else {
-      // Look for dash separators: " - ", " – ", " — ", " : ", " — "
       const dashMatch = line.match(/\s+[\-–—−―]\s+/);
       const colonMatch = line.indexOf(': ');
 
@@ -281,11 +297,9 @@ export function parseRawInput(content: string): RawParsedTrack[] {
       }
     }
 
-    // Clean leading numbering like "1. ", "01 - " from artist or title
     artist = artist.replace(/^(\[\d+\]|\d+[\.\)\-\]\s]+)/, '').trim();
     title = title.replace(/^(\[\d+\]|\d+[\.\)\-\]\s]+)/, '').trim();
 
-    // Check if album is in parentheses at the end: "Artist - Title (Album Name)"
     const albumEndMatch = title.match(/\(([^)]+)\)$/);
     if (albumEndMatch && !title.toLowerCase().includes('feat') && !title.toLowerCase().includes('remix') && !title.toLowerCase().includes('live')) {
       album = albumEndMatch[1];
@@ -304,9 +318,6 @@ export function parseRawInput(content: string): RawParsedTrack[] {
   return results;
 }
 
-/**
- * Split CSV line respecting quotes
- */
 function splitCsvLine(line: string, delim: string): string[] {
   const result: string[] = [];
   let current = '';
@@ -328,19 +339,122 @@ function splitCsvLine(line: string, delim: string): string[] {
 }
 
 /**
- * Matches raw parsed tracks against local published Dodik Tracker catalog.
- * Follows exact hierarchy:
- * 1. Exact match
- * 2. Normalized match (cleaning feat, brackets, punctuation, e/e)
- * 3. Careful fuzzy match with confidence threshold (>= 0.82)
- *
- * CRITICAL: If not found in catalog, it remains "not matched" (no fake tracks created).
+ * Convert external YouTubeDTO to MatchedTrackDTO
+ */
+function mapYouTubeDtoToCandidate(dto: YouTubeTrackDTO): MatchedTrackDTO {
+  return {
+    kind: 'youtube',
+    id: `yt_${dto.videoId}`,
+    videoId: dto.videoId,
+    youtubeUrl: dto.youtubeUrl,
+    title: dto.title,
+    artistName: dto.artist || 'Исполнитель',
+    artists: dto.artists,
+    album: dto.album || undefined,
+    releaseTitle: dto.album || undefined,
+    coverUrl: dto.thumbnail,
+    thumbnail: dto.thumbnail,
+    duration: dto.durationSeconds || null,
+    source: 'youtube',
+    sourceLabel: 'YouTube Music',
+    playable: true,
+  };
+}
+
+/**
+ * Searches external sources (e.g. YouTube Music) for a parsed track line.
+ * Evaluates candidate scores to detect explicit matches vs AMBIGUOUS_RESULT.
+ */
+export async function searchExternalSources(
+  artist: string,
+  title: string,
+  album?: string
+): Promise<{ status: ImportMatchStatus; reason?: string; selected: MatchedTrackDTO | null; candidates: MatchedTrackDTO[] }> {
+  const searchQuery = artist ? `${artist} - ${title}` : title;
+  if (!searchQuery.trim()) {
+    return {
+      status: 'EXTERNAL_NOT_FOUND',
+      reason: 'Пустой запрос для поиска во внешнем источнике',
+      selected: null,
+      candidates: [],
+    };
+  }
+
+  try {
+    const ytSongs = await youtubeMusicService.searchSongs(searchQuery, 6);
+    if (!ytSongs || ytSongs.length === 0) {
+      return {
+        status: 'EXTERNAL_NOT_FOUND',
+        reason: 'Трек не найден ни локально, ни в YouTube Music',
+        selected: null,
+        candidates: [],
+      };
+    }
+
+    const candidates = ytSongs.map(mapYouTubeDtoToCandidate);
+
+    if (candidates.length === 1) {
+      return {
+        status: 'EXTERNAL_FOUND',
+        selected: candidates[0],
+        candidates,
+      };
+    }
+
+    // Evaluate similarity scores across candidates
+    const normTargetTitle = normalizeString(cleanTitle(title));
+    const normTargetArtist = normalizeString(artist);
+
+    const scoredCandidates = candidates.map((cand) => {
+      const candTitleSim = calculateSimilarity(normTargetTitle, cleanTitle(cand.title));
+      const candArtistSim = normTargetArtist ? calculateSimilarity(normTargetArtist, cand.artistName) : 1;
+      const totalScore = candTitleSim * 0.65 + candArtistSim * 0.35;
+      return { cand, totalScore, titleSim: candTitleSim, artistSim: candArtistSim };
+    });
+
+    scoredCandidates.sort((a, b) => b.totalScore - a.totalScore);
+
+    const top = scoredCandidates[0];
+    const second = scoredCandidates[1];
+
+    // If top candidate is very confident and significantly better than #2 candidate
+    if (top.totalScore >= 0.82 && (!second || top.totalScore - second.totalScore >= 0.18)) {
+      return {
+        status: 'EXTERNAL_FOUND',
+        selected: top.cand,
+        candidates: scoredCandidates.map((sc) => sc.cand),
+      };
+    }
+
+    // Otherwise, multiple close candidates exist -> AMBIGUOUS_RESULT
+    return {
+      status: 'AMBIGUOUS_RESULT',
+      reason: 'Найдено несколько похожих вариантов. Пожалуйста, выберите нужный трек.',
+      selected: top.cand, // Default pre-selected candidate
+      candidates: scoredCandidates.map((sc) => sc.cand),
+    };
+  } catch (err: any) {
+    console.warn('[PlaylistImportService] External search failed for query:', searchQuery, err?.message);
+    return {
+      status: 'SOURCE_UNAVAILABLE',
+      reason: 'Внешний музыкальный источник (YouTube Music) временно недоступен',
+      selected: null,
+      candidates: [],
+    };
+  }
+}
+
+/**
+ * Multi-source playlist track matching:
+ * 1. Local Dodik Tracker catalog
+ * 2. External YouTube Music catalog
+ * 3. Handles status classification (LOCAL_FOUND, EXTERNAL_FOUND, EXTERNAL_NOT_FOUND, AMBIGUOUS_RESULT, SOURCE_UNAVAILABLE)
  */
 export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<ParsePlaylistResult> {
   const parsedResults: ParsedTrackResult[] = [];
   const unmatchedList: Array<{ artist: string; title: string; reason: string; rawLine: string }> = [];
 
-  // Pre-fetch all local published tracks and releases for fast and robust matching
+  // Pre-fetch all local published tracks and releases
   const allLocalTracks = await db
     .select({
       id: musicTracks.id,
@@ -378,9 +492,11 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
         artist: rawArtist,
         title: rawTitle,
         album: item.album,
+        status: 'EXTERNAL_NOT_FOUND',
         matched: false,
         reason: 'Пустая строка или не распознано название трека',
         track: null,
+        candidates: [],
       });
       unmatchedList.push({
         artist: rawArtist,
@@ -393,7 +509,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
 
     let localCandidate: typeof allLocalTracks[0] | null = null;
 
-    // 1. Exact match (Title and Artist)
+    // 1. Exact local match
     localCandidate = allLocalTracks.find((lt) => {
       const ltTitleNorm = normalizeString(lt.title);
       const ltArtistNorm = normalizeString(lt.artistName || '');
@@ -403,7 +519,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
       return ltTitleNorm === normTitle;
     }) || null;
 
-    // 2. Normalized match with cleaned title and artist tokens
+    // 2. Normalized local match with clean titles
     if (!localCandidate) {
       localCandidate = allLocalTracks.find((lt) => {
         const ltTitleNorm = normalizeString(lt.title);
@@ -418,21 +534,18 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
           ltCleanTitle === normTitle;
 
         if (!titleMatches) return false;
-
         if (!normArtist) return true;
 
-        // Check if any artist token matches
-        const artistMatches =
+        return (
           ltArtistNorm === normArtist ||
           ltArtistNorm.includes(normArtist) ||
           normArtist.includes(ltArtistNorm) ||
-          artistTokens.some((t) => ltArtistTokens.includes(t) || ltArtistNorm.includes(t) || t.includes(ltArtistNorm));
-
-        return artistMatches;
+          artistTokens.some((t) => ltArtistTokens.includes(t) || ltArtistNorm.includes(t) || t.includes(ltArtistNorm))
+        );
       }) || null;
     }
 
-    // 3. Inverted match (Title - Artist swapped)
+    // 3. Inverted local match
     if (!localCandidate && normArtist && normTitle) {
       localCandidate = allLocalTracks.find((lt) => {
         const ltTitleNorm = normalizeString(lt.title);
@@ -441,7 +554,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
       }) || null;
     }
 
-    // 4. Careful fuzzy match (high similarity >= 0.82)
+    // 4. Local fuzzy match
     if (!localCandidate) {
       let bestSim = 0;
       let bestCandidate: typeof allLocalTracks[0] | null = null;
@@ -482,6 +595,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
       }
     }
 
+    // IF LOCAL MATCH FOUND
     if (localCandidate) {
       const matchedTrack: MatchedTrackDTO = {
         kind: 'dodik',
@@ -492,9 +606,13 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
         artistSlug: localCandidate.artistSlug || undefined,
         artistId: localCandidate.artistId || undefined,
         releaseTitle: localCandidate.releaseTitle || undefined,
+        album: localCandidate.releaseTitle || undefined,
         coverUrl: localCandidate.releaseCover || null,
+        thumbnail: localCandidate.releaseCover || null,
         duration: localCandidate.duration || null,
         source: 'dodik',
+        sourceLabel: 'Dodik Tracker',
+        playable: true,
       };
 
       parsedResults.push({
@@ -502,28 +620,56 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
         artist: rawArtist,
         title: rawTitle,
         album: item.album,
+        status: 'LOCAL_FOUND',
         matched: true,
         track: matchedTrack,
+        candidates: [matchedTrack],
       });
-    } else {
-      const reason = rawArtist
-        ? 'Трек отсутствует в каталоге Dodik Tracker'
-        : 'Не указан исполнитель / трек отсутствует в каталоге';
+      continue;
+    }
 
+    // LOCAL_NOT_FOUND -> PROCEED TO EXTERNAL SOURCE (YouTube Music)
+    const extSearchResult = await searchExternalSources(rawArtist, rawTitle, item.album);
+
+    if (extSearchResult.status === 'AMBIGUOUS_RESULT' || extSearchResult.status === 'EXTERNAL_FOUND') {
+      const isMatched = extSearchResult.status === 'EXTERNAL_FOUND';
       parsedResults.push({
         rawLine: item.rawLine,
         artist: rawArtist,
         title: rawTitle,
         album: item.album,
+        status: extSearchResult.status,
+        matched: isMatched,
+        reason: extSearchResult.reason,
+        track: extSearchResult.selected,
+        candidates: extSearchResult.candidates,
+      });
+
+      if (!isMatched && extSearchResult.status !== 'AMBIGUOUS_RESULT') {
+        unmatchedList.push({
+          artist: rawArtist || 'Неизвестный исполнитель',
+          title: rawTitle || item.rawLine,
+          reason: extSearchResult.reason || 'Не найдено во внешних источниках',
+          rawLine: item.rawLine,
+        });
+      }
+    } else {
+      parsedResults.push({
+        rawLine: item.rawLine,
+        artist: rawArtist,
+        title: rawTitle,
+        album: item.album,
+        status: extSearchResult.status,
         matched: false,
-        reason,
+        reason: extSearchResult.reason || 'Трек отсутствует в каталогах',
         track: null,
+        candidates: extSearchResult.candidates || [],
       });
 
       unmatchedList.push({
         artist: rawArtist || 'Неизвестный исполнитель',
         title: rawTitle || item.rawLine,
-        reason,
+        reason: extSearchResult.reason || 'Трек отсутствует в каталогах',
         rawLine: item.rawLine,
       });
     }
