@@ -841,6 +841,7 @@ export async function runAutoMigrations(pool: Pool) {
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "warning_count" integer NOT NULL DEFAULT 0;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_warning_reason" text;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "show_adult_content" boolean NOT NULL DEFAULT false;
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "music_lyrics_provider" text NOT NULL DEFAULT 'auto';
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_adult" boolean NOT NULL DEFAULT false;
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "age_rating" text;

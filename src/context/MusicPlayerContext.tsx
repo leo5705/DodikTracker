@@ -95,16 +95,24 @@ export function convertYouTubeTrackToPlayerTrack(yt: ExternalYouTubeTrack): Trac
 }
 
 export function normalizePlayerTrack(track: Track): Track {
+  const hasAudioFile = Boolean(track.audioFile && track.audioFile.trim() !== '');
+  const isExplicitDodik = (track.source as string) === 'dodik' || (track.source as string) === 'local';
+
   const isYt =
     track.source === 'youtube' ||
     (typeof track.id === 'string' && track.id.startsWith('yt_')) ||
-    Boolean(track.videoId);
+    (!isExplicitDodik && !hasAudioFile && Boolean(track.videoId));
 
   const videoId =
     track.videoId ||
     (typeof track.id === 'string' && track.id.startsWith('yt_')
       ? track.id.replace(/^yt_/, '')
       : undefined);
+
+  let audioFile = track.audioFile || '';
+  if (audioFile && !audioFile.startsWith('/') && !audioFile.startsWith('http://') && !audioFile.startsWith('https://')) {
+    audioFile = '/' + audioFile;
+  }
 
   if (isYt && videoId) {
     return {
@@ -123,6 +131,7 @@ export function normalizePlayerTrack(track: Track): Track {
   return {
     ...track,
     source: track.source || 'dodik',
+    audioFile,
   };
 }
 

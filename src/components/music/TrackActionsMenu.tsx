@@ -26,7 +26,9 @@ import { parseArtists } from './ArtistLinks.tsx';
 export interface UnifiedTrackDTO {
   id: string | number;
   kind?: 'dodik' | 'external' | 'internal';
-  source?: 'dodik' | 'youtube';
+  source?: 'dodik' | 'youtube' | 'local' | string;
+  audioFile?: string;
+  youtubeUrl?: string;
   videoId?: string;
   providerTrackId?: string;
   title: string;
@@ -172,16 +174,19 @@ export const TrackActionsMenu: React.FC<TrackActionsMenuProps> = ({
   }, [isOpen]);
 
   const normalizeToPlayerTrack = (): Track => {
+    const hasAudioFile = Boolean(track.audioFile && String(track.audioFile).trim() !== '');
+    const isExplicitDodik = (track.source as string) === 'dodik' || (track.source as string) === 'local' || track.kind === 'dodik';
+
     const isYt =
       track.source === 'youtube' ||
       track.kind === 'external' ||
-      (typeof track.id === 'string' && track.id.startsWith('yt_')) ||
-      Boolean(track.videoId || track.providerTrackId);
+      (typeof track.id === 'string' && String(track.id).startsWith('yt_')) ||
+      (!isExplicitDodik && !hasAudioFile && Boolean(track.videoId || track.providerTrackId));
 
     const videoId =
       track.videoId ||
       track.providerTrackId ||
-      (typeof track.id === 'string' ? track.id.replace(/^yt_/, '') : undefined);
+      (typeof track.id === 'string' && String(track.id).startsWith('yt_') ? String(track.id).replace(/^yt_/, '') : undefined);
 
     const title = track.title;
     const artistName = track.artistName || track.artist || 'Исполнитель';
@@ -190,10 +195,10 @@ export const TrackActionsMenu: React.FC<TrackActionsMenuProps> = ({
 
     if (isYt && videoId) {
       return {
-        id: `yt_${videoId}`,
+        id: typeof track.id === 'string' && String(track.id).startsWith('yt_') ? track.id : `yt_${videoId}`,
         source: 'youtube',
         videoId,
-        youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        youtubeUrl: track.youtubeUrl || `https://www.youtube.com/watch?v=${videoId}`,
         title,
         artistName,
         artistId: track.artistId ? String(track.artistId) : undefined,
@@ -207,6 +212,11 @@ export const TrackActionsMenu: React.FC<TrackActionsMenuProps> = ({
       };
     }
 
+    let audioFile = track.audioFile || '';
+    if (audioFile && !audioFile.startsWith('/') && !audioFile.startsWith('http://') && !audioFile.startsWith('https://')) {
+      audioFile = '/' + audioFile;
+    }
+
     return {
       id: track.id,
       source: 'dodik',
@@ -217,6 +227,9 @@ export const TrackActionsMenu: React.FC<TrackActionsMenuProps> = ({
       releaseTitle: releaseTitle || '',
       releaseCover: cover,
       releaseSlug: track.releaseSlug || '',
+      audioFile,
+      videoId: track.videoId || track.providerTrackId,
+      youtubeUrl: track.youtubeUrl,
       duration: track.duration || track.durationSeconds || null,
       explicit: Boolean(track.explicit || track.isExplicit),
       isFavorite: isFav,

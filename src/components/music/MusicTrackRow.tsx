@@ -55,20 +55,23 @@ export interface AnyTrackItem {
 }
 
 export function normalizeToPlayerTrack(item: AnyTrackItem): Track {
+  const hasAudioFile = Boolean(item.audioFile && String(item.audioFile).trim() !== '');
+  const isExplicitDodik = (item.source as string) === 'dodik' || (item.source as string) === 'local' || item.kind === 'dodik';
+
   const isYt =
     item.source === 'youtube' ||
     item.kind === 'external' ||
-    (typeof item.id === 'string' && item.id.startsWith('yt_')) ||
-    Boolean(item.providerTrackId || item.videoId);
+    (typeof item.id === 'string' && String(item.id).startsWith('yt_')) ||
+    (!isExplicitDodik && !hasAudioFile && Boolean(item.providerTrackId || item.videoId));
 
   const videoId =
     item.videoId ||
     item.providerTrackId ||
-    (typeof item.id === 'string' ? item.id.replace(/^yt_/, '') : undefined);
+    (typeof item.id === 'string' && String(item.id).startsWith('yt_') ? String(item.id).replace(/^yt_/, '') : undefined);
 
   if (isYt && videoId) {
     return {
-      id: `yt_${videoId}`,
+      id: typeof item.id === 'string' && String(item.id).startsWith('yt_') ? item.id : `yt_${videoId}`,
       source: 'youtube',
       videoId,
       youtubeUrl: item.youtubeUrl || `https://www.youtube.com/watch?v=${videoId}`,
@@ -88,6 +91,11 @@ export function normalizeToPlayerTrack(item: AnyTrackItem): Track {
     };
   }
 
+  let audioFile = item.audioFile || '';
+  if (audioFile && !audioFile.startsWith('/') && !audioFile.startsWith('http://') && !audioFile.startsWith('https://')) {
+    audioFile = '/' + audioFile;
+  }
+
   return {
     id: item.id,
     source: 'dodik',
@@ -98,7 +106,9 @@ export function normalizeToPlayerTrack(item: AnyTrackItem): Track {
     releaseTitle: item.releaseTitle || item.album || '',
     releaseCover: item.releaseCover || item.thumbnail || null,
     releaseSlug: item.releaseSlug || '',
-    audioFile: item.audioFile || '',
+    audioFile,
+    videoId: item.videoId || item.providerTrackId,
+    youtubeUrl: item.youtubeUrl,
     duration: item.duration || item.durationSeconds || null,
     explicit: Boolean(item.explicit || item.isExplicit),
     lyrics: item.lyrics || null,

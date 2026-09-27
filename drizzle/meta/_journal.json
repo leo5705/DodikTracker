@@ -64,6 +64,13 @@
       "when": 1790437349263,
       "tag": "0008_artist_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790500000000,
+      "tag": "0009_music_lyrics_provider",
+      "breakpoints": true
     }
   ]
 }
