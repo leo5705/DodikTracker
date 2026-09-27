@@ -292,8 +292,8 @@ fi
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="dependencies"
 log "INFO" "[STAGE: dependencies] [6/11] Installing npm dependencies..."
-if ! npm install >> "$LOG_FILE" 2>&1; then
-  log "ERROR" "[STAGE: dependencies] ❌ npm install failed! Check logs/update.log."
+if ! npm ci >> "$LOG_FILE" 2>&1; then
+  log "ERROR" "[STAGE: dependencies] ❌ npm ci failed! Check logs/update.log."
   exit 1
 fi
 log "INFO" "[STAGE: dependencies] Dependencies installed successfully."
