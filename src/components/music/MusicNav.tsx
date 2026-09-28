@@ -20,11 +20,9 @@ export interface MusicNavProps {
 
 export const MusicNav: React.FC<MusicNavProps> = ({ activeTab }) => {
   const { navigate, route } = useRouter();
-  const { dbUser } = useAuth();
+  const { isMusician } = useAuth();
 
   const currentRoute = route.name;
-
-  const isMusician = ['musician', 'SUPER_ADMIN', 'ADMIN', 'MODERATOR'].includes(dbUser?.role || '');
 
   const items = [
     { id: 'home', label: 'Обзор', icon: Compass, path: '/music', routeName: 'music-home' },

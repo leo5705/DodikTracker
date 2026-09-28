@@ -14,10 +14,21 @@ import {
   adminAuditLogs,
   passwordResetTokens,
   inviteCodes,
+  artistProfiles,
 } from '../../../db/schema.ts';
 import { eq, or, and, sql, desc, ilike, count, inArray } from 'drizzle-orm';
 import { logAdminAction } from './auditHelper.ts';
 import { notificationService } from '../../services/notificationService.ts';
+import {
+  getUserRoles,
+  addRole,
+  removeRole,
+  getPrimaryRole,
+  isSuperAdmin,
+  isAdminRole,
+  ALL_ROLES,
+  type SystemRole,
+} from '../../../utils/rbac.ts';
 
 export const usersRouter = Router();
 
@@ -53,9 +64,25 @@ usersRouter.get('/users', requireAuth, requireStaff('MANAGE_USERS'), async (req:
 
     if (roleFilter !== 'ALL') {
       if (roleFilter === 'STAFF') {
-        conditions.push(inArray(users.role, ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR']));
+        conditions.push(
+          or(
+            inArray(users.role, ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR']),
+            ilike(users.roles, '%"super_admin"%'),
+            ilike(users.roles, '%"admin"%'),
+            ilike(users.roles, '%"moderator"%'),
+            ilike(users.roles, '%"content_manager"%'),
+            ilike(users.roles, '%"news_editor"%')
+          )
+        );
       } else {
-        conditions.push(eq(users.role, roleFilter));
+        const lower = roleFilter.toLowerCase();
+        conditions.push(
+          or(
+            eq(users.role, roleFilter),
+            ilike(users.role, roleFilter),
+            ilike(users.roles, `%"${lower}"%`)
+          )
+        );
       }
     }
 
@@ -72,7 +99,7 @@ usersRouter.get('/users', requireAuth, requireStaff('MANAGE_USERS'), async (req:
     const [totalRes] = await db.select({ val: count() }).from(users).where(whereClause);
     const totalCount = Number(totalRes?.val || 0);
 
-    const items = await db
+    const rawItems = await db
       .select({
         id: users.id,
         uid: users.uid,
@@ -80,6 +107,7 @@ usersRouter.get('/users', requireAuth, requireStaff('MANAGE_USERS'), async (req:
         email: users.email,
         avatar: users.avatar,
         role: users.role,
+        roles: users.roles,
         isBlocked: users.isBlocked,
         bannedUntil: users.bannedUntil,
         banReason: users.banReason,
@@ -119,6 +147,11 @@ usersRouter.get('/users', requireAuth, requireStaff('MANAGE_USERS'), async (req:
       .orderBy(desc(users.createdAt))
       .limit(limit)
       .offset(offset);
+
+    const items = rawItems.map((u) => ({
+      ...u,
+      roles: getUserRoles(u),
+    }));
 
     res.json({
       items,
@@ -246,6 +279,7 @@ usersRouter.get('/users/:id', requireAuth, requireStaff('MANAGE_USERS'), async (
       .select({
         id: reports.id,
         targetType: reports.targetType,
+        subject: reports.subject,
         reason: reports.reason,
         description: reports.description,
         status: reports.status,
@@ -279,6 +313,7 @@ usersRouter.get('/users/:id', requireAuth, requireStaff('MANAGE_USERS'), async (
         avatar: user.avatar,
         bio: user.bio,
         role: user.role,
+        roles: getUserRoles(user),
         isBlocked: user.isBlocked,
         bannedUntil: user.bannedUntil,
         banReason: user.banReason,
@@ -311,61 +346,135 @@ usersRouter.get('/users/:id', requireAuth, requireStaff('MANAGE_USERS'), async (
   }
 });
 
-// 3. Change user role
-usersRouter.put('/users/:id/role', requireAuth, requireStaff('MANAGE_USERS'), async (req: AuthRequest, res: Response) => {
+// 3. Change user role / roles (ADMIN or SUPER_ADMIN only)
+usersRouter.put(['/users/:id/role', '/users/:id/roles'], requireAuth, requireStaff('MANAGE_ROLES'), async (req: AuthRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const { role } = req.body;
     const actor = req.dbUser!;
-
-    const allowedRoles = ['USER', 'musician', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR', 'ADMIN', 'SUPER_ADMIN'];
-    if (!allowedRoles.includes(role)) {
-      return res.status(400).json({ error: 'Недопустимая роль' });
-    }
 
     const [targetUser] = await db.select().from(users).where(eq(users.id, id)).limit(1);
     if (!targetUser) {
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
 
+    const currentRoles = getUserRoles(targetUser);
+    let nextRoles: SystemRole[];
+
+    if (Array.isArray(req.body.roles)) {
+      const desired = req.body.roles.map((r: any) => String(r).toLowerCase().trim());
+      const invalid = desired.filter((r: string) => !ALL_ROLES.includes(r as SystemRole));
+      if (invalid.length > 0) {
+        return res.status(400).json({ error: `Недопустимые роли: ${invalid.join(', ')}` });
+      }
+      const set = new Set<SystemRole>(desired as SystemRole[]);
+      set.add('user');
+      nextRoles = Array.from(set);
+    } else if (req.body.action === 'remove' && req.body.role) {
+      nextRoles = removeRole(currentRoles, req.body.role);
+    } else if (req.body.action === 'add' && req.body.role) {
+      nextRoles = addRole(currentRoles, req.body.role);
+    } else if (req.body.removeRole) {
+      nextRoles = removeRole(currentRoles, req.body.removeRole);
+    } else if (req.body.addRole) {
+      nextRoles = addRole(currentRoles, req.body.addRole);
+    } else if (req.body.role) {
+      const roleInput = String(req.body.role).toLowerCase().trim() as SystemRole;
+      if (!ALL_ROLES.includes(roleInput)) {
+        return res.status(400).json({ error: `Недопустимая роль: ${req.body.role}` });
+      }
+      if (roleInput === 'user') {
+        nextRoles = ['user'];
+      } else {
+        nextRoles = addRole(currentRoles, roleInput);
+      }
+    } else {
+      return res.status(400).json({ error: 'Не указаны роли для обновления' });
+    }
+
+    const actorRoles = getUserRoles(actor);
+    const isActorSuperAdmin = actorRoles.includes('super_admin');
+    const isActorAdmin = actorRoles.includes('admin') || isActorSuperAdmin;
+
+    if (!isActorAdmin) {
+      return res.status(403).json({ error: 'Управление ролями доступно только администраторам' });
+    }
+
     // Role hierarchy rules
-    if ((role === 'musician' || targetUser.role === 'musician') && actor.role !== 'SUPER_ADMIN' && actor.role !== 'ADMIN') {
-      return res.status(403).json({ error: 'Только администратор может назначать или изменять роль музыканта' });
-    }
-    if (targetUser.role === 'SUPER_ADMIN' && actor.role !== 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Только Главный Администратор может изменять роль другого Главного Администратора' });
+    if ((nextRoles.includes('super_admin') || currentRoles.includes('super_admin')) && !isActorSuperAdmin) {
+      return res.status(403).json({ error: 'Только Главный Администратор может изменять роль Главного Администратора' });
     }
 
-    if (role === 'SUPER_ADMIN' && actor.role !== 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Только Главный Администратор может назначать роль SUPER_ADMIN' });
-    }
-
-    if ((role === 'ADMIN' || targetUser.role === 'ADMIN') && actor.role !== 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Только Главный Администратор может назначать или изменять роль ADMIN' });
+    if ((nextRoles.includes('admin') || currentRoles.includes('admin')) && !isActorSuperAdmin) {
+      return res.status(403).json({ error: 'Только Главный Администратор может назначать или изменять роль Администратора' });
     }
 
     // Prevent demoting the last SUPER_ADMIN
-    if (targetUser.role === 'SUPER_ADMIN' && role !== 'SUPER_ADMIN') {
-      const [superAdminCountRes] = await db.select({ val: count() }).from(users).where(eq(users.role, 'SUPER_ADMIN'));
-      if (Number(superAdminCountRes?.val || 0) <= 1) {
+    if (currentRoles.includes('super_admin') && !nextRoles.includes('super_admin')) {
+      const allUsers = await db.select({ id: users.id, roles: users.roles, role: users.role }).from(users);
+      const superAdminCount = allUsers.filter((u) => getUserRoles(u).includes('super_admin')).length;
+      if (superAdminCount <= 1) {
         return res.status(400).json({ error: 'Нельзя понизить единственного Главного Администратора' });
       }
     }
 
+    // Handle musician profile sync
+    const hadMusician = currentRoles.includes('musician');
+    const willHaveMusician = nextRoles.includes('musician');
+
+    if (!hadMusician && willHaveMusician) {
+      const existingProfiles = await db
+        .select()
+        .from(artistProfiles)
+        .where(eq(artistProfiles.userId, targetUser.id))
+        .limit(1);
+
+      if (existingProfiles.length === 0) {
+        const cleanSlug = `${targetUser.username.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Math.floor(Math.random() * 899 + 100)}`;
+        await db.insert(artistProfiles).values({
+          userId: targetUser.id,
+          stageName: targetUser.username,
+          slug: cleanSlug,
+          avatar: targetUser.avatar || null,
+          status: 'ACTIVE',
+        });
+      } else {
+        await db
+          .update(artistProfiles)
+          .set({ status: 'ACTIVE', updatedAt: new Date() })
+          .where(eq(artistProfiles.id, existingProfiles[0].id));
+      }
+    } else if (hadMusician && !willHaveMusician) {
+      await db
+        .update(artistProfiles)
+        .set({ status: 'SUSPENDED', updatedAt: new Date() })
+        .where(eq(artistProfiles.userId, targetUser.id));
+    }
+
+    const primaryRole = getPrimaryRole(nextRoles);
     const [updated] = await db
       .update(users)
-      .set({ role, updatedAt: new Date() })
+      .set({
+        role: primaryRole,
+        roles: JSON.stringify(nextRoles),
+        updatedAt: new Date(),
+      })
       .where(eq(users.id, id))
       .returning();
 
     await logAdminAction({
       userId: actor.id,
       action: 'CHANGE_ROLE',
-      details: `Роль пользователя @${targetUser.username} изменена с ${targetUser.role} на ${role}`,
+      details: `Роли пользователя @${targetUser.username} обновлены: [${currentRoles.join(', ')}] -> [${nextRoles.join(', ')}] (основная: ${primaryRole})`,
       ip: req.ip,
     });
 
-    res.json(updated);
+    res.json({
+      success: true,
+      user: {
+        ...updated,
+        roles: nextRoles,
+      },
+    });
   } catch (err: any) {
     console.error('[AdminUsers] Change role error:', err);
     res.status(500).json({ error: err.message });
@@ -384,11 +493,11 @@ usersRouter.put('/users/:id/block', requireAuth, requireStaff('MANAGE_USERS'), a
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
 
-    if (targetUser.role === 'SUPER_ADMIN') {
+    if (isSuperAdmin(targetUser)) {
       return res.status(403).json({ error: 'Нельзя заблокировать Главного Администратора' });
     }
 
-    if (targetUser.role === 'ADMIN' && actor.role !== 'SUPER_ADMIN') {
+    if (isAdminRole(targetUser) && !isSuperAdmin(actor)) {
       return res.status(403).json({ error: 'Только Главный Администратор может блокировать администраторов' });
     }
 
@@ -435,8 +544,12 @@ usersRouter.put('/users/:id/temp-ban', requireAuth, requireStaff('MANAGE_USERS')
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
 
-    if (targetUser.role === 'SUPER_ADMIN') {
+    if (isSuperAdmin(targetUser)) {
       return res.status(403).json({ error: 'Нельзя заблокировать Главного Администратора' });
+    }
+
+    if (isAdminRole(targetUser) && !isSuperAdmin(actor)) {
+      return res.status(403).json({ error: 'Только Главный Администратор может блокировать администраторов' });
     }
 
     const bannedUntil = new Date(Date.now() + banHours * 3600 * 1000);
@@ -528,8 +641,8 @@ usersRouter.post('/users/:id/warn', requireAuth, requireStaff('MANAGE_USERS'), a
   }
 });
 
-// 7. Password Reset Link Generation
-usersRouter.post('/users/:id/reset-password', requireAuth, requireStaff('MANAGE_USERS'), async (req: AuthRequest, res: Response) => {
+// 7. Password Reset Link Generation (Admins only)
+usersRouter.post('/users/:id/reset-password', requireAuth, requireStaff('MANAGE_ROLES'), async (req: AuthRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
     const [targetUser] = await db.select().from(users).where(eq(users.id, id)).limit(1);
@@ -571,8 +684,8 @@ usersRouter.post('/users/:id/reset-password', requireAuth, requireStaff('MANAGE_
   }
 });
 
-// 8. Adjust User Invites
-usersRouter.put('/users/:id/invites', requireAuth, requireStaff('MANAGE_USERS'), async (req: AuthRequest, res: Response) => {
+// 8. Adjust User Invites (Admins only)
+usersRouter.put('/users/:id/invites', requireAuth, requireStaff('MANAGE_ROLES'), async (req: AuthRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
     const { count: inviteCount } = req.body;

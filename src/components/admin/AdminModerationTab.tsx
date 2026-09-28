@@ -371,6 +371,11 @@ export const AdminModerationTab: React.FC = () => {
                       ? `Жалоба #${r.id} на музыкальный отзыв`
                       : `Жалоба #${r.id} на ${r.targetType}`}
                   </span>
+                  {r.subject && (
+                    <span className="text-xs text-purple-300 font-mono bg-purple-950/60 px-2.5 py-0.5 rounded-lg border border-purple-500/30">
+                      {r.subject}
+                    </span>
+                  )}
                   {getReasonBadge(r.reason, r.targetType)}
                 </div>
 

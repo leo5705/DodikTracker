@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { requireAuth, requireAdmin, requireStaff, isStaffRole, optionalAuth, AuthRequest, JWT_SECRET } from '../middleware/auth.ts';
+import { requireAuth, requireAdmin, requireStaff, isStaffRole, optionalAuth, AuthRequest, JWT_SECRET, getUserRoles } from '../middleware/auth.ts';
 import { ContentVisibilityService } from './services/contentVisibilityService.ts';
 import { logAdminAction } from './routes/admin/auditHelper.ts';
 import { db } from '../db/index.ts';
@@ -185,6 +185,7 @@ export function sanitizeUser(user: any) {
   const { passwordHash, ...safe } = user;
   return {
     ...safe,
+    roles: getUserRoles(user),
     displayName: safe.username || safe.name,
   };
 }
@@ -579,6 +580,7 @@ apiRouter.post('/auth/register', authLimiter, async (req, res) => {
         username: cleanUsername,
         passwordHash,
         role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
+        roles: JSON.stringify(shouldBeAdmin ? ['user', 'super_admin'] : ['user']),
         invitesLeft: 3,
       })
       .returning();
@@ -1200,6 +1202,7 @@ apiRouter.post('/auth/telegram/verify', async (req, res) => {
           telegramId: tgId,
           telegramChatId: tgChatId || null,
           role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
+          roles: JSON.stringify(shouldBeAdmin ? ['user', 'super_admin'] : ['user']),
           invitesLeft: 3,
         })
         .returning();
@@ -1376,13 +1379,14 @@ apiRouter.post('/auth/session', async (req, res) => {
           username: candidate,
           avatar: payload.picture || null,
           role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
+          roles: JSON.stringify(shouldBeAdmin ? ['user', 'super_admin'] : ['user']),
           invitesLeft: 3,
         })
         .returning();
       user = created;
     } else {
       // Existing user -> check maintenance mode
-      if (mode === 'MAINTENANCE' && !isStaffRole(user.role)) {
+      if (mode === 'MAINTENANCE' && !isStaffRole(user)) {
         return res.status(503).json({
           error: 'Сайт находится на техническом обслуживании. Вход доступен только для администрации.',
         });

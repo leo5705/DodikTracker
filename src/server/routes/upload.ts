@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { requireAuth, AuthRequest, isAdminRole } from '../../middleware/auth.ts';
+import { requireAuth, AuthRequest, isMusician } from '../../middleware/auth.ts';
 
 export const uploadRouter = Router();
 
@@ -88,6 +88,10 @@ const audioUpload = multer({
  * Upload release cover image
  */
 uploadRouter.post('/cover', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!isMusician(req.dbUser)) {
+    return res.status(403).json({ error: 'Загрузка обложек релизов доступна только музыкантам и администрации' });
+  }
+
   coverUpload.single('cover')(req, res, (err: any) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
@@ -116,7 +120,7 @@ uploadRouter.post('/cover', requireAuth, (req: AuthRequest, res: Response) => {
  * Upload track audio file
  */
 uploadRouter.post('/audio', requireAuth, (req: AuthRequest, res: Response) => {
-  if (req.dbUser?.role !== 'musician' && !isAdminRole(req.dbUser?.role)) {
+  if (!isMusician(req.dbUser)) {
     return res.status(403).json({ error: 'Загрузка аудиофайлов доступна только музыкантам и администраторам' });
   }
 

@@ -105,6 +105,8 @@ export function cleanTitle(rawTitle: string): string {
   let title = rawTitle;
   // Remove leading numbers: "01. ", "1 - ", "[01] ", "1.1 "
   title = title.replace(/^(\[\d+\]|\d+[\.\)\-\]\s]+)/, '');
+  // Remove trailing duration: "(03:45)", "[3:45]", "03:45"
+  title = title.replace(/\s*[\(\[]?\d{1,2}:\d{2}[\)\]]?\s*$/i, '');
   // Remove trailing bracketed info
   title = title.replace(/\s*[\(\[](official\s*(audio|video|music\s*video)|audio|video|lyrics|клип|премьера|hd|hq|18\+|explicit|ost|саундтрек|soundtrack|live|концерт|remix|ремикс|edit|mix|acoustic|акустика|slowed|reverb)[\)\]]/gi, '');
   // Remove feat/ft in brackets
@@ -259,7 +261,7 @@ export function parseRawInput(content: string): RawParsedTrack[] {
     }
   }
 
-  // 3. Fallback: Line-by-line parser
+  // 3. Fallback: Line-by-line parser with smart Yandex / streaming detection
   const results: RawParsedTrack[] = [];
   for (const line of lines) {
     if (!line) continue;
@@ -268,41 +270,57 @@ export function parseRawInput(content: string): RawParsedTrack[] {
     let title = '';
     let album: string | undefined = undefined;
 
-    if (line.includes('\t')) {
-      const parts = line.split('\t').map((p) => p.trim());
+    // Strip trailing duration from line if present, e.g. " (03:45)" or " 3:45"
+    const durationEndMatch = line.match(/\s*[\(\[]?(\d{1,2}:\d{2})[\)\]]?\s*$/);
+    let cleanLine = line;
+    let extractedDuration: number | undefined = undefined;
+    if (durationEndMatch) {
+      const parts = durationEndMatch[1].split(':');
+      extractedDuration = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+      cleanLine = line.substring(0, durationEndMatch.index).trim();
+    }
+
+    if (cleanLine.includes('\t')) {
+      const parts = cleanLine.split('\t').map((p) => p.trim());
+      // In Yandex Music / streaming web copy-paste, columns are:
+      // Title \t Artist \t Album \t Duration
       if (parts.length >= 2) {
-        artist = parts[0];
-        title = parts[1];
-        if (parts[2]) album = parts[2];
+        title = parts[0];
+        artist = parts[1];
+        if (parts[2] && !/^\d{1,2}:\d{2}$/.test(parts[2])) {
+          album = parts[2];
+        }
       }
-    } else if (line.includes(';') && !line.includes(' - ')) {
-      const parts = splitCsvLine(line, ';').map((p) => p.trim());
+    } else if (cleanLine.includes(';') && !cleanLine.includes(' - ')) {
+      const parts = splitCsvLine(cleanLine, ';').map((p) => p.trim());
       if (parts.length >= 2) {
         artist = parts[0];
         title = parts[1];
         if (parts[2]) album = parts[2];
       }
     } else {
-      const dashMatch = line.match(/\s+[\-–—−―]\s+/);
-      const colonMatch = line.indexOf(': ');
+      // Check dashes (including em dash, en dash, minus)
+      const dashMatch = cleanLine.match(/\s*[\-–—−―~]\s*/);
+      const colonMatch = cleanLine.indexOf(': ');
 
-      if (dashMatch && dashMatch.index !== undefined) {
-        artist = line.substring(0, dashMatch.index).trim();
-        title = line.substring(dashMatch.index + dashMatch[0].length).trim();
+      if (dashMatch && dashMatch.index !== undefined && dashMatch.index > 0) {
+        artist = cleanLine.substring(0, dashMatch.index).trim();
+        title = cleanLine.substring(dashMatch.index + dashMatch[0].length).trim();
       } else if (colonMatch !== -1) {
-        artist = line.substring(0, colonMatch).trim();
-        title = line.substring(colonMatch + 2).trim();
+        artist = cleanLine.substring(0, colonMatch).trim();
+        title = cleanLine.substring(colonMatch + 2).trim();
       } else {
-        title = line.trim();
+        title = cleanLine.trim();
       }
     }
 
     artist = artist.replace(/^(\[\d+\]|\d+[\.\)\-\]\s]+)/, '').trim();
     title = title.replace(/^(\[\d+\]|\d+[\.\)\-\]\s]+)/, '').trim();
+    title = cleanTitle(title);
 
     const albumEndMatch = title.match(/\(([^)]+)\)$/);
     if (albumEndMatch && !title.toLowerCase().includes('feat') && !title.toLowerCase().includes('remix') && !title.toLowerCase().includes('live')) {
-      album = albumEndMatch[1];
+      if (!album) album = albumEndMatch[1];
     }
 
     if (artist || title) {
@@ -310,6 +328,7 @@ export function parseRawInput(content: string): RawParsedTrack[] {
         artist,
         title: title || artist,
         album,
+        duration: extractedDuration,
         rawLine: line,
       });
     }
@@ -370,7 +389,9 @@ export async function searchExternalSources(
   title: string,
   album?: string
 ): Promise<{ status: ImportMatchStatus; reason?: string; selected: MatchedTrackDTO | null; candidates: MatchedTrackDTO[] }> {
-  const searchQuery = artist ? `${artist} - ${title}` : title;
+  const cleanedTitle = cleanTitle(title);
+  const cleanArtist = (artist || '').trim();
+  const searchQuery = cleanArtist ? `${cleanArtist} ${cleanedTitle || title}`.trim() : (cleanedTitle || title);
   if (!searchQuery.trim()) {
     return {
       status: 'EXTERNAL_NOT_FOUND',
@@ -385,7 +406,7 @@ export async function searchExternalSources(
     if (!ytSongs || ytSongs.length === 0) {
       return {
         status: 'EXTERNAL_NOT_FOUND',
-        reason: 'Трек не найден ни локально, ни в YouTube Music',
+        reason: 'Трек не найден в каталогах',
         selected: null,
         candidates: [],
       };
@@ -402,23 +423,53 @@ export async function searchExternalSources(
     }
 
     // Evaluate similarity scores across candidates
-    const normTargetTitle = normalizeString(cleanTitle(title));
-    const normTargetArtist = normalizeString(artist);
+    const normTargetTitle = normalizeString(cleanedTitle || title);
+    const normTargetArtist = normalizeString(cleanArtist);
+    const artistTokens = extractArtistTokens(cleanArtist);
 
     const scoredCandidates = candidates.map((cand) => {
-      const candTitleSim = calculateSimilarity(normTargetTitle, cleanTitle(cand.title));
-      const candArtistSim = normTargetArtist ? calculateSimilarity(normTargetArtist, cand.artistName) : 1;
-      const totalScore = candTitleSim * 0.65 + candArtistSim * 0.35;
-      return { cand, totalScore, titleSim: candTitleSim, artistSim: candArtistSim };
+      const candCleanTitle = normalizeString(cleanTitle(cand.title));
+      const candArtistName = normalizeString(cand.artistName || '');
+      const candArtistsList = (cand.artists || []).map((a) => normalizeString(a));
+
+      // Direct comparison: Target Title vs Candidate Title, Target Artist vs Candidate Artist
+      const candTitleSimDirect = calculateSimilarity(normTargetTitle, candCleanTitle);
+      const candArtistSimDirect = normTargetArtist
+        ? Math.max(
+            calculateSimilarity(normTargetArtist, candArtistName),
+            ...candArtistsList.map((a) => calculateSimilarity(normTargetArtist, a)),
+            artistTokens.some((t) => candArtistName.includes(t) || candArtistsList.some((a) => a.includes(t))) ? 0.85 : 0
+          )
+        : 1;
+      const directScore = candTitleSimDirect * 0.65 + candArtistSimDirect * 0.35;
+
+      // Inverted comparison (in case input was "Title - Artist" or Yandex Music TSV)
+      const candTitleSimInv = normTargetArtist ? calculateSimilarity(normTargetArtist, candCleanTitle) : 0;
+      const candArtistSimInv = Math.max(
+        calculateSimilarity(normTargetTitle, candArtistName),
+        ...candArtistsList.map((a) => calculateSimilarity(normTargetTitle, a))
+      );
+      const invScore = candTitleSimInv * 0.65 + candArtistSimInv * 0.35;
+
+      // Substring bonus
+      let bonus = 0;
+      if (normTargetTitle && (candCleanTitle.includes(normTargetTitle) || normTargetTitle.includes(candCleanTitle))) {
+        bonus += 0.12;
+      }
+      if (normTargetArtist && (candArtistName.includes(normTargetArtist) || normTargetArtist.includes(candArtistName))) {
+        bonus += 0.08;
+      }
+
+      const totalScore = Math.min(1.0, Math.max(directScore, invScore) + bonus);
+      return { cand, totalScore, directScore, invScore };
     });
 
     scoredCandidates.sort((a, b) => b.totalScore - a.totalScore);
 
     const top = scoredCandidates[0];
-    const second = scoredCandidates[1];
 
-    // If top candidate is very confident and significantly better than #2 candidate
-    if (top.totalScore >= 0.82 && (!second || top.totalScore - second.totalScore >= 0.18)) {
+    // High confidence match:
+    if (top.totalScore >= 0.65) {
       return {
         status: 'EXTERNAL_FOUND',
         selected: top.cand,
@@ -426,18 +477,27 @@ export async function searchExternalSources(
       };
     }
 
-    // Otherwise, multiple close candidates exist -> AMBIGUOUS_RESULT
+    // Medium confidence match (options available, but pre-select best candidate!):
+    if (top.totalScore >= 0.42) {
+      return {
+        status: 'AMBIGUOUS_RESULT',
+        reason: 'Найдено несколько похожих вариантов (предварительно выбран наиболее точный)',
+        selected: top.cand,
+        candidates: scoredCandidates.map((sc) => sc.cand),
+      };
+    }
+
     return {
-      status: 'AMBIGUOUS_RESULT',
-      reason: 'Найдено несколько похожих вариантов. Пожалуйста, выберите нужный трек.',
-      selected: top.cand, // Default pre-selected candidate
+      status: 'EXTERNAL_NOT_FOUND',
+      reason: 'Трек отсутствует в каталогах',
+      selected: null,
       candidates: scoredCandidates.map((sc) => sc.cand),
     };
   } catch (err: any) {
     console.warn('[PlaylistImportService] External search failed for query:', searchQuery, err?.message);
     return {
       status: 'SOURCE_UNAVAILABLE',
-      reason: 'Внешний музыкальный источник (YouTube Music) временно недоступен',
+      reason: 'Внешний музыкальный источник временно недоступен',
       selected: null,
       candidates: [],
     };
@@ -670,7 +730,7 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
   }
 
   // Step 2: Group and deduplicate external searches within this import session
-  const CONCURRENCY_LIMIT = 5;
+  const CONCURRENCY_LIMIT = 8;
   const searchGroups = new Map<string, number[]>();
 
   for (const idx of externalSearchIndices) {
@@ -704,16 +764,16 @@ export async function matchParsedTracks(rawTracks: RawParsedTrack[]): Promise<Pa
       const rawTitle = item.title || '';
 
       if (extSearchResult.status === 'AMBIGUOUS_RESULT' || extSearchResult.status === 'EXTERNAL_FOUND') {
-        const isMatched = extSearchResult.status === 'EXTERNAL_FOUND';
         parsedResults[idx] = {
           rawLine: item.rawLine,
           artist: rawArtist,
           title: rawTitle,
           album: item.album,
           status: extSearchResult.status,
-          matched: isMatched,
-          reason: extSearchResult.reason,
+          matched: true,
+          reason: extSearchResult.status === 'AMBIGUOUS_RESULT' ? extSearchResult.reason : undefined,
           track: extSearchResult.selected,
+          selectedCandidate: extSearchResult.selected,
           candidates: extSearchResult.candidates,
         } as any;
         (parsedResults[idx] as any).matchStatus = extSearchResult.status;

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import {
   signInWithPopup,
   signOut,
@@ -6,6 +6,19 @@ import {
   User as FirebaseUser,
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
+import {
+  getUserRoles,
+  hasRole as checkHasRoleUtil,
+  isMusician as checkIsMusician,
+  isNewsEditor as checkIsNewsEditor,
+  isModerator as checkIsModerator,
+  isAdminRole,
+  isSuperAdmin as checkIsSuperAdmin,
+  isStaffRole,
+  canAccessAdminDashboard as checkCanAccessAdminDashboard,
+  canAccessAdminPanel as checkCanAccessAdminPanel,
+  isOnlyNewsEditor as checkIsOnlyNewsEditor,
+} from '../utils/rbac.ts';
 
 export interface DbUser {
   id: number;
@@ -14,7 +27,8 @@ export interface DbUser {
   username: string;
   avatar: string | null;
   bio: string | null;
-  role: 'USER' | 'MODERATOR' | 'ADMIN' | 'SUPER_ADMIN' | 'CONTENT_MANAGER' | 'NEWS_EDITOR';
+  role: 'USER' | 'musician' | 'MODERATOR' | 'ADMIN' | 'SUPER_ADMIN' | 'CONTENT_MANAGER' | 'NEWS_EDITOR' | string;
+  roles?: string[];
   profileVisibility: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   libraryVisibility: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
   ratingVisibility?: 'PUBLIC' | 'FRIENDS' | 'PRIVATE';
@@ -51,6 +65,17 @@ interface AuthContextType {
   counts: LibraryCounts | null;
   token: string | null;
   loading: boolean;
+  roles: string[];
+  hasRole: (role: string) => boolean;
+  isMusician: boolean;
+  isNewsEditor: boolean;
+  isModerator: boolean;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
+  isStaff: boolean;
+  canAccessAdminDashboard: boolean;
+  canAccessAdminPanel: boolean;
+  isOnlyNewsEditor: boolean;
   login: () => Promise<void>;
   loginGoogle: () => Promise<void>;
   loginPassword: (login: string, pass: string) => Promise<void>;
@@ -276,6 +301,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return res;
   }, [token, firebaseUser]);
 
+  const roles = useMemo(() => getUserRoles(dbUser), [dbUser]);
+  const isMusician = useMemo(() => checkIsMusician(dbUser), [dbUser]);
+  const isNewsEditor = useMemo(() => checkIsNewsEditor(dbUser), [dbUser]);
+  const isModerator = useMemo(() => checkIsModerator(dbUser), [dbUser]);
+  const isAdmin = useMemo(() => isAdminRole(dbUser), [dbUser]);
+  const isSuperAdmin = useMemo(() => checkIsSuperAdmin(dbUser), [dbUser]);
+  const isStaff = useMemo(() => isStaffRole(dbUser), [dbUser]);
+  const canAccessAdminDashboard = useMemo(() => checkCanAccessAdminDashboard(dbUser), [dbUser]);
+  const canAccessAdminPanel = useMemo(() => checkCanAccessAdminPanel(dbUser), [dbUser]);
+  const isOnlyNewsEditor = useMemo(() => checkIsOnlyNewsEditor(dbUser), [dbUser]);
+
+  const hasRole = useCallback((role: string) => checkHasRoleUtil(dbUser, role), [dbUser]);
+
   return (
     <AuthContext.Provider
       value={{
@@ -284,6 +322,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         counts,
         token,
         loading,
+        roles,
+        hasRole,
+        isMusician,
+        isNewsEditor,
+        isModerator,
+        isAdmin,
+        isSuperAdmin,
+        isStaff,
+        canAccessAdminDashboard,
+        canAccessAdminPanel,
+        isOnlyNewsEditor,
         login,
         loginGoogle,
         loginPassword,

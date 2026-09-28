@@ -10,13 +10,14 @@ import {
 import { useMusicPlayer, Track } from '../../context/MusicPlayerContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { getBestMusicImageUrl } from '../../utils/musicImageUtils.ts';
+import { resolvePlaybackSource } from '../../utils/musicPlaybackResolver.ts';
 import { TrackActionsMenu } from './TrackActionsMenu.tsx';
 import { ArtistLinks } from './ArtistLinks.tsx';
 
 export interface AnyTrackItem {
   id: number | string;
   kind?: 'dodik' | 'external' | 'internal';
-  source?: 'dodik' | 'youtube';
+  source?: 'dodik' | 'youtube' | 'external';
   videoId?: string;
   providerTrackId?: string;
   youtubeUrl?: string;
@@ -48,65 +49,94 @@ export interface AnyTrackItem {
   explanation?: string | null;
   reason?: string | null;
   addedBy?: {
-    id: string;
+    id: string | number;
     username: string;
     avatar?: string | null;
   } | null;
 }
 
 export function normalizeToPlayerTrack(item: AnyTrackItem): Track {
-  const hasAudioFile = Boolean(item.audioFile && String(item.audioFile).trim() !== '');
-  const isExplicitDodik = (item.source as string) === 'dodik' || (item.source as string) === 'local' || item.kind === 'dodik';
+  const resolution = resolvePlaybackSource(item);
 
-  const isYt =
-    item.source === 'youtube' ||
-    item.kind === 'external' ||
-    (typeof item.id === 'string' && String(item.id).startsWith('yt_')) ||
-    (!isExplicitDodik && !hasAudioFile && Boolean(item.providerTrackId || item.videoId));
+  const artistName =
+    item.artist ||
+    item.artistName ||
+    item.stageName ||
+    (item.artists && item.artists[0]) ||
+    'Исполнитель';
 
-  const videoId =
-    item.videoId ||
-    item.providerTrackId ||
-    (typeof item.id === 'string' && String(item.id).startsWith('yt_') ? String(item.id).replace(/^yt_/, '') : undefined);
+  const releaseTitle = item.album || item.releaseTitle || null;
+  const coverUrl = item.thumbnail || item.releaseCover || null;
 
-  if (isYt && videoId) {
+  if (resolution.sourceType === 'youtube' && resolution.videoId) {
     return {
-      id: typeof item.id === 'string' && String(item.id).startsWith('yt_') ? item.id : `yt_${videoId}`,
+      id: item.id,
       source: 'youtube',
-      videoId,
-      youtubeUrl: item.youtubeUrl || `https://www.youtube.com/watch?v=${videoId}`,
+      videoId: resolution.videoId,
+      youtubeUrl: item.youtubeUrl || resolution.url || `https://www.youtube.com/watch?v=${resolution.videoId}`,
       title: item.title,
-      artistName: item.artist || item.artistName || item.stageName || (item.artists && item.artists[0]) || 'Исполнитель',
+      artistName,
       artistId: item.artistId ? String(item.artistId) : undefined,
-      releaseTitle: item.album || item.releaseTitle || null,
-      releaseCover: item.thumbnail || item.releaseCover || null,
-      thumbnail: item.thumbnail || item.releaseCover || null,
-      album: item.album || item.releaseTitle || null,
+      artistSlug: item.artistSlug || '',
+      releaseId: item.releaseId,
+      releaseTitle,
+      releaseCover: coverUrl,
+      thumbnail: coverUrl,
+      releaseSlug: item.releaseSlug || '',
+      album: releaseTitle,
       duration: item.durationSeconds || item.duration || null,
       explicit: Boolean(item.explicit || item.isExplicit),
-      audioFile: '',
+      audioFile: item.audioFile || `yt_${resolution.videoId}`,
+      slug: item.slug || `yt_${resolution.videoId}`,
       trackNumber: item.trackNumber || 1,
       lyrics: item.lyrics || null,
       isFavorite: item.isFavorite,
+      playable: true,
     };
   }
 
-  let audioFile = item.audioFile || '';
-  if (audioFile && !audioFile.startsWith('/') && !audioFile.startsWith('http://') && !audioFile.startsWith('https://')) {
-    audioFile = '/' + audioFile;
+  if (resolution.playable && resolution.url) {
+    return {
+      id: item.id,
+      source: resolution.sourceType === 'external' ? 'external' : 'dodik',
+      title: item.title,
+      artistName,
+      artistSlug: item.artistSlug || '',
+      artistId: item.artistId ? String(item.artistId) : undefined,
+      releaseId: item.releaseId,
+      releaseTitle: releaseTitle || '',
+      releaseCover: coverUrl,
+      releaseSlug: item.releaseSlug || '',
+      thumbnail: coverUrl,
+      album: releaseTitle,
+      audioFile: resolution.url,
+      slug: item.slug || '',
+      videoId: item.videoId || item.providerTrackId,
+      youtubeUrl: item.youtubeUrl,
+      duration: item.duration || item.durationSeconds || null,
+      explicit: Boolean(item.explicit || item.isExplicit),
+      lyrics: item.lyrics || null,
+      trackNumber: item.trackNumber || 1,
+      isFavorite: item.isFavorite,
+      playable: true,
+    };
   }
 
   return {
     id: item.id,
-    source: 'dodik',
+    source: (item.source as any) || 'dodik',
     title: item.title,
-    artistName: item.artistName || item.stageName || (item.artists && item.artists[0]) || 'Исполнитель',
+    artistName,
     artistSlug: item.artistSlug || '',
+    artistId: item.artistId ? String(item.artistId) : undefined,
     releaseId: item.releaseId,
-    releaseTitle: item.releaseTitle || item.album || '',
-    releaseCover: item.releaseCover || item.thumbnail || null,
+    releaseTitle: releaseTitle || '',
+    releaseCover: coverUrl,
     releaseSlug: item.releaseSlug || '',
-    audioFile,
+    thumbnail: coverUrl,
+    album: releaseTitle,
+    audioFile: item.audioFile || '',
+    slug: item.slug || '',
     videoId: item.videoId || item.providerTrackId,
     youtubeUrl: item.youtubeUrl,
     duration: item.duration || item.durationSeconds || null,
@@ -114,6 +144,7 @@ export function normalizeToPlayerTrack(item: AnyTrackItem): Track {
     lyrics: item.lyrics || null,
     trackNumber: item.trackNumber || 1,
     isFavorite: item.isFavorite,
+    playable: false,
   };
 }
 

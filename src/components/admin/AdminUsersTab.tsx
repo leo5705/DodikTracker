@@ -34,13 +34,15 @@ import {
   BookOpen,
   Gamepad2,
   Tv,
+  Music,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { formatAuditLog } from '../../utils/auditFormatter.ts';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
+import { getUserRoles, type SystemRole, ROLE_LABELS, ROLE_BADGE_COLORS } from '../../utils/rbac.ts';
 
 export const AdminUsersTab: React.FC = () => {
-  const { authFetch, dbUser } = useAuth();
+  const { authFetch, dbUser, isAdmin, isSuperAdmin } = useAuth();
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,9 +60,9 @@ export const AdminUsersTab: React.FC = () => {
   const [selectedUserDetail, setSelectedUserDetail] = useState<any | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  // Role Change Modal
+  // Role Change Modal (Independent Multi-roles)
   const [roleModalUser, setRoleModalUser] = useState<any | null>(null);
-  const [selectedRole, setSelectedRole] = useState<string>('USER');
+  const [selectedRoles, setSelectedRoles] = useState<SystemRole[]>(['user']);
   const [savingRole, setSavingRole] = useState(false);
 
   // Warning Modal
@@ -162,10 +164,10 @@ export const AdminUsersTab: React.FC = () => {
     if (!roleModalUser) return;
     setSavingRole(true);
     try {
-      const res = await authFetch(`/api/admin/users/${roleModalUser.id}/role`, {
+      const res = await authFetch(`/api/admin/users/${roleModalUser.id}/roles`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: selectedRole }),
+        body: JSON.stringify({ roles: selectedRoles }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Ошибка изменения роли');
@@ -282,35 +284,42 @@ export const AdminUsersTab: React.FC = () => {
   };
 
   const getRoleBadge = (role: string) => {
-    switch (role) {
-      case 'SUPER_ADMIN':
+    const r = String(role || '').toLowerCase();
+    switch (r) {
+      case 'super_admin':
         return (
           <span className="px-2.5 py-1 rounded-full text-xs font-black bg-rose-500/20 text-rose-300 border border-rose-500/30 whitespace-nowrap">
             Гл. Администратор
           </span>
         );
-      case 'ADMIN':
+      case 'admin':
         return (
           <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 whitespace-nowrap">
             Администратор
           </span>
         );
-      case 'MODERATOR':
+      case 'moderator':
         return (
           <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30 whitespace-nowrap">
             Модератор
           </span>
         );
-      case 'CONTENT_MANAGER':
+      case 'content_manager':
         return (
           <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap">
             Контент-менеджер
           </span>
         );
-      case 'NEWS_EDITOR':
+      case 'news_editor':
         return (
           <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-teal-500/20 text-teal-300 border border-teal-500/30 whitespace-nowrap">
             Редактор новостей
+          </span>
+        );
+      case 'musician':
+        return (
+          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/30 whitespace-nowrap">
+            🎵 Музыкант
           </span>
         );
       default:
@@ -320,6 +329,21 @@ export const AdminUsersTab: React.FC = () => {
           </span>
         );
     }
+  };
+
+  const renderRoleBadges = (u: any) => {
+    const userRoles = getUserRoles(u);
+    const nonUserRoles = userRoles.filter((r) => r !== 'user');
+    if (nonUserRoles.length === 0) {
+      return getRoleBadge('user');
+    }
+    return (
+      <div className="flex flex-wrap gap-1.5 items-center">
+        {nonUserRoles.map((r) => (
+          <React.Fragment key={r}>{getRoleBadge(r)}</React.Fragment>
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -371,6 +395,7 @@ export const AdminUsersTab: React.FC = () => {
           >
             <option value="ALL">Все роли</option>
             <option value="STAFF">Весь персонал</option>
+            <option value="MUSICIAN">🎵 Музыканты</option>
             <option value="USER">Пользователи</option>
             <option value="MODERATOR">Модераторы</option>
             <option value="CONTENT_MANAGER">Контент-менеджеры</option>
@@ -539,7 +564,7 @@ export const AdminUsersTab: React.FC = () => {
 
                       {/* 3. Role */}
                       <td className="py-3.5 px-3.5 whitespace-nowrap">
-                        {getRoleBadge(u.role)}
+                        {renderRoleBadges(u)}
                       </td>
 
                       {/* 4. Status */}
@@ -658,17 +683,19 @@ export const AdminUsersTab: React.FC = () => {
                             <Eye className="w-4 h-4" />
                           </button>
 
-                          {/* Role change */}
-                          <button
-                            onClick={() => {
-                              setRoleModalUser(u);
-                              setSelectedRole(u.role);
-                            }}
-                            title="Сменить роль"
-                            className="p-2 rounded-xl bg-[#11152A] hover:bg-[#8B5CF6]/20 text-[#94A3B8] hover:text-[#A78BFA] transition-colors cursor-pointer"
-                          >
-                            <Shield className="w-4 h-4" />
-                          </button>
+                          {/* Role change - Admins only */}
+                          {(isAdmin || isSuperAdmin) && (
+                            <button
+                              onClick={() => {
+                                setRoleModalUser(u);
+                                setSelectedRoles(getUserRoles(u));
+                              }}
+                              title="Управление ролями"
+                              className="p-2 rounded-xl bg-[#11152A] hover:bg-[#8B5CF6]/20 text-[#94A3B8] hover:text-[#A78BFA] transition-colors cursor-pointer"
+                            >
+                              <Shield className="w-4 h-4" />
+                            </button>
+                          )}
 
                           {/* Issue warning */}
                           <button
@@ -1219,34 +1246,157 @@ export const AdminUsersTab: React.FC = () => {
       )}
 
       {/* ============================================================ */}
-      {/* 2. Change Role Modal */}
+      {/* 2. Change Role Modal (Independent Multi-roles) */}
       {/* ============================================================ */}
       {roleModalUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-[#0B0D20] border border-[#1E2442] rounded-3xl p-6 space-y-4 shadow-2xl">
-            <h3 className="text-base font-bold text-[#F8FAFC]">
-              Сменить роль для @{roleModalUser.username}
-            </h3>
-            <p className="text-xs sm:text-sm text-[#94A3B8]">
-              Выберите уровень доступа сотрудника или пользователя в системе.
-            </p>
+          <div className="w-full max-w-lg bg-[#0B0D20] border border-[#1E2442] rounded-3xl p-6 space-y-5 shadow-2xl">
+            <div className="space-y-1.5">
+              <h3 className="text-lg font-bold text-[#F8FAFC] flex items-center gap-2">
+                <Shield className="w-5 h-5 text-purple-400" />
+                <span>Управление ролями: @{roleModalUser.username}</span>
+              </h3>
+              <p className="text-xs text-[#94A3B8]">
+                Роли независимы. Выдача одной роли (например, модератора) не снимает другие роли (например, музыканта).
+              </p>
+            </div>
 
-            <select
-              value={selectedRole}
-              onChange={(e) => setSelectedRole(e.target.value)}
-              className="w-full h-11 px-3.5 bg-[#11152A] border border-[#1E2442] rounded-xl text-sm text-[#F8FAFC] outline-none"
-            >
-              <option value="USER">USER — Обычный пользователь</option>
-              <option value="NEWS_EDITOR">NEWS_EDITOR — Редактор новостей</option>
-              <option value="CONTENT_MANAGER">CONTENT_MANAGER — Контент-менеджер</option>
-              <option value="MODERATOR">MODERATOR — Модератор</option>
-              <option value="ADMIN">ADMIN — Администратор</option>
-              {dbUser?.role === 'SUPER_ADMIN' && (
-                <option value="SUPER_ADMIN">SUPER_ADMIN — Главный администратор</option>
-              )}
-            </select>
+            {/* List of independent roles */}
+            <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+              {[
+                {
+                  id: 'user' as SystemRole,
+                  title: 'Пользователь (USER)',
+                  description: 'Базовый доступ к профилю, библиотеке, оценкам и социальным функциям.',
+                  icon: Users,
+                  locked: true,
+                },
+                {
+                  id: 'musician' as SystemRole,
+                  title: 'Музыкант (MUSICIAN)',
+                  description: 'Доступ к Creative Studio, загрузка аудиотреков, создание релизов и управление карточкой артиста.',
+                  icon: Music,
+                  locked: false,
+                },
+                {
+                  id: 'news_editor' as SystemRole,
+                  title: 'Редактор новостей (NEWS_EDITOR)',
+                  description: 'Создание, редактирование и публикация новостей и объявлений. Без доступа к панели администрирования.',
+                  icon: FileText,
+                  locked: false,
+                },
+                {
+                  id: 'content_manager' as SystemRole,
+                  title: 'Контент-менеджер (CONTENT_MANAGER)',
+                  description: 'Управление медиатекой, метаданными фильмов, аниме, сериалов и игр.',
+                  icon: Film,
+                  locked: false,
+                },
+                {
+                  id: 'moderator' as SystemRole,
+                  title: 'Модератор (MODERATOR)',
+                  description: 'Модерация отзывов, комментариев, обработка жалоб и предупреждения пользователей.',
+                  icon: ShieldCheck,
+                  locked: false,
+                },
+                {
+                  id: 'admin' as SystemRole,
+                  title: 'Администратор (ADMIN)',
+                  description: 'Полный доступ к панели администрирования, пользователям, модерации и настройкам.',
+                  icon: ShieldAlert,
+                  locked: !isSuperAdmin,
+                  superAdminOnly: true,
+                },
+                {
+                  id: 'super_admin' as SystemRole,
+                  title: 'Главный администратор (SUPER_ADMIN)',
+                  description: 'Наивысший приоритет доступа ко всей платформе.',
+                  icon: Award,
+                  locked: !isSuperAdmin,
+                  superAdminOnly: true,
+                },
+              ].map((item) => {
+                const isChecked = selectedRoles.includes(item.id);
+                const IconComponent = item.icon;
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => {
+                      if (item.locked) return;
+                      setSelectedRoles((prev) => {
+                        if (prev.includes(item.id)) {
+                          return prev.filter((r) => r !== item.id);
+                        } else {
+                          return [...prev, item.id];
+                        }
+                      });
+                    }}
+                    className={`p-3 rounded-2xl border transition-all flex items-start justify-between gap-3 ${
+                      item.locked
+                        ? 'bg-[#0E1226]/50 border-[#1E2442]/50 opacity-80 cursor-default'
+                        : isChecked
+                        ? 'bg-purple-950/20 border-purple-500/50 cursor-pointer hover:border-purple-400'
+                        : 'bg-[#11152A] border-[#1E2442] cursor-pointer hover:border-[#2E365C]'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div
+                        className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                          isChecked ? 'bg-purple-500/20 text-purple-300' : 'bg-[#1A203C] text-[#64748B]'
+                        }`}
+                      >
+                        <IconComponent className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-bold font-mono ${isChecked ? 'text-white' : 'text-[#CBD5E1]'}`}>
+                            {item.title}
+                          </span>
+                          {item.superAdminOnly && !isSuperAdmin && (
+                            <span className="text-[10px] text-amber-400/80 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                              Только Super Admin
+                            </span>
+                          )}
+                          {item.id === 'user' && (
+                            <span className="text-[10px] text-[#64748B] bg-[#1A203C] px-1.5 py-0.5 rounded">
+                              Всегда активен
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-[#94A3B8] mt-0.5 leading-relaxed">{item.description}</p>
+                      </div>
+                    </div>
 
-            <div className="flex justify-end gap-2.5 pt-3">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      disabled={item.locked}
+                      readOnly
+                      className="mt-1 w-4 h-4 rounded text-purple-600 focus:ring-0 focus:ring-offset-0 bg-[#0B0D20] border-[#1E2442] shrink-0"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Selected Roles Preview */}
+            <div className="p-3 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-1.5">
+              <span className="text-[11px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
+                Итоговый набор ролей:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {selectedRoles.map((r) => (
+                  <span
+                    key={r}
+                    className="px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold bg-purple-500/15 border border-purple-500/30 text-purple-300"
+                  >
+                    {ROLE_LABELS[r] || r}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2">
               <button
                 onClick={() => setRoleModalUser(null)}
                 className="h-11 px-5 rounded-xl bg-[#11152A] hover:bg-[#1E2442] text-sm font-semibold text-[#F8FAFC] border border-[#1E2442] transition-colors cursor-pointer"
@@ -1256,10 +1406,10 @@ export const AdminUsersTab: React.FC = () => {
               <button
                 onClick={handleRoleChange}
                 disabled={savingRole}
-                className="h-11 px-5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-sm font-bold text-white flex items-center gap-2 transition-colors cursor-pointer shadow-md"
+                className="h-11 px-5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-sm font-bold text-white flex items-center gap-2 transition-colors cursor-pointer shadow-md disabled:opacity-50"
               >
                 {savingRole && <RotateCw className="w-4 h-4 animate-spin" />}
-                Сохранить
+                <span>Сохранить роли</span>
               </button>
             </div>
           </div>

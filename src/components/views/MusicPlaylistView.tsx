@@ -681,25 +681,13 @@ export const MusicPlaylistView: React.FC<{ id: string }> = ({ id }) => {
                   <MusicTrackRow
                     key={`${trk.id}-${index}`}
                     track={{
-                      id: trk.id,
-                      source: trk.source,
+                      ...trk,
+                      audioFile: trk.audioFile,
+                      slug: trk.slug,
                       videoId: trk.videoId,
                       providerTrackId: trk.providerTrackId,
-                      title: trk.title,
-                      artistName: trk.artistName,
-                      artists: (trk as any).artists,
-                      artistSlug: trk.artistSlug,
-                      artistId: trk.artistId,
-                      releaseTitle: trk.releaseTitle,
-                      releaseCover: trk.releaseCover,
-                      thumbnail: trk.releaseCover,
-                      releaseId: trk.releaseId,
-                      releaseSlug: trk.releaseSlug,
-                      duration: trk.duration,
-                      explicit: trk.explicit,
-                      isFavorite: trk.isFavorite,
-                      lyrics: trk.lyrics,
-                      authorNote: trk.authorNote,
+                      youtubeUrl: trk.youtubeUrl,
+                      thumbnail: trk.releaseCover || trk.thumbnail,
                       trackNumber: index + 1,
                       addedBy: trk.addedBy
                         ? {
@@ -712,29 +700,19 @@ export const MusicPlaylistView: React.FC<{ id: string }> = ({ id }) => {
                     index={index + 1}
                     showIndex={true}
                     showCover={true}
+                    onPlay={() => handlePlayTrack(trk)}
                     extraActions={reorderArrows}
                     onRemove={canDeleteTrack ? () => handleRemoveTrack(trk) : undefined}
                     removeLabel="Удалить из этого плейлиста"
-                    queueContext={tracks.map((t) => ({
-                      id: t.id,
-                      source: t.source,
+                    queueContext={tracks.map((t, i) => ({
+                      ...t,
+                      audioFile: t.audioFile,
+                      slug: t.slug,
                       videoId: t.videoId,
                       providerTrackId: t.providerTrackId,
-                      title: t.title,
-                      artistName: t.artistName,
-                      artists: (t as any).artists,
-                      artistSlug: t.artistSlug,
-                      artistId: t.artistId,
-                      releaseTitle: t.releaseTitle,
-                      releaseCover: t.releaseCover,
-                      thumbnail: t.releaseCover,
-                      releaseId: t.releaseId,
-                      releaseSlug: t.releaseSlug,
-                      duration: t.duration,
-                      explicit: t.explicit,
-                      isFavorite: t.isFavorite,
-                      lyrics: t.lyrics,
-                      authorNote: t.authorNote,
+                      youtubeUrl: t.youtubeUrl,
+                      thumbnail: t.releaseCover || t.thumbnail,
+                      trackNumber: i + 1,
                     }))}
                   />
                 );

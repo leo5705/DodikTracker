@@ -26,7 +26,7 @@ export const publicReportsRouter = Router();
 
 const handleReportCreation = async (req: AuthRequest, res: Response) => {
   try {
-    const { targetType, targetId, reason, description } = req.body;
+    const { targetType, targetId, reason, description, subject } = req.body;
     const reporter = req.dbUser;
 
     if (!targetType || !targetId) {
@@ -130,6 +130,7 @@ const handleReportCreation = async (req: AuthRequest, res: Response) => {
         targetId: targetIdStr,
         targetUserId,
         reason: effectiveReason,
+        subject: subject ? String(subject).slice(0, 255) : null,
         description: description ? String(description).slice(0, 2000) : null,
         status: 'PENDING',
       })
@@ -216,6 +217,7 @@ publicReportsRouter.get(['/feedback/my', '/feedback'], requireAuth, async (req: 
         id: reports.id,
         targetType: reports.targetType,
         targetId: reports.targetId,
+        subject: reports.subject,
         reason: reports.reason,
         description: reports.description,
         status: reports.status,
@@ -433,6 +435,7 @@ moderationRouter.get('/reports', requireAuth, requireStaff('MANAGE_MODERATION'),
         targetType: reports.targetType,
         targetId: reports.targetId,
         targetUserId: reports.targetUserId,
+        subject: reports.subject,
         reason: reports.reason,
         description: reports.description,
         status: reports.status,

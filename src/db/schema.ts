@@ -10,7 +10,8 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash'),
   avatar: text('avatar'),
   bio: text('bio'),
-  role: text('role').notNull().default('USER'), // 'USER' | 'MODERATOR' | 'ADMIN' | 'SUPER_ADMIN'
+  role: text('role').notNull().default('USER'), // Primary/legacy display role
+  roles: text('roles').notNull().default('["user"]'), // JSON array of independent roles: ['user', 'musician', ...]
   isBlocked: boolean('is_blocked').notNull().default(false),
   bannedUntil: timestamp('banned_until'),
   banReason: text('ban_reason'),
@@ -622,6 +623,7 @@ export const reports = pgTable('reports', {
   targetId: text('target_id').notNull(),
   targetUserId: integer('target_user_id').references(() => users.id, { onDelete: 'set null' }),
   reason: text('reason').notNull(), // 'SPAM' | 'HARASSMENT' | 'FRAUD' | 'NSFW' | 'RULES_VIOLATION' | 'OTHER'
+  subject: text('subject'),
   description: text('description'),
   status: text('status').notNull().default('PENDING'), // 'PENDING' | 'IN_REVIEW' | 'RESOLVED' | 'REJECTED' | 'DISMISSED'
   moderatorId: integer('moderator_id').references(() => users.id, { onDelete: 'set null' }),
@@ -804,7 +806,7 @@ export const newsReactionsRelations = relations(newsReactions, ({ one }) => ({
 // 39. Artist / Musician Profiles
 export const artistProfiles = pgTable('artist_profiles', {
   id: serial('id').primaryKey(),
-  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
   stageName: text('stage_name').notNull(),
   slug: text('slug').notNull(),
   avatar: text('avatar'),
@@ -1195,16 +1197,40 @@ export const userMusicHistory = pgTable('user_music_history', {
   releaseTitle: text('release_title'),
   releaseCover: text('release_cover'),
   durationSeconds: integer('duration_seconds'),
+  playedSeconds: integer('played_seconds'),
+  completionRatio: doublePrecision('completion_ratio'),
+  isCompleted: boolean('is_completed').notNull().default(false),
+  isSkipped: boolean('is_skipped').notNull().default(false),
+  isQuickSkip: boolean('is_quick_skip').notNull().default(false),
+  contextSource: text('context_source'), // 'manual' | 'recommendation' | 'queue' | 'playlist' | 'radio' | 'album'
+  fromTrackId: text('from_track_id'), // Transition graph pointer (A -> B)
   listenedAt: timestamp('listened_at').defaultNow(),
 }, (table) => ({
   userIdIdx: index('user_music_history_user_id_idx').on(table.userId),
   trackIdIdx: index('user_music_history_track_id_idx').on(table.trackId),
   listenedAtIdx: index('user_music_history_listened_at_idx').on(table.listenedAt),
   userTrackIdx: index('user_music_history_user_track_idx').on(table.userId, table.trackId),
+  userArtistIdx: index('user_music_history_user_artist_idx').on(table.userId, table.artistName),
 }));
 
 export const userMusicHistoryRelations = relations(userMusicHistory, ({ one }) => ({
   user: one(users, { fields: [userMusicHistory.userId], references: [users.id] }),
+}));
+
+// 56. Music Track Transitions (Transition Graph: Track A -> Track B)
+export const musicTrackTransitions = pgTable('music_track_transitions', {
+  id: serial('id').primaryKey(),
+  fromTrackId: text('from_track_id').notNull(),
+  toTrackId: text('to_track_id').notNull(),
+  fromArtistName: text('from_artist_name'),
+  toArtistName: text('to_artist_name'),
+  transitionCount: integer('transition_count').notNull().default(1),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+  fromTrackIdx: index('music_track_transitions_from_track_idx').on(table.fromTrackId),
+  toTrackIdx: index('music_track_transitions_to_track_idx').on(table.toTrackId),
+  unqTransition: uniqueIndex('music_track_transitions_from_to_unq').on(table.fromTrackId, table.toTrackId),
 }));
 
 

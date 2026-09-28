@@ -49,14 +49,18 @@ export interface NavItemConfig {
 export const Sidebar: React.FC<{
   onCloseMobile?: () => void;
 }> = ({ onCloseMobile }) => {
-  const { dbUser, logout, login, loading } = useAuth();
+  const {
+    dbUser,
+    logout,
+    login,
+    loading,
+    isMusician,
+    isOnlyNewsEditor,
+    canAccessAdminPanel,
+  } = useAuth();
   const { navigate, route } = useRouter();
   const { unreadCount } = useNotifications();
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
-
-  const isStaff = ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR'].includes(
-    dbUser?.role || ''
-  );
 
   const currentRouteName = route.name;
 
@@ -84,11 +88,27 @@ export const Sidebar: React.FC<{
     { id: 'statistics', label: 'Статистика', icon: BarChart3, path: '/statistics' },
     { id: 'news', label: 'Новости', icon: Newspaper, path: '/news' },
     { id: 'feed', label: 'Лента', icon: Radio, path: '/feed' },
-    { id: 'music-studio', label: 'Студия музыки', icon: Music, path: '/music/studio' },
-    { id: 'settings', label: 'Настройки', icon: Settings, path: '/settings' },
   ];
 
-  if (isStaff) {
+  if (isMusician) {
+    mainNavItems.push({
+      id: 'music-studio',
+      label: 'Студия музыки',
+      icon: Music,
+      path: '/music/studio',
+    });
+  }
+
+  mainNavItems.push({ id: 'settings', label: 'Настройки', icon: Settings, path: '/settings' });
+
+  if (isOnlyNewsEditor) {
+    mainNavItems.push({
+      id: 'admin',
+      label: 'Редактор новостей',
+      icon: Newspaper,
+      path: '/admin?tab=news',
+    });
+  } else if (canAccessAdminPanel) {
     mainNavItems.push({
       id: 'admin',
       label: 'Админ-панель',
@@ -307,7 +327,7 @@ export const Sidebar: React.FC<{
 export const TopBar: React.FC<{
   onOpenMobileMenu: () => void;
 }> = ({ onOpenMobileMenu }) => {
-  const { dbUser, authFetch } = useAuth();
+  const { dbUser, authFetch, isOnlyNewsEditor } = useAuth();
   const { navigate, route } = useRouter();
   const { unreadCount } = useNotifications();
   const [searchValue, setSearchValue] = useState('');
@@ -337,7 +357,7 @@ export const TopBar: React.FC<{
     if (routeName === 'news' || routeName === 'news-detail') return 'Новости';
     if (routeName === 'feed') return 'Лента';
     if (routeName === 'settings') return 'Настройки';
-    if (routeName === 'admin') return 'Админ-панель';
+    if (routeName === 'admin') return isOnlyNewsEditor ? 'Редактор новостей' : 'Админ-панель';
     if (routeName === 'notifications') return 'Уведомления';
     if (routeName.startsWith('media-') || routeName === 'media-detail') return 'Карточка тайтла';
     if (routeName === 'profile' || routeName.startsWith('user-profile')) return 'Профиль';

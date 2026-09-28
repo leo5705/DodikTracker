@@ -114,12 +114,14 @@ export const SimilarTracksModal: React.FC<SimilarTracksModalProps> = ({
             </div>
           ) : (
             tracks.map((t, idx) => {
+              const trackIdStr = String(t.id || t.trackId || '');
+              const cleanVideoId = t.provider === 'youtube' && trackIdStr ? trackIdStr.replace(/^yt_/, '') : undefined;
               const trackItem: AnyTrackItem = {
-                id: t.trackId,
+                id: trackIdStr,
                 kind: t.provider === 'youtube' ? 'external' : 'dodik',
                 source: t.provider === 'youtube' ? 'youtube' : 'dodik',
-                videoId: t.provider === 'youtube' ? String(t.trackId).replace(/^yt_/, '') : undefined,
-                providerTrackId: t.provider === 'youtube' ? String(t.trackId).replace(/^yt_/, '') : undefined,
+                videoId: cleanVideoId,
+                providerTrackId: cleanVideoId,
                 title: t.title,
                 artistName: t.artistName,
                 artists: t.artists,
@@ -131,26 +133,30 @@ export const SimilarTracksModal: React.FC<SimilarTracksModalProps> = ({
                 explanation: t.explanation,
               };
 
-              const allQueueItems: AnyTrackItem[] = tracks.map((item) => ({
-                id: item.trackId,
-                kind: item.provider === 'youtube' ? 'external' : 'dodik',
-                source: item.provider === 'youtube' ? 'youtube' : 'dodik',
-                videoId: item.provider === 'youtube' ? String(item.trackId).replace(/^yt_/, '') : undefined,
-                providerTrackId: item.provider === 'youtube' ? String(item.trackId).replace(/^yt_/, '') : undefined,
-                title: item.title,
-                artistName: item.artistName,
-                artists: item.artists,
-                releaseTitle: item.releaseTitle || null,
-                releaseCover: item.releaseCover || null,
-                thumbnail: item.releaseCover || null,
-                durationSeconds: item.durationSeconds || null,
-                explicit: Boolean(item.explicit),
-                explanation: item.explanation,
-              }));
+              const allQueueItems: AnyTrackItem[] = tracks.map((item) => {
+                const itemIdStr = String(item.id || item.trackId || '');
+                const itemCleanVideoId = item.provider === 'youtube' && itemIdStr ? itemIdStr.replace(/^yt_/, '') : undefined;
+                return {
+                  id: itemIdStr,
+                  kind: item.provider === 'youtube' ? 'external' : 'dodik',
+                  source: item.provider === 'youtube' ? 'youtube' : 'dodik',
+                  videoId: itemCleanVideoId,
+                  providerTrackId: itemCleanVideoId,
+                  title: item.title,
+                  artistName: item.artistName,
+                  artists: item.artists,
+                  releaseTitle: item.releaseTitle || null,
+                  releaseCover: item.releaseCover || null,
+                  thumbnail: item.releaseCover || null,
+                  durationSeconds: item.durationSeconds || null,
+                  explicit: Boolean(item.explicit),
+                  explanation: item.explanation,
+                };
+              });
 
               return (
                 <MusicTrackCard
-                  key={t.trackId || idx}
+                  key={trackIdStr || idx}
                   track={trackItem}
                   queueContext={allQueueItems}
                   variant="row"

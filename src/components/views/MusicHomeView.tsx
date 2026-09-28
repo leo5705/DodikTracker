@@ -654,7 +654,7 @@ export const MusicHomeView: React.FC = () => {
       {recommendations && (
         <>
           {/* 1. CONTINUE LISTENING */}
-          {recommendations.continueListening.length > 0 && (
+          {recommendations.continueListening && recommendations.continueListening.length > 0 && (
             <div className="space-y-4 pt-2">
               <div className="flex items-center justify-between">
                 <div>
@@ -670,14 +670,15 @@ export const MusicHomeView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {recommendations.continueListening.map((item, idx) => (
                   <MusicTrackCard
-                    key={`rec-cl-${item.trackId || idx}-${idx}`}
+                    key={`rec-cl-${item.id || item.trackId || idx}-${idx}`}
                     track={{
                       kind: item.provider === 'youtube' ? 'external' : 'dodik',
-                      id: item.trackId,
-                      providerTrackId: item.trackId.replace(/^yt_/, ''),
+                      id: item.id || item.trackId,
+                      providerTrackId: (item.id || item.trackId || '').replace(/^yt_/, ''),
                       provider: item.provider as any,
                       title: item.title,
                       artist: item.artistName,
+                      artistName: item.artistName,
                       artists: [item.artistName],
                       album: item.releaseTitle || null,
                       durationSeconds: item.durationSeconds || null,
@@ -685,6 +686,7 @@ export const MusicHomeView: React.FC = () => {
                       lyrics: null,
                       explicit: null,
                       playable: true,
+                      explanation: item.explanation || 'Вы недавно слушали',
                     } as any}
                     variant="row"
                   />
@@ -693,8 +695,8 @@ export const MusicHomeView: React.FC = () => {
             </div>
           )}
 
-          {/* 2. PERSONALIZED RECOMMENDATIONS "ДЛЯ ВАС" / EMPTY STATE & FALLBACK */}
-          {forYouData?.isPersonalized && forYouData.tracks.length > 0 ? (
+          {/* 2. FOR YOU (MAIN PERSONALIZED SHELF) */}
+          {((forYouData?.isPersonalized && forYouData.tracks.length > 0) || (recommendations.forYou && recommendations.forYou.length > 0)) && (
             <div className="space-y-4 pt-2">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div>
@@ -703,7 +705,7 @@ export const MusicHomeView: React.FC = () => {
                     <span>Для вас</span>
                   </h3>
                   <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
-                    Персональные рекомендации на основе ваших прослушиваний, вкуса и подписок
+                    Персональный микс на основе ваших прослушиваний, любимых жанров и подписок
                   </p>
                 </div>
 
@@ -719,13 +721,13 @@ export const MusicHomeView: React.FC = () => {
                 </button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {forYouData.tracks.map((item, idx) => (
+                {(forYouData?.tracks && forYouData.tracks.length > 0 ? forYouData.tracks : recommendations.forYou).map((item, idx) => (
                   <MusicTrackCard
-                    key={`for-you-tr-${item.trackId || idx}-${idx}`}
+                    key={`for-you-tr-${item.id || item.trackId || idx}-${idx}`}
                     track={{
                       kind: item.provider === 'youtube' ? 'external' : 'dodik',
-                      id: item.trackId,
-                      providerTrackId: item.trackId.replace(/^yt_/, ''),
+                      id: item.id || item.trackId,
+                      providerTrackId: (item.id || item.trackId || '').replace(/^yt_/, ''),
                       provider: item.provider as any,
                       title: item.title,
                       artist: item.artistName,
@@ -745,112 +747,30 @@ export const MusicHomeView: React.FC = () => {
                 ))}
               </div>
             </div>
-          ) : dbUser && forYouData && !forYouData.isPersonalized ? (
-            <div className="space-y-6 pt-2">
-              {/* Cold start state for users with insufficient history */}
-              <div className="p-6 sm:p-8 rounded-2xl bg-[#0B0D20] border border-[#1E2442] text-center space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-purple-950/40 border border-purple-500/20 text-purple-400 flex items-center justify-center mx-auto">
-                  <Sparkles className="w-6 h-6" />
-                </div>
-                <div className="space-y-1.5">
-                  <h4 className="text-base font-bold text-white font-mono">
-                    Для вас — персональные рекомендации
-                  </h4>
-                  <p className="text-xs text-[#94A3B8] max-w-lg mx-auto leading-relaxed">
-                    У вас пока нет достаточной истории прослушиваний. Включайте треки, добавляйте понравившиеся песни в избранное и подписывайтесь на артистов — и здесь сформируются уникальные рекомендации специально для вашего вкуса!
-                  </p>
-                  <p className="text-[11px] text-purple-400 font-mono">
-                    А пока мы подобрали популярные композиции и главные хиты каталога Dodik Tracker:
-                  </p>
-                </div>
-              </div>
+          )}
 
-              {/* Honest fallback: Popular / New releases */}
-              {forYouData.tracks.length > 0 && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div>
-                      <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
-                        <Flame className="w-5 h-5 text-rose-400" />
-                        <span>Популярно сейчас</span>
-                      </h3>
-                      <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
-                        Популярные релизы и треки платформы
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleRefreshForYou}
-                      disabled={refreshingForYou}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600/15 hover:bg-rose-600/25 border border-rose-500/30 text-rose-300 hover:text-rose-200 text-xs font-mono font-medium transition cursor-pointer disabled:opacity-50"
-                      title="Обновить список треков"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${refreshingForYou ? 'animate-spin' : ''}`} />
-                      <span>Обновить</span>
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {forYouData.tracks.map((item, idx) => (
-                      <MusicTrackCard
-                        key={`fallback-pop-${item.trackId || idx}-${idx}`}
-                        track={{
-                          kind: item.provider === 'youtube' ? 'external' : 'dodik',
-                          id: item.trackId,
-                          providerTrackId: item.trackId.replace(/^yt_/, ''),
-                          provider: item.provider as any,
-                          title: item.title,
-                          artist: item.artistName,
-                          artistName: item.artistName,
-                          artists: [item.artistName],
-                          album: item.releaseTitle || null,
-                          durationSeconds: item.durationSeconds || null,
-                          thumbnail: item.releaseCover || null,
-                          releaseCover: item.releaseCover || null,
-                          lyrics: null,
-                          explicit: null,
-                          playable: true,
-                          explanation: item.explanation || 'Популярно в Dodik Tracker',
-                        } as any}
-                        variant="row"
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : recommendations?.forYou && recommendations.forYou.length > 0 ? (
+          {/* 3. DISCOVER NEW (EXPLORATION) */}
+          {recommendations.discoverNew && recommendations.discoverNew.length > 0 && (
             <div className="space-y-4 pt-2">
-              <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-purple-400" />
-                    <span>Для вас</span>
+                    <Compass className="w-5 h-5 text-cyan-400" />
+                    <span>Откройте новое</span>
                   </h3>
                   <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
-                    Персональные рекомендации на основе ваших прослушиваний
+                    Новые исполнители и свежее звучание в ваших любимых направлениях
                   </p>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={handleRefreshForYou}
-                  disabled={refreshingForYou}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/15 hover:bg-purple-600/25 border border-purple-500/30 text-purple-300 hover:text-purple-200 text-xs font-mono font-medium transition cursor-pointer disabled:opacity-50"
-                  title="Обновить персональные рекомендации"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${refreshingForYou ? 'animate-spin' : ''}`} />
-                  <span>Обновить рекомендации</span>
-                </button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {recommendations.forYou.map((item, idx) => (
+                {recommendations.discoverNew.map((item, idx) => (
                   <MusicTrackCard
-                    key={`rec-fy-${item.trackId || idx}-${idx}`}
+                    key={`rec-disc-${item.id || item.trackId || idx}-${idx}`}
                     track={{
                       kind: item.provider === 'youtube' ? 'external' : 'dodik',
-                      id: item.trackId,
-                      providerTrackId: item.trackId.replace(/^yt_/, ''),
+                      id: item.id || item.trackId,
+                      providerTrackId: (item.id || item.trackId || '').replace(/^yt_/, ''),
                       provider: item.provider as any,
                       title: item.title,
                       artist: item.artistName,
@@ -859,21 +779,104 @@ export const MusicHomeView: React.FC = () => {
                       album: item.releaseTitle || null,
                       durationSeconds: item.durationSeconds || null,
                       thumbnail: item.releaseCover || null,
-                      releaseCover: item.releaseCover || null,
                       lyrics: null,
                       explicit: null,
                       playable: true,
-                      explanation: item.explanation || 'Рекомендация по вкусу',
+                      explanation: item.explanation || 'Новый исполнитель по вашему вкусу',
                     } as any}
                     variant="row"
                   />
                 ))}
               </div>
             </div>
-          ) : null}
+          )}
 
-          {/* 3. LONG TIME NO LISTEN */}
-          {recommendations.longTimeNoListen.length > 0 && (
+          {/* 4. TASTE AFFINITY */}
+          {recommendations.tasteAffinity && recommendations.tasteAffinity.length > 0 && (
+            <div className="space-y-4 pt-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-emerald-400" />
+                    <span>Похожие на ваш вкус</span>
+                  </h3>
+                  <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
+                    Композиции, соответствующие вашему долгосрочному вкусовому профилю
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {recommendations.tasteAffinity.map((item, idx) => (
+                  <MusicTrackCard
+                    key={`rec-taste-${item.id || item.trackId || idx}-${idx}`}
+                    track={{
+                      kind: item.provider === 'youtube' ? 'external' : 'dodik',
+                      id: item.id || item.trackId,
+                      providerTrackId: (item.id || item.trackId || '').replace(/^yt_/, ''),
+                      provider: item.provider as any,
+                      title: item.title,
+                      artist: item.artistName,
+                      artistName: item.artistName,
+                      artists: [item.artistName],
+                      album: item.releaseTitle || null,
+                      durationSeconds: item.durationSeconds || null,
+                      thumbnail: item.releaseCover || null,
+                      lyrics: null,
+                      explicit: null,
+                      playable: true,
+                      explanation: item.explanation || 'Соответствует вашему вкусу',
+                    } as any}
+                    variant="row"
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 5. RECENT CONTEXT */}
+          {recommendations.recentContext && recommendations.recentContext.length > 0 && (
+            <div className="space-y-4 pt-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
+                    <Headphones className="w-5 h-5 text-violet-400" />
+                    <span>На основе последних прослушиваний</span>
+                  </h3>
+                  <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
+                    Подборка под настроение ваших недавних сессий
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {recommendations.recentContext.map((item, idx) => (
+                  <MusicTrackCard
+                    key={`rec-rc-${item.id || item.trackId || idx}-${idx}`}
+                    track={{
+                      kind: item.provider === 'youtube' ? 'external' : 'dodik',
+                      id: item.id || item.trackId,
+                      providerTrackId: (item.id || item.trackId || '').replace(/^yt_/, ''),
+                      provider: item.provider as any,
+                      title: item.title,
+                      artist: item.artistName,
+                      artistName: item.artistName,
+                      artists: [item.artistName],
+                      album: item.releaseTitle || null,
+                      durationSeconds: item.durationSeconds || null,
+                      thumbnail: item.releaseCover || null,
+                      lyrics: null,
+                      explicit: null,
+                      playable: true,
+                      explanation: item.explanation || 'На основе последних прослушиваний',
+                    } as any}
+                    variant="row"
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 6. LONG TIME NO LISTEN */}
+          {recommendations.longTimeNoListen && recommendations.longTimeNoListen.length > 0 && (
             <div className="space-y-4 pt-2">
               <div className="flex items-center justify-between">
                 <div>
@@ -882,18 +885,18 @@ export const MusicHomeView: React.FC = () => {
                     <span>Вы давно не слушали</span>
                   </h3>
                   <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
-                    Треки, которые вы часто включали раньше
+                    Любимые треки, которые вы часто включали раньше
                   </p>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {recommendations.longTimeNoListen.map((item, idx) => (
                   <MusicTrackCard
-                    key={`rec-ltnl-${item.trackId || idx}-${idx}`}
+                    key={`rec-ltnl-${item.id || item.trackId || idx}-${idx}`}
                     track={{
                       kind: item.provider === 'youtube' ? 'external' : 'dodik',
-                      id: item.trackId,
-                      providerTrackId: item.trackId.replace(/^yt_/, ''),
+                      id: item.id || item.trackId,
+                      providerTrackId: (item.id || item.trackId || '').replace(/^yt_/, ''),
                       provider: item.provider as any,
                       title: item.title,
                       artist: item.artistName,
@@ -904,6 +907,7 @@ export const MusicHomeView: React.FC = () => {
                       lyrics: null,
                       explicit: null,
                       playable: true,
+                      explanation: item.explanation || 'Вы давно не слушали этот трек',
                     } as any}
                     variant="row"
                   />
@@ -912,31 +916,32 @@ export const MusicHomeView: React.FC = () => {
             </div>
           )}
 
-          {/* 4. BASED ON YOUR TASTE */}
-          {recommendations.basedOnYourTaste.length > 0 && (
+          {/* 7. UNDERRATED GEMS */}
+          {recommendations.underratedGems && recommendations.underratedGems.length > 0 && (
             <div className="space-y-4 pt-2">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-emerald-400" />
-                    <span>Похоже на то, что вам нравится</span>
+                    <Star className="w-5 h-5 text-yellow-400" />
+                    <span>Недооценённое</span>
                   </h3>
                   <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
-                    На основе вашего музыкального вкуса
+                    Качественные треки с высокими оценками сообщества Dodik Tracker
                   </p>
                 </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                {recommendations.basedOnYourTaste.map((item, idx) => (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {recommendations.underratedGems.map((item, idx) => (
                   <MusicTrackCard
-                    key={`rec-[#]-${item.trackId || idx}-${idx}`}
+                    key={`rec-ug-${item.id || item.trackId || idx}-${idx}`}
                     track={{
                       kind: item.provider === 'youtube' ? 'external' : 'dodik',
-                      id: item.trackId,
-                      providerTrackId: item.trackId.replace(/^yt_/, ''),
+                      id: item.id || item.trackId,
+                      providerTrackId: (item.id || item.trackId || '').replace(/^yt_/, ''),
                       provider: item.provider as any,
                       title: item.title,
                       artist: item.artistName,
+                      artistName: item.artistName,
                       artists: [item.artistName],
                       album: item.releaseTitle || null,
                       durationSeconds: item.durationSeconds || null,
@@ -944,6 +949,7 @@ export const MusicHomeView: React.FC = () => {
                       lyrics: null,
                       explicit: null,
                       playable: true,
+                      explanation: item.explanation || 'Высоко оценённый скрытый хит',
                     } as any}
                     variant="row"
                   />
@@ -952,14 +958,56 @@ export const MusicHomeView: React.FC = () => {
             </div>
           )}
 
-          {/* 5. POPULAR NOW (COLD START) */}
-          {recommendations.isColdStart && recommendations.popularNow.length > 0 && (
+          {/* 8. RECOMMENDED ARTISTS */}
+          {recommendations.recommendedArtists && recommendations.recommendedArtists.length > 0 && (
+            <div className="space-y-4 pt-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
+                    <Users className="w-5 h-5 text-pink-400" />
+                    <span>Исполнители, которые могут вам понравиться</span>
+                  </h3>
+                  <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
+                    Артисты, соответствующие вашему музыкальному вкусу
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                {recommendations.recommendedArtists.map((artist, idx) => (
+                  <div
+                    key={`rec-art-${artist.stageName}-${idx}`}
+                    onClick={() => navigate(`/music/search?q=${encodeURIComponent(artist.stageName)}`)}
+                    className="p-3 rounded-2xl bg-[#0B0D20] border border-[#1E2442] hover:border-pink-500/40 transition cursor-pointer group flex flex-col items-center text-center space-y-2.5 shadow-md"
+                  >
+                    <div className="w-16 h-16 rounded-2xl bg-purple-950/40 border border-purple-500/30 flex items-center justify-center text-purple-300 font-mono font-bold text-xl overflow-hidden group-hover:scale-105 transition">
+                      {artist.avatar ? (
+                        <img src={artist.avatar} alt={artist.stageName} className="w-full h-full object-cover" />
+                      ) : (
+                        artist.stageName.charAt(0)
+                      )}
+                    </div>
+                    <div className="w-full">
+                      <div className="text-xs font-bold text-white group-hover:text-pink-300 transition truncate">
+                        {artist.stageName}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5 line-clamp-2">
+                        {artist.explanation}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 9. COLD START / POPULAR NOW FALLBACK */}
+          {recommendations.isColdStart && recommendations.popularNow && recommendations.popularNow.length > 0 && (
             <div className="space-y-4 pt-2">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base sm:text-lg font-bold text-white font-mono flex items-center gap-2">
                     <Flame className="w-5 h-5 text-rose-400" />
-                    <span>Популярное сейчас</span>
+                    <span>Популярно сейчас</span>
                   </h3>
                   <p className="text-xs text-[#94A3B8] font-mono mt-0.5">
                     Свежие хиты и популярная музыка
@@ -969,11 +1017,11 @@ export const MusicHomeView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {recommendations.popularNow.map((item, idx) => (
                   <MusicTrackCard
-                    key={`rec-pop-${item.trackId || idx}-${idx}`}
+                    key={`rec-pop-${item.id || item.trackId || idx}-${idx}`}
                     track={{
                       kind: item.provider === 'youtube' ? 'external' : 'dodik',
-                      id: item.trackId,
-                      providerTrackId: item.trackId.replace(/^yt_/, ''),
+                      id: item.id || item.trackId,
+                      providerTrackId: (item.id || item.trackId || '').replace(/^yt_/, ''),
                       provider: item.provider as any,
                       title: item.title,
                       artist: item.artistName,
@@ -984,6 +1032,7 @@ export const MusicHomeView: React.FC = () => {
                       lyrics: null,
                       explicit: null,
                       playable: true,
+                      explanation: item.explanation || 'Популярно в каталоге',
                     } as any}
                     variant="row"
                   />

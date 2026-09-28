@@ -5,6 +5,7 @@ import { db } from '../db/index.ts';
 import { users, systemSettings } from '../db/schema.ts';
 import { eq } from 'drizzle-orm';
 import jwt from 'jsonwebtoken';
+import { isStaffRole } from '../utils/rbac.ts';
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'dodik_tracker_jwt_secret_key_2026_antigravity';
 
@@ -105,6 +106,7 @@ export const requireAuth = async (
             username,
             avatar: decodedToken.picture || null,
             role: shouldBeAdmin ? 'SUPER_ADMIN' : 'USER',
+            roles: JSON.stringify(shouldBeAdmin ? ['user', 'super_admin'] : ['user']),
             invitesLeft: 3,
           })
           .returning();
@@ -136,7 +138,7 @@ export const requireAuth = async (
     const modeSetting = await db.select().from(systemSettings).where(eq(systemSettings.key, 'site_access_mode')).limit(1);
     const siteMode = modeSetting.length > 0 ? modeSetting[0].value : 'OPEN';
     
-    if (siteMode === 'MAINTENANCE' && !isStaffRole(dbUser.role)) {
+    if (siteMode === 'MAINTENANCE' && !isStaffRole(dbUser)) {
        return res.status(503).json({ error: 'MAINTENANCE_MODE' });
     }
 
@@ -191,40 +193,45 @@ export const optionalAuth = async (
   next();
 };
 
+export {
+  type SystemRole,
+  type AdminPermission,
+  ALL_ROLES,
+  ROLE_HIERARCHY,
+  ROLE_LABELS,
+  ROLE_BADGE_COLORS,
+  getUserRoles,
+  hasRole,
+  isMusician,
+  isNewsEditor,
+  isModerator,
+  isContentManager,
+  isAdminRole,
+  isSuperAdmin,
+  isStaffRole,
+  canAccessAdminDashboard,
+  canAccessAdminPanel,
+  isOnlyNewsEditor,
+  addRole,
+  removeRole,
+  getPrimaryRole,
+  hasStaffPermission,
+} from '../utils/rbac.ts';
+
+import {
+  isAdminRole,
+  isMusician,
+  hasStaffPermission,
+  type AdminPermission,
+} from '../utils/rbac.ts';
+
 export type StaffRole = 'SUPER_ADMIN' | 'ADMIN' | 'MODERATOR' | 'CONTENT_MANAGER' | 'NEWS_EDITOR';
-
-export type AdminPermission =
-  | 'ACCESS_ADMIN_PANEL'
-  | 'VIEW_DASHBOARD'
-  | 'MANAGE_USERS'
-  | 'MANAGE_ROLES'
-  | 'MANAGE_MODERATION'
-  | 'MANAGE_NEWS'
-  | 'MANAGE_ANNOUNCEMENTS'
-  | 'MANAGE_CONTENT'
-  | 'MANAGE_ACHIEVEMENTS'
-  | 'MANAGE_NOTIFICATIONS'
-  | 'MANAGE_INTEGRATIONS'
-  | 'MANAGE_SETTINGS'
-  | 'VIEW_AUDIT_LOG'
-  | 'VIEW_ANALYTICS';
-
-export function isStaffRole(role?: string): boolean {
-  if (!role) return false;
-  return ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'CONTENT_MANAGER', 'NEWS_EDITOR'].includes(role);
-}
-
-export function isAdminRole(role?: string): boolean {
-  if (!role) return false;
-  const r = String(role).toUpperCase();
-  return r === 'SUPER_ADMIN' || r === 'ADMIN';
-}
 
 export const requireAdminOnly = (req: AuthRequest, res: Response, next: NextFunction) => {
   if (!req.dbUser) {
     return res.status(401).json({ error: 'Требуется авторизация' });
   }
-  if (!isAdminRole(req.dbUser.role)) {
+  if (!isAdminRole(req.dbUser)) {
     return res.status(403).json({
       error: 'Доступ запрещён: выдать или изменить роль музыканта может только администратор',
     });
@@ -232,55 +239,24 @@ export const requireAdminOnly = (req: AuthRequest, res: Response, next: NextFunc
   next();
 };
 
-export function hasStaffPermission(role: string | undefined, permission: AdminPermission): boolean {
-  if (!role) return false;
-  if (role === 'SUPER_ADMIN') return true;
-
-  if (role === 'ADMIN') {
-    // Admin has access to all except assigning or modifying SUPER_ADMIN
-    return permission !== 'MANAGE_ROLES';
+export const requireMusician = (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.dbUser) {
+    return res.status(401).json({ error: 'Требуется авторизация' });
   }
-
-  if (role === 'MODERATOR') {
-    return [
-      'ACCESS_ADMIN_PANEL',
-      'VIEW_DASHBOARD',
-      'MANAGE_MODERATION',
-      'MANAGE_USERS',
-      'VIEW_AUDIT_LOG',
-      'VIEW_ANALYTICS',
-    ].includes(permission);
+  if (!isMusician(req.dbUser)) {
+    return res.status(403).json({
+      error: 'Доступ к Creative Studio и управление релизами разрешены только пользователям с ролью музыканта',
+    });
   }
-
-  if (role === 'CONTENT_MANAGER') {
-    return [
-      'ACCESS_ADMIN_PANEL',
-      'VIEW_DASHBOARD',
-      'MANAGE_CONTENT',
-      'MANAGE_INTEGRATIONS',
-      'VIEW_ANALYTICS',
-    ].includes(permission);
-  }
-
-  if (role === 'NEWS_EDITOR') {
-    return [
-      'ACCESS_ADMIN_PANEL',
-      'VIEW_DASHBOARD',
-      'MANAGE_NEWS',
-      'MANAGE_ANNOUNCEMENTS',
-      'VIEW_ANALYTICS',
-    ].includes(permission);
-  }
-
-  return false;
-}
+  next();
+};
 
 export const requireStaff = (permission: AdminPermission = 'ACCESS_ADMIN_PANEL') => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.dbUser) {
       return res.status(401).json({ error: 'Требуется авторизация' });
     }
-    if (!hasStaffPermission(req.dbUser.role, permission)) {
+    if (!hasStaffPermission(req.dbUser, permission)) {
       return res.status(403).json({
         error: `Доступ запрещён: недостаточно прав (требуется: ${permission})`,
       });
@@ -290,4 +266,5 @@ export const requireStaff = (permission: AdminPermission = 'ACCESS_ADMIN_PANEL')
 };
 
 export const requireAdmin = requireStaff('ACCESS_ADMIN_PANEL');
+
 

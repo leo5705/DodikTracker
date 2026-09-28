@@ -74,29 +74,48 @@ interface SidebarItem {
 }
 
 export const AdminView: React.FC = () => {
-  const { dbUser, authFetch } = useAuth();
-  const [activeTab, setActiveTab] = useState<AdminTabType>('dashboard');
+  const {
+    dbUser,
+    authFetch,
+    isSuperAdmin,
+    isAdmin,
+    isModerator,
+    isNewsEditor,
+    isStaff,
+    canAccessAdminDashboard,
+    isOnlyNewsEditor,
+  } = useAuth();
+
+  const isContentManager = isModerator || isAdmin;
+
+  const [activeTab, setActiveTab] = useState<AdminTabType>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab') as AdminTabType;
+    if (isOnlyNewsEditor) {
+      return tabParam === 'announcements' ? 'announcements' : 'news';
+    }
+    if (tabParam && ['dashboard', 'users', 'musicians', 'music_moderation', 'moderation', 'content', 'invites', 'news', 'announcements', 'notifications', 'analytics', 'audit', 'settings', 'updates'].includes(tabParam)) {
+      return tabParam;
+    }
+    return canAccessAdminDashboard ? 'dashboard' : 'news';
+  });
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pendingReportsCount, setPendingReportsCount] = useState<number | null>(null);
   const [pendingMusicCount, setPendingMusicCount] = useState<number | null>(null);
 
-  const role = dbUser?.role || 'USER';
-  const isSuperAdmin = role === 'SUPER_ADMIN';
-  const isAdmin = role === 'ADMIN' || isSuperAdmin;
-  const isModerator = role === 'MODERATOR' || isAdmin;
-  const isContentManager = role === 'CONTENT_MANAGER' || isAdmin;
-  const isNewsEditor = role === 'NEWS_EDITOR' || isAdmin;
-
-  const isStaff = isSuperAdmin || isAdmin || isModerator || isContentManager || isNewsEditor;
-
   // Check URL query parameters for tab
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const tabParam = params.get('tab');
-    if (tabParam && ['music_moderation', 'musicians', 'users', 'moderation', 'dashboard'].includes(tabParam)) {
-      setActiveTab(tabParam as AdminTabType);
+    const tabParam = params.get('tab') as AdminTabType;
+    if (isOnlyNewsEditor) {
+      setActiveTab(tabParam === 'announcements' ? 'announcements' : 'news');
+      return;
     }
-  }, []);
+    if (tabParam && ['music_moderation', 'musicians', 'users', 'moderation', 'dashboard', 'news', 'announcements'].includes(tabParam)) {
+      setActiveTab(tabParam);
+    }
+  }, [isOnlyNewsEditor]);
 
   // Fetch pending reports badge count for the Moderation tab and pending music releases badge
   useEffect(() => {
@@ -131,40 +150,40 @@ export const AdminView: React.FC = () => {
   // Sidebar item list conforming to the exact requested hierarchy
   const sidebarItems: SidebarItem[] = useMemo(() => {
     return [
-      // 1. Dashboard
-      {
-        id: 'dashboard',
-        label: 'Дашборд',
-        icon: LayoutDashboard,
-        canAccess: isStaff,
-        group: 'main',
-      },
-      // 2. Users
-      {
-        id: 'users',
-        label: 'Пользователи',
-        icon: Users,
-        canAccess: isModerator,
-        group: 'main',
-      },
-      // 2b. Musicians
-      {
-        id: 'musicians',
-        label: 'Музыканты',
-        icon: Users,
-        canAccess: isModerator,
-        group: 'main',
-      },
-      // 2c. Music Moderation
-      {
-        id: 'music_moderation',
-        label: 'Музыкальная модерация',
-        icon: Music,
-        canAccess: isModerator || isContentManager,
-        group: 'main',
-        badge: pendingMusicCount && pendingMusicCount > 0 ? pendingMusicCount : undefined,
-        badgeVariant: 'purple',
-      },
+       // 1. Dashboard
+       {
+         id: 'dashboard',
+         label: 'Дашборд',
+         icon: LayoutDashboard,
+         canAccess: canAccessAdminDashboard,
+         group: 'main',
+       },
+       // 2. Users
+       {
+         id: 'users',
+         label: 'Пользователи',
+         icon: Users,
+         canAccess: isModerator,
+         group: 'main',
+       },
+       // 2b. Musicians
+       {
+         id: 'musicians',
+         label: 'Музыканты',
+         icon: Music,
+         canAccess: isAdmin,
+         group: 'main',
+       },
+       // 2c. Music Moderation
+       {
+         id: 'music_moderation',
+         label: 'Музыкальная модерация',
+         icon: Music,
+         canAccess: isModerator || isContentManager,
+         group: 'main',
+         badge: pendingMusicCount && pendingMusicCount > 0 ? pendingMusicCount : undefined,
+         badgeVariant: 'purple',
+       },
       // 3. Moderation
       {
         id: 'moderation',
@@ -273,7 +292,7 @@ export const AdminView: React.FC = () => {
         group: 'system',
       },
     ];
-  }, [isStaff, isModerator, isContentManager, isNewsEditor, isAdmin, pendingReportsCount, pendingMusicCount]);
+  }, [isStaff, isModerator, isContentManager, isNewsEditor, isAdmin, canAccessAdminDashboard, pendingReportsCount, pendingMusicCount]);
 
   const accessibleItems = useMemo(() => sidebarItems.filter((i) => i.canAccess), [sidebarItems]);
 
@@ -401,7 +420,7 @@ export const AdminView: React.FC = () => {
                   </div>
                   <div>
                     <h2 className="text-xs sm:text-sm font-black text-white font-mono tracking-wider">
-                      DODIK ADMIN
+                      {isOnlyNewsEditor ? 'NEWS EDITOR' : 'DODIK ADMIN'}
                     </h2>
                     <div className="flex items-center gap-1.5 text-[10px] sm:text-xs font-mono text-emerald-400 font-bold">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -444,7 +463,7 @@ export const AdminView: React.FC = () => {
                       : 'bg-blue-500/15 border-blue-500/30 text-blue-300'
                   }`}
                 >
-                  {role}
+                  {isSuperAdmin ? 'SUPER_ADMIN' : isAdmin ? 'ADMIN' : isModerator ? 'MODERATOR' : isNewsEditor ? 'NEWS_EDITOR' : dbUser?.role || 'USER'}
                 </span>
               </div>
             </div>

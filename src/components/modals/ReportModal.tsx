@@ -87,6 +87,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
           targetType,
           targetId: String(targetId),
           reason: selectedReason,
+          subject: targetTitle || undefined,
           description: description.trim() || undefined,
         }),
       });

@@ -601,7 +601,7 @@ export async function runAutoMigrations(pool: Pool) {
         -- 39. Artist / Musician Profiles
         CREATE TABLE IF NOT EXISTS "artist_profiles" (
           "id" serial PRIMARY KEY,
-          "user_id" integer NOT NULL UNIQUE REFERENCES "users"("id") ON DELETE CASCADE,
+          "user_id" integer REFERENCES "users"("id") ON DELETE CASCADE,
           "stage_name" text NOT NULL,
           "slug" text NOT NULL UNIQUE,
           "avatar" text,
@@ -610,6 +610,7 @@ export async function runAutoMigrations(pool: Pool) {
           "created_at" timestamp DEFAULT now(),
           "updated_at" timestamp DEFAULT now()
         );
+        ALTER TABLE "artist_profiles" ALTER COLUMN "user_id" DROP NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS "artist_profiles_user_id_idx" ON "artist_profiles"("user_id");
         CREATE UNIQUE INDEX IF NOT EXISTS "artist_profiles_slug_idx" ON "artist_profiles"("slug");
 
@@ -790,9 +791,11 @@ export async function runAutoMigrations(pool: Pool) {
           "description" text,
           "cover" text,
           "visibility" text NOT NULL DEFAULT 'PUBLIC',
+          "is_collaborative" boolean NOT NULL DEFAULT false,
           "created_at" timestamp DEFAULT now(),
           "updated_at" timestamp DEFAULT now()
         );
+        ALTER TABLE "music_playlists" ADD COLUMN IF NOT EXISTS "is_collaborative" boolean NOT NULL DEFAULT false;
         CREATE INDEX IF NOT EXISTS "music_playlists_user_id_idx" ON "music_playlists"("user_id");
         CREATE INDEX IF NOT EXISTS "music_playlists_visibility_idx" ON "music_playlists"("visibility");
         CREATE INDEX IF NOT EXISTS "music_playlists_created_at_idx" ON "music_playlists"("created_at");
@@ -830,6 +833,7 @@ export async function runAutoMigrations(pool: Pool) {
         CREATE INDEX IF NOT EXISTS "user_music_history_user_track_idx" ON "user_music_history"("user_id", "track_id");
 
         -- 36. Add Missing Columns to existing tables (Idempotent)
+        ALTER TABLE "reports" ADD COLUMN IF NOT EXISTS "subject" text;
         ALTER TABLE "music_releases" ADD COLUMN IF NOT EXISTS "listen_count" integer NOT NULL DEFAULT 0;
         ALTER TABLE "music_tracks" ADD COLUMN IF NOT EXISTS "listen_count" integer NOT NULL DEFAULT 0;
         ALTER TABLE "announcements" ADD COLUMN IF NOT EXISTS "content" text;
@@ -842,6 +846,7 @@ export async function runAutoMigrations(pool: Pool) {
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_warning_reason" text;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "show_adult_content" boolean NOT NULL DEFAULT false;
         ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "music_lyrics_provider" text NOT NULL DEFAULT 'auto';
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "roles" text NOT NULL DEFAULT '["user"]';
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_hidden" boolean NOT NULL DEFAULT false;
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "is_adult" boolean NOT NULL DEFAULT false;
         ALTER TABLE "media" ADD COLUMN IF NOT EXISTS "age_rating" text;
@@ -875,6 +880,19 @@ export async function runAutoMigrations(pool: Pool) {
           "entity_id" = COALESCE("entity_id", "related_entity_id"),
           "metadata" = COALESCE("metadata", "metadata_json")
         WHERE "recipient_user_id" IS NULL OR "message" IS NULL;
+
+        -- Backfill users roles if missing or default single user
+        UPDATE "users" SET "roles" = 
+          CASE 
+            WHEN LOWER("role") = 'super_admin' THEN '["user", "super_admin"]'
+            WHEN LOWER("role") = 'admin' THEN '["user", "admin"]'
+            WHEN LOWER("role") = 'moderator' THEN '["user", "moderator"]'
+            WHEN LOWER("role") = 'news_editor' THEN '["user", "news_editor"]'
+            WHEN LOWER("role") = 'content_manager' THEN '["user", "content_manager"]'
+            WHEN LOWER("role") = 'musician' THEN '["user", "musician"]'
+            ELSE '["user"]'
+          END
+        WHERE "roles" IS NULL OR "roles" = '["user"]' OR "roles" = '["USER"]';
 
         -- 37. Deduplicate existing records before applying unique constraints
         UPDATE "tier_lists" SET visibility = 'FRIENDS' WHERE visibility = 'FRIENDS_ONLY';

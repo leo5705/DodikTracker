@@ -1,6 +1,19 @@
 import { Router, Response } from 'express';
 import crypto from 'crypto';
-import { requireAuth, optionalAuth, AuthRequest, isStaffRole, requireStaff, requireAdminOnly, isAdminRole } from '../../middleware/auth.ts';
+import {
+  requireAuth,
+  optionalAuth,
+  AuthRequest,
+  isStaffRole,
+  requireStaff,
+  requireAdminOnly,
+  isAdminRole,
+  isMusician,
+  getUserRoles,
+  addRole,
+  removeRole,
+  getPrimaryRole,
+} from '../../middleware/auth.ts';
 import { db } from '../../db/index.ts';
 import {
   artistProfiles,
@@ -195,8 +208,7 @@ function slugify(text: string): string {
  */
 function isMusicianOrAdmin(user: any): boolean {
   if (!user) return false;
-  const role = String(user.role || '').toLowerCase();
-  return role === 'musician' || isAdminRole(user.role);
+  return isMusician(user);
 }
 
 /**
@@ -219,7 +231,7 @@ async function getOrCreateArtistProfileByUserId(user: any) {
   const found = await getArtistProfileByUserId(user.id);
   if (found) return found;
 
-  if (isMusicianOrAdmin(user) || isStaffRole(user.role)) {
+  if (isMusician(user) || isStaffRole(user)) {
     let baseSlug = slugify(user.username || `artist-${user.id}`);
     const slugCheck = await db
       .select({ id: artistProfiles.id })
@@ -717,6 +729,11 @@ musicRouter.post('/genres', requireAuth, requireStaff('MANAGE_CONTENT'), async (
 musicRouter.post('/releases', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
+
+    if (!isMusician(user)) {
+      return res.status(403).json({ error: 'Публикация релизов доступна только пользователям с ролью музыканта' });
+    }
+
     const artist = await getOrCreateArtistProfileByUserId(user);
 
     const { title, slug: inputSlug, type, description, cover, releaseDate, status, genreIds, tracks, artistId: bodyArtistId } = req.body;
@@ -1135,6 +1152,10 @@ musicRouter.put('/releases/:id', requireAuth, async (req: AuthRequest, res: Resp
     const user = req.dbUser!;
     const releaseId = parseInt(req.params.id, 10);
 
+    if (!isMusician(user)) {
+      return res.status(403).json({ error: 'Редактирование релизов доступно только пользователям с ролью музыканта' });
+    }
+
     const existing = await db
       .select({
         id: musicReleases.id,
@@ -1374,6 +1395,10 @@ musicRouter.delete('/releases/:id', requireAuth, async (req: AuthRequest, res: R
     const user = req.dbUser!;
     const releaseId = parseInt(req.params.id, 10);
 
+    if (!isMusician(user)) {
+      return res.status(403).json({ error: 'Удаление релизов доступно только пользователям с ролью музыканта' });
+    }
+
     const existing = await db
       .select({
         id: musicReleases.id,
@@ -1411,6 +1436,10 @@ musicRouter.post('/releases/:releaseId/tracks', requireAuth, async (req: AuthReq
   try {
     const user = req.dbUser!;
     const releaseId = parseInt(req.params.releaseId, 10);
+
+    if (!isMusician(user)) {
+      return res.status(403).json({ error: 'Добавление треков доступно только пользователям с ролью музыканта' });
+    }
 
     const existingRelease = await db
       .select({
@@ -1549,6 +1578,10 @@ musicRouter.put('/tracks/:id', requireAuth, async (req: AuthRequest, res: Respon
     const user = req.dbUser!;
     const trackId = parseInt(req.params.id, 10);
 
+    if (!isMusician(user)) {
+      return res.status(403).json({ error: 'Редактирование треков доступно только пользователям с ролью музыканта' });
+    }
+
     const existing = await db
       .select({
         id: musicTracks.id,
@@ -1604,6 +1637,10 @@ musicRouter.delete('/tracks/:id', requireAuth, async (req: AuthRequest, res: Res
   try {
     const user = req.dbUser!;
     const trackId = parseInt(req.params.id, 10);
+
+    if (!isMusician(user)) {
+      return res.status(403).json({ error: 'Удаление треков доступно только пользователям с ролью музыканта' });
+    }
 
     const existing = await db
       .select({
@@ -2689,6 +2726,8 @@ musicRouter.post('/my/tracks/:trackId', requireAuth, async (req: AuthRequest, re
       })
       .onConflictDoNothing();
 
+    musicRecommendationService.invalidateUserCache(user.id);
+
     res.json({
       success: true,
       isFavorite: true,
@@ -2720,6 +2759,8 @@ musicRouter.delete('/my/tracks/:trackId', requireAuth, async (req: AuthRequest, 
           eq(musicFavoriteTracks.trackId, trackId)
         )
       );
+
+    musicRecommendationService.invalidateUserCache(user.id);
 
     res.json({
       success: true,
@@ -3049,17 +3090,25 @@ musicRouter.post('/applications/admin/:id/approve', requireAuth, requireAdminOnl
       .where(eq(musicianApplications.id, appId))
       .returning();
 
-    // 2. Update user role to 'musician' if user is currently regular USER
+    // 2. Add 'musician' role while preserving existing roles
     const [targetUser] = await db
       .select()
       .from(users)
       .where(eq(users.id, application.userId))
       .limit(1);
 
-    if (targetUser && targetUser.role === 'USER') {
+    if (targetUser) {
+      const currentRoles = getUserRoles(targetUser);
+      const nextRoles = addRole(currentRoles, 'musician');
+      const primaryRole = getPrimaryRole(nextRoles);
+
       await db
         .update(users)
-        .set({ role: 'musician', updatedAt: new Date() })
+        .set({
+          roles: JSON.stringify(nextRoles),
+          role: primaryRole,
+          updatedAt: new Date(),
+        })
         .where(eq(users.id, targetUser.id));
     }
 
@@ -3158,6 +3207,151 @@ musicRouter.post('/applications/admin/:id/reject', requireAuth, requireAdminOnly
   }
 });
 
+/**
+ * GET /api/music/admin/musicians
+ * List all users who currently have the musician role with their artist profiles
+ */
+musicRouter.get('/admin/musicians', requireAuth, requireStaff('MANAGE_ROLES'), async (_req: AuthRequest, res: Response) => {
+  try {
+    const allUsers = await db
+      .select({
+        id: users.id,
+        username: users.username,
+        email: users.email,
+        avatar: users.avatar,
+        role: users.role,
+        roles: users.roles,
+        createdAt: users.createdAt,
+      })
+      .from(users);
+
+    const musicianUsers = allUsers.filter((u) => getUserRoles(u).includes('musician'));
+    const userIds = musicianUsers.map((u) => u.id);
+
+    let profiles: any[] = [];
+    if (userIds.length > 0) {
+      profiles = await db
+        .select()
+        .from(artistProfiles)
+        .where(inArray(artistProfiles.userId, userIds));
+    }
+
+    const profileMap = new Map(profiles.map((p) => [p.userId, p]));
+
+    const result = musicianUsers.map((u) => ({
+      ...u,
+      roles: getUserRoles(u),
+      artistProfile: profileMap.get(u.id) || null,
+    }));
+
+    res.json({ musicians: result, total: result.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/music/admin/users/:userId/grant-musician
+ * Manually grant musician role to user
+ */
+musicRouter.post('/admin/users/:userId/grant-musician', requireAuth, requireStaff('MANAGE_ROLES'), async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    const actor = req.dbUser!;
+
+    const [targetUser] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    const currentRoles = getUserRoles(targetUser);
+    const nextRoles = addRole(currentRoles, 'musician');
+    const primaryRole = getPrimaryRole(nextRoles);
+
+    await db
+      .update(users)
+      .set({
+        roles: JSON.stringify(nextRoles),
+        role: primaryRole,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+
+    const existing = await getArtistProfileByUserId(userId);
+    if (!existing) {
+      const cleanSlug = `${targetUser.username.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Math.floor(Math.random() * 899 + 100)}`;
+      await db.insert(artistProfiles).values({
+        userId: targetUser.id,
+        stageName: targetUser.username,
+        slug: cleanSlug,
+        avatar: targetUser.avatar || null,
+        status: 'ACTIVE',
+      });
+    } else {
+      await db
+        .update(artistProfiles)
+        .set({ status: 'ACTIVE', updatedAt: new Date() })
+        .where(eq(artistProfiles.id, existing.id));
+    }
+
+    await logAdminAction({
+      userId: actor.id,
+      action: 'GRANT_MUSICIAN',
+      details: `Вручную выдана роль музыканта пользователю @${targetUser.username}`,
+      ip: req.ip,
+    });
+
+    res.json({ success: true, message: 'Роль музыканта успешно выдана', roles: nextRoles });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/music/admin/users/:userId/revoke-musician
+ * Manually revoke musician role from user
+ */
+musicRouter.post('/admin/users/:userId/revoke-musician', requireAuth, requireStaff('MANAGE_ROLES'), async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    const actor = req.dbUser!;
+
+    const [targetUser] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    const currentRoles = getUserRoles(targetUser);
+    const nextRoles = removeRole(currentRoles, 'musician');
+    const primaryRole = getPrimaryRole(nextRoles);
+
+    await db
+      .update(users)
+      .set({
+        roles: JSON.stringify(nextRoles),
+        role: primaryRole,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+
+    await db
+      .update(artistProfiles)
+      .set({ status: 'SUSPENDED', updatedAt: new Date() })
+      .where(eq(artistProfiles.userId, userId));
+
+    await logAdminAction({
+      userId: actor.id,
+      action: 'REVOKE_MUSICIAN',
+      details: `Вручную снята роль музыканта у пользователя @${targetUser.username}`,
+      ip: req.ip,
+    });
+
+    res.json({ success: true, message: 'Роль музыканта успешно отозвана', roles: nextRoles });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 7. MUSIC STUDIO METRICS & DASHBOARD
 // ==========================================
@@ -3169,6 +3363,11 @@ musicRouter.post('/applications/admin/:id/reject', requireAuth, requireAdminOnly
 musicRouter.get('/studio/releases', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
+
+    if (!isMusician(user)) {
+      return res.status(403).json({ error: 'Доступ к Creative Studio разрешён только пользователям с ролью музыканта' });
+    }
+
     const artist = await getOrCreateArtistProfileByUserId(user);
 
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
@@ -3275,6 +3474,11 @@ musicRouter.get('/studio/releases', requireAuth, async (req: AuthRequest, res: R
 musicRouter.get('/studio/stats', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
+
+    if (!isMusician(user)) {
+      return res.status(403).json({ error: 'Доступ к Creative Studio разрешён только пользователям с ролью музыканта' });
+    }
+
     const artist = await getOrCreateArtistProfileByUserId(user);
 
     if (!artist) {
@@ -6046,6 +6250,265 @@ musicRouter.get('/tracks/:trackId/genius', optionalAuth, async (req: AuthRequest
 });
 
 /**
+ * GET /api/music/resolve-source
+ * Resolves a playable media source (direct or YouTube) on-the-fly for any track metadata
+ * and auto-repairs missing audioFile in database when possible.
+ */
+musicRouter.get('/resolve-source', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const rawTrackId = req.query.trackId ? String(req.query.trackId).trim() : '';
+    const title = req.query.title ? String(req.query.title).trim() : '';
+    const artist = req.query.artist ? String(req.query.artist).trim() : '';
+    const album = req.query.album ? String(req.query.album).trim() : '';
+
+    let numericTrackId: number | null = null;
+    if (rawTrackId && /^\d+$/.test(rawTrackId)) {
+      numericTrackId = parseInt(rawTrackId, 10);
+    }
+
+    // 1. If numeric track ID provided, check existing track in DB
+    if (numericTrackId) {
+      const [existing] = await db
+        .select({
+          id: musicTracks.id,
+          title: musicTracks.title,
+          audioFile: musicTracks.audioFile,
+          slug: musicTracks.slug,
+          duration: musicTracks.duration,
+          artistName: artistProfiles.stageName,
+          releaseTitle: musicReleases.title,
+          releaseCover: musicReleases.cover,
+        })
+        .from(musicTracks)
+        .leftJoin(artistProfiles, eq(musicTracks.artistId, artistProfiles.id))
+        .leftJoin(musicReleases, eq(musicTracks.releaseId, musicReleases.id))
+        .where(eq(musicTracks.id, numericTrackId))
+        .limit(1);
+
+      if (existing) {
+        const audioFile = (existing.audioFile || '').trim();
+        if (audioFile.startsWith('yt_') || audioFile.startsWith('youtube:')) {
+          const videoId = audioFile.replace(/^yt_|^youtube:/, '').trim();
+          if (videoId.length >= 5) {
+            return res.json({
+              playable: true,
+              sourceType: 'youtube',
+              videoId,
+              audioFile: `yt_${videoId}`,
+              title: existing.title,
+              artistName: existing.artistName || artist,
+              releaseTitle: existing.releaseTitle || album,
+              cover: existing.releaseCover,
+              duration: existing.duration,
+            });
+          }
+        } else if (audioFile && !audioFile.startsWith('yt_')) {
+          return res.json({
+            playable: true,
+            sourceType: audioFile.startsWith('http') ? 'external' : 'dodik',
+            url: audioFile.startsWith('/') || audioFile.startsWith('http') ? audioFile : '/' + audioFile,
+            audioFile,
+            title: existing.title,
+            artistName: existing.artistName || artist,
+            releaseTitle: existing.releaseTitle || album,
+            cover: existing.releaseCover,
+            duration: existing.duration,
+          });
+        }
+      }
+    }
+
+    // 2. If rawTrackId is already yt_...
+    if (rawTrackId && rawTrackId.startsWith('yt_')) {
+      const vId = rawTrackId.replace(/^yt_/, '').trim();
+      if (vId.length >= 5) {
+        return res.json({
+          playable: true,
+          sourceType: 'youtube',
+          videoId: vId,
+          audioFile: `yt_${vId}`,
+          title: title || 'Внешний трек',
+          artistName: artist || 'Исполнитель',
+        });
+      }
+    }
+
+    // 3. Search YouTube Music
+    const query = [artist, title].filter(Boolean).join(' ').trim();
+    if (!query) {
+      return res.status(400).json({ error: 'Недостаточно данных для поиска источника', playable: false });
+    }
+
+    console.log(`[MusicRouter] Dynamic source resolution searching YouTube for: "${query}"`);
+    const searchResults = await youtubeMusicService.searchSongs(query, 3);
+    if (searchResults && searchResults.length > 0) {
+      const top = searchResults[0];
+      const videoId = top.videoId;
+      const audioFileKey = `yt_${videoId}`;
+
+      // Auto-repair DB record if numeric track was present
+      if (numericTrackId) {
+        await db
+          .update(musicTracks)
+          .set({
+            audioFile: audioFileKey,
+            slug: sql`COALESCE(slug, ${audioFileKey})`,
+            duration: top.durationSeconds ? Math.round(Number(top.durationSeconds)) : undefined,
+            updatedAt: new Date(),
+          })
+          .where(eq(musicTracks.id, numericTrackId))
+          .catch((e) => console.warn('[MusicRouter] Auto-repair track audioFile error:', e?.message));
+      }
+
+      return res.json({
+        playable: true,
+        sourceType: 'youtube',
+        videoId,
+        audioFile: audioFileKey,
+        title: top.title,
+        artistName: top.artist || artist,
+        releaseTitle: top.album || album,
+        cover: top.thumbnail,
+        duration: top.durationSeconds,
+      });
+    }
+
+    return res.json({
+      playable: false,
+      sourceType: 'none',
+      reason: 'NOT_FOUND_IN_CATALOG',
+      message: `Источник воспроизведения для «${query}» не найден`,
+    });
+  } catch (err: any) {
+    console.error('[MusicRouter] Resolve source error:', err);
+    return res.status(500).json({ error: err?.message || 'Ошибка поиска источника воспроизведения', playable: false });
+  }
+});
+
+/**
+ * GET /api/music/tracks/:trackId/resolve-playback
+ */
+musicRouter.get('/tracks/:trackId/resolve-playback', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const rawId = String(req.params.trackId).trim();
+    if (!rawId) {
+      return res.status(400).json({ error: 'Идентификатор трека обязателен' });
+    }
+
+    let title = req.query.title ? String(req.query.title).trim() : '';
+    let artist = req.query.artist ? String(req.query.artist).trim() : '';
+    let album = req.query.album ? String(req.query.album).trim() : '';
+
+    if (/^\d+$/.test(rawId)) {
+      const numId = parseInt(rawId, 10);
+      const [track] = await db
+        .select({
+          id: musicTracks.id,
+          title: musicTracks.title,
+          audioFile: musicTracks.audioFile,
+          duration: musicTracks.duration,
+          artistName: artistProfiles.stageName,
+          releaseTitle: musicReleases.title,
+          releaseCover: musicReleases.cover,
+        })
+        .from(musicTracks)
+        .leftJoin(artistProfiles, eq(musicTracks.artistId, artistProfiles.id))
+        .leftJoin(musicReleases, eq(musicTracks.releaseId, musicReleases.id))
+        .where(eq(musicTracks.id, numId))
+        .limit(1);
+
+      if (track) {
+        title = title || track.title;
+        artist = artist || track.artistName || '';
+        album = album || track.releaseTitle || '';
+
+        const audioFile = (track.audioFile || '').trim();
+        if (audioFile.startsWith('yt_') || audioFile.startsWith('youtube:')) {
+          const videoId = audioFile.replace(/^yt_|^youtube:/, '').trim();
+          if (videoId.length >= 5) {
+            return res.json({
+              playable: true,
+              sourceType: 'youtube',
+              videoId,
+              audioFile: `yt_${videoId}`,
+              title: track.title,
+              artistName: track.artistName,
+              releaseTitle: track.releaseTitle,
+              cover: track.releaseCover,
+              duration: track.duration,
+            });
+          }
+        } else if (audioFile && !audioFile.startsWith('yt_')) {
+          return res.json({
+            playable: true,
+            sourceType: audioFile.startsWith('http') ? 'external' : 'dodik',
+            url: audioFile.startsWith('/') || audioFile.startsWith('http') ? audioFile : '/' + audioFile,
+            audioFile,
+            title: track.title,
+            artistName: track.artistName,
+            releaseTitle: track.releaseTitle,
+            cover: track.releaseCover,
+            duration: track.duration,
+          });
+        }
+      }
+    } else if (rawId.startsWith('yt_')) {
+      const vId = rawId.replace(/^yt_/, '').trim();
+      return res.json({
+        playable: true,
+        sourceType: 'youtube',
+        videoId: vId,
+        audioFile: `yt_${vId}`,
+        title: title || 'Внешний трек',
+        artistName: artist || 'Исполнитель',
+      });
+    }
+
+    const query = [artist, title].filter(Boolean).join(' ').trim();
+    if (!query) {
+      return res.json({ playable: false, sourceType: 'none', reason: 'NO_INFO' });
+    }
+
+    const searchResults = await youtubeMusicService.searchSongs(query, 3);
+    if (searchResults && searchResults.length > 0) {
+      const top = searchResults[0];
+      const videoId = top.videoId;
+      const audioFileKey = `yt_${videoId}`;
+
+      if (/^\d+$/.test(rawId)) {
+        await db
+          .update(musicTracks)
+          .set({
+            audioFile: audioFileKey,
+            slug: sql`COALESCE(slug, ${audioFileKey})`,
+            duration: top.durationSeconds ? Math.round(Number(top.durationSeconds)) : undefined,
+            updatedAt: new Date(),
+          })
+          .where(eq(musicTracks.id, parseInt(rawId, 10)))
+          .catch(() => {});
+      }
+
+      return res.json({
+        playable: true,
+        sourceType: 'youtube',
+        videoId,
+        audioFile: audioFileKey,
+        title: top.title,
+        artistName: top.artist || artist,
+        releaseTitle: top.album || album,
+        cover: top.thumbnail,
+        duration: top.durationSeconds,
+      });
+    }
+
+    return res.json({ playable: false, sourceType: 'none', reason: 'NOT_FOUND' });
+  } catch (err: any) {
+    console.error('[MusicRouter] Resolve playback error:', err);
+    return res.status(500).json({ error: err?.message || 'Ошибка разрешения источника воспроизведения' });
+  }
+});
+
+/**
  * GET /api/music/external/youtube/search
  * External YouTube Music song search.
  * Returns normalized YouTubeTrackDTO[] without creating DB records or downloading tracks.
@@ -6163,28 +6626,51 @@ musicRouter.get('/recommendations/similar/:trackId', async (req: any, res: Respo
 
 /**
  * POST /api/music/history
- * Record playback event in user_music_history table.
+ * POST /api/music/history/event
+ * Record playback telemetry event (listen start, progress, completion, skip, quick skip, transition)
  */
-musicRouter.post('/history', requireAuth, async (req: AuthRequest, res: Response) => {
+const recordHistoryHandler = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.dbUser!.id;
-    const { trackId, provider, title, artistName, artistId, releaseTitle, releaseCover, durationSeconds } = req.body;
+    const {
+      trackId,
+      provider,
+      title,
+      artistName,
+      artistId,
+      releaseTitle,
+      releaseCover,
+      durationSeconds,
+      playedSeconds,
+      completionRatio,
+      isCompleted,
+      isSkipped,
+      isQuickSkip,
+      contextSource,
+      fromTrackId,
+    } = req.body;
 
     if (!trackId || !title || !artistName) {
       return res.status(400).json({ error: 'Необходимы параметры trackId, title, artistName' });
     }
 
-    await db.insert(userMusicHistory).values({
+    await musicRecommendationService.recordPlaybackEvent({
       userId,
       trackId: String(trackId),
       provider: provider || 'dodik',
-      title,
-      artistName,
+      title: String(title).trim(),
+      artistName: String(artistName).trim(),
       artistId: artistId ? String(artistId) : null,
-      releaseTitle: releaseTitle || null,
+      releaseTitle: releaseTitle ? String(releaseTitle).trim() : null,
       releaseCover: releaseCover || null,
       durationSeconds: durationSeconds ? parseInt(String(durationSeconds), 10) : null,
-      listenedAt: new Date(),
+      playedSeconds: playedSeconds ? parseInt(String(playedSeconds), 10) : null,
+      completionRatio: typeof completionRatio === 'number' ? completionRatio : null,
+      isCompleted: Boolean(isCompleted),
+      isSkipped: Boolean(isSkipped),
+      isQuickSkip: Boolean(isQuickSkip),
+      contextSource: contextSource || 'manual',
+      fromTrackId: fromTrackId ? String(fromTrackId) : null,
     });
 
     return res.json({ ok: true });
@@ -6192,7 +6678,11 @@ musicRouter.post('/history', requireAuth, async (req: AuthRequest, res: Response
     console.error('[MusicRouter] History record error:', err);
     return res.status(500).json({ error: 'Не удалось сохранить историю' });
   }
-});
+};
+
+musicRouter.post('/history', requireAuth, recordHistoryHandler);
+musicRouter.post('/history/event', requireAuth, recordHistoryHandler);
+musicRouter.post('/history/progress', requireAuth, recordHistoryHandler);
 
 /**
  * GET /api/music/external/artist/:provider/:artistId
@@ -6468,7 +6958,7 @@ musicRouter.post('/playlists/import-txt/parse', optionalAuth, parsePlaylistImpor
  */
 async function ensureExternalTrackRegistered(
   tx: any,
-  userId: number,
+  _userId: number,
   trackData: {
     videoId: string;
     title: string;
@@ -6493,9 +6983,9 @@ async function ensureExternalTrackRegistered(
     return existingTrack.id;
   }
 
-  // 2. Find or create external artist profile
+  // 2. Find or create external artist profile (with userId = NULL for external artists!)
   const artistName = String(trackData.artistName || 'Внешний исполнитель').trim();
-  let artistSlug = slugify(artistName);
+  let artistSlug = slugify(artistName) || 'artist';
 
   const [existingArtist] = await tx
     .select({ id: artistProfiles.id })
@@ -6507,12 +6997,13 @@ async function ensureExternalTrackRegistered(
   if (existingArtist) {
     artistId = existingArtist.id;
   } else {
+    const uniqueArtistSlug = `${artistSlug}-ext-${Date.now()}-${Math.floor(Math.random() * 9999 + 1)}`;
     const [createdArtist] = await tx
       .insert(artistProfiles)
       .values({
-        userId,
+        userId: null, // External artists have no Dodik user account
         stageName: artistName,
-        slug: `${artistSlug}-ext-${Math.floor(Math.random() * 899 + 100)}`,
+        slug: uniqueArtistSlug,
         status: 'ACTIVE',
         avatar: trackData.coverUrl || null,
       })
@@ -6521,7 +7012,7 @@ async function ensureExternalTrackRegistered(
   }
 
   // 3. Find or create external release
-  const releaseTitle = String(trackData.album || 'YouTube Music').trim();
+  const releaseTitle = String(trackData.album || 'Внешний сингл').trim();
   const [existingRelease] = await tx
     .select({ id: musicReleases.id })
     .from(musicReleases)
@@ -6532,12 +7023,13 @@ async function ensureExternalTrackRegistered(
   if (existingRelease) {
     releaseId = existingRelease.id;
   } else {
+    const uniqueReleaseSlug = `${slugify(releaseTitle) || 'release'}-ext-${Date.now()}-${Math.floor(Math.random() * 9999 + 1)}`;
     const [createdRelease] = await tx
       .insert(musicReleases)
       .values({
         artistId,
         title: releaseTitle,
-        slug: `${slugify(releaseTitle)}-ext-${Math.floor(Math.random() * 899 + 100)}`,
+        slug: uniqueReleaseSlug,
         type: 'SINGLE',
         cover: trackData.coverUrl || null,
         status: 'PUBLISHED',
@@ -6546,13 +7038,23 @@ async function ensureExternalTrackRegistered(
     releaseId = createdRelease.id;
   }
 
-  // 4. Create track row in musicTracks
+  // 4. Create track row in musicTracks (re-check in case created concurrently)
+  const [existingTrackAfter] = await tx
+    .select({ id: musicTracks.id })
+    .from(musicTracks)
+    .where(or(eq(musicTracks.audioFile, audioFileKey), eq(musicTracks.slug, audioFileKey)))
+    .limit(1);
+
+  if (existingTrackAfter) {
+    return existingTrackAfter.id;
+  }
+
   const [newTrack] = await tx
     .insert(musicTracks)
     .values({
       releaseId,
       artistId,
-      title: String(trackData.title).trim(),
+      title: String(trackData.title).trim() || 'Внешний трек',
       slug: audioFileKey,
       audioFile: audioFileKey,
       duration: trackData.duration ? Math.round(Number(trackData.duration)) : null,
@@ -6566,7 +7068,7 @@ async function ensureExternalTrackRegistered(
 const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => {
   try {
     const user = req.dbUser!;
-    const { mode, playlistId: existingPlaylistId, title, description, isCollaborative, tracks, trackIds } = req.body;
+    const { mode, playlistId: existingPlaylistId, title, description, visibility, isCollaborative, tracks, trackIds, cover } = req.body;
 
     const trackItems: any[] = Array.isArray(tracks) && tracks.length > 0 ? tracks : Array.isArray(trackIds) ? trackIds : [];
 
@@ -6577,97 +7079,109 @@ const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => 
     let targetPlaylistId = 0;
     let added = 0;
     let skipped = 0;
+    let firstCoverUrl: string | null = null;
 
-    // Use transaction to ensure either everything succeeds or rolls back atomically
-    await db.transaction(async (tx) => {
-      if (mode === 'EXISTING' || existingPlaylistId) {
-        const plId = parseInt(String(existingPlaylistId), 10);
-        if (isNaN(plId) || plId <= 0) {
-          throw new Error('Неверный идентификатор существующего плейлиста');
-        }
+    const validVisibility = (visibility && ['PUBLIC', 'UNLISTED', 'PRIVATE'].includes(visibility)) ? visibility : 'PUBLIC';
 
-        const [playlist] = await tx
-          .select()
-          .from(musicPlaylists)
-          .where(eq(musicPlaylists.id, plId))
-          .limit(1);
-
-        if (!playlist) {
-          throw new Error('Плейлист не найден');
-        }
-
-        const isOwner = playlist.userId === user.id;
-        const isStaff = isStaffRole(user.role);
-
-        let canAdd = isOwner || isStaff;
-        if (!canAdd && playlist.isCollaborative) {
-          const [member] = await tx
-            .select()
-            .from(musicPlaylistMembers)
-            .where(
-              and(
-                eq(musicPlaylistMembers.playlistId, plId),
-                eq(musicPlaylistMembers.userId, user.id)
-              )
-            )
-            .limit(1);
-          canAdd = member ? member.canAddTracks : true;
-        }
-
-        if (!canAdd) {
-          throw new Error('У вас нет прав на добавление треков в этот плейлист');
-        }
-
-        targetPlaylistId = plId;
-      } else {
-        // Create a new playlist
-        if (!title || typeof title !== 'string' || !title.trim()) {
-          throw new Error('Название нового плейлиста обязательно');
-        }
-
-        const [newPlaylist] = await tx
-          .insert(musicPlaylists)
-          .values({
-            userId: user.id,
-            title: title.trim(),
-            description: description?.trim() || null,
-            visibility: 'PUBLIC',
-            isCollaborative: Boolean(isCollaborative),
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .returning();
-
-        targetPlaylistId = newPlaylist.id;
+    if (mode === 'EXISTING' || existingPlaylistId) {
+      const plId = parseInt(String(existingPlaylistId), 10);
+      if (isNaN(plId) || plId <= 0) {
+        return res.status(400).json({ error: 'Неверный идентификатор существующего плейлиста' });
       }
 
-      // Get current max position
-      const [maxPosRes] = await tx
-        .select({ maxPos: sql<number>`COALESCE(MAX(position), 0)` })
-        .from(musicPlaylistTracks)
-        .where(eq(musicPlaylistTracks.playlistId, targetPlaylistId));
+      const [playlist] = await db
+        .select()
+        .from(musicPlaylists)
+        .where(eq(musicPlaylists.id, plId))
+        .limit(1);
 
-      let currentPos = Number(maxPosRes?.maxPos || 0);
+      if (!playlist) {
+        return res.status(404).json({ error: 'Плейлист не найден' });
+      }
 
-      for (let i = 0; i < trackItems.length; i++) {
+      const isOwner = playlist.userId === user.id;
+      const isStaff = isStaffRole(user.role);
+
+      let canAdd = isOwner || isStaff;
+      if (!canAdd && playlist.isCollaborative) {
+        const [member] = await db
+          .select()
+          .from(musicPlaylistMembers)
+          .where(
+            and(
+              eq(musicPlaylistMembers.playlistId, plId),
+              eq(musicPlaylistMembers.userId, user.id)
+            )
+          )
+          .limit(1);
+        canAdd = member ? member.canAddTracks : true;
+      }
+
+      if (!canAdd) {
+        return res.status(403).json({ error: 'У вас нет прав на добавление треков в этот плейлист' });
+      }
+
+      targetPlaylistId = plId;
+    } else {
+      // 1. Create the new playlist FIRST (isolated from track additions)
+      if (!title || typeof title !== 'string' || !title.trim()) {
+        return res.status(400).json({ error: 'Название нового плейлиста обязательно' });
+      }
+
+      const trimmedTitle = title.trim().slice(0, 100);
+      const trimmedDesc = description && typeof description === 'string' && description.trim() ? description.trim().slice(0, 1000) : null;
+      const initialCover = cover && typeof cover === 'string' && cover.trim() ? cover.trim().slice(0, 500) : null;
+
+      const [newPlaylist] = await db
+        .insert(musicPlaylists)
+        .values({
+          userId: user.id,
+          title: trimmedTitle,
+          description: trimmedDesc,
+          cover: initialCover,
+          visibility: validVisibility,
+          isCollaborative: Boolean(isCollaborative),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      targetPlaylistId = newPlaylist.id;
+    }
+
+    // 2. Determine current max position in target playlist
+    const [maxPosRes] = await db
+      .select({ maxPos: sql<number>`COALESCE(MAX(position), 0)` })
+      .from(musicPlaylistTracks)
+      .where(eq(musicPlaylistTracks.playlistId, targetPlaylistId));
+
+    let currentPos = Number(maxPosRes?.maxPos || 0);
+
+    // 3. Add tracks one by one with individual error isolation
+    for (let i = 0; i < trackItems.length; i++) {
+      try {
         const rawItem = trackItems[i];
         let targetTrackId: number | null = null;
+        let trackCover: string | null = null;
 
         if (typeof rawItem === 'number' || (typeof rawItem === 'string' && /^\d+$/.test(rawItem))) {
           targetTrackId = parseInt(String(rawItem), 10);
         } else if (typeof rawItem === 'object' && rawItem !== null) {
           if (rawItem.numericTrackId && typeof rawItem.numericTrackId === 'number') {
             targetTrackId = rawItem.numericTrackId;
+            trackCover = rawItem.coverUrl || rawItem.thumbnail || null;
           } else if (rawItem.id && typeof rawItem.id === 'number') {
             targetTrackId = rawItem.id;
+            trackCover = rawItem.coverUrl || rawItem.thumbnail || null;
           } else if (rawItem.videoId || (typeof rawItem.id === 'string' && rawItem.id.startsWith('yt_'))) {
             const vId = rawItem.videoId || String(rawItem.id).replace(/^yt_/, '');
-            targetTrackId = await ensureExternalTrackRegistered(tx, user.id, {
+            trackCover = rawItem.coverUrl || rawItem.thumbnail || null;
+            targetTrackId = await ensureExternalTrackRegistered(db, user.id, {
               videoId: vId,
               title: rawItem.title || 'Внешний трек',
               artistName: rawItem.artistName || rawItem.artist || 'Исполнитель',
               album: rawItem.album || rawItem.releaseTitle || null,
-              coverUrl: rawItem.coverUrl || rawItem.thumbnail || null,
+              coverUrl: trackCover,
               duration: rawItem.duration || rawItem.durationSeconds || null,
             });
           }
@@ -6678,8 +7192,8 @@ const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => 
           continue;
         }
 
-        // Check if track exists in musicTracks
-        const [track] = await tx
+        // Verify track exists in musicTracks
+        const [track] = await db
           .select({ id: musicTracks.id, title: musicTracks.title })
           .from(musicTracks)
           .where(eq(musicTracks.id, targetTrackId))
@@ -6691,7 +7205,7 @@ const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => 
         }
 
         // Check if already in playlist
-        const [exists] = await tx
+        const [exists] = await db
           .select({ id: musicPlaylistTracks.id })
           .from(musicPlaylistTracks)
           .where(
@@ -6708,7 +7222,7 @@ const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => 
         }
 
         currentPos++;
-        await tx
+        await db
           .insert(musicPlaylistTracks)
           .values({
             playlistId: targetPlaylistId,
@@ -6720,19 +7234,45 @@ const executePlaylistImportHandler = async (req: AuthRequest, res: Response) => 
           .onConflictDoNothing();
 
         added++;
-      }
 
-      await tx
+        if (!firstCoverUrl && trackCover) {
+          firstCoverUrl = trackCover;
+        }
+      } catch (trackErr: any) {
+        console.warn(`[PlaylistImport] Track at index ${i} failed to register/insert:`, trackErr?.message);
+        skipped++;
+      }
+    }
+
+    // 4. If new playlist has no cover and we found a cover from the tracks, set it
+    if (firstCoverUrl) {
+      await db
+        .update(musicPlaylists)
+        .set({
+          cover: sql`COALESCE(cover, ${firstCoverUrl})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(musicPlaylists.id, targetPlaylistId));
+    } else {
+      await db
         .update(musicPlaylists)
         .set({ updatedAt: new Date() })
         .where(eq(musicPlaylists.id, targetPlaylistId));
-    });
+    }
+
+    // 5. Invalidate taste profile / recommendation cache
+    try {
+      musicRecommendationService.invalidateUserCache(user.id);
+    } catch {
+      // Ignore recommendation cache error
+    }
 
     return res.json({
       success: true,
       playlistId: targetPlaylistId,
       added,
       skipped,
+      total: trackItems.length,
     });
   } catch (err: any) {
     console.error('Error executing playlist import:', err);

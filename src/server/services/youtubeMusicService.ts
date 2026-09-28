@@ -98,8 +98,8 @@ export class YouTubeMusicService {
   private ytmusic: YTMusic | null = null;
   private initPromise: Promise<YTMusic> | null = null;
   private cache = new Map<string, { data: YouTubeTrackDTO[]; expiresAt: number }>();
-  private readonly MAX_CACHE_ENTRIES = 500;
-  private readonly CACHE_TTL_MS = 60 * 1000; // 60 seconds
+  private readonly MAX_CACHE_ENTRIES = 2000;
+  private readonly CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes cache for fast repeat searches
 
   /**
    * Initializes and returns the singleton YTMusic client instance.

@@ -7,6 +7,13 @@ import { FullscreenMusicPlayer } from '../components/music/FullscreenMusicPlayer
 import { FullscreenLyricsOverlay } from '../components/music/FullscreenLyricsOverlay.tsx';
 import { getBestMusicImageUrl } from '../utils/musicImageUtils.ts';
 import {
+  resolvePlaybackSource,
+  extractYouTubeVideoId,
+  type PlaybackSourceResolution,
+} from '../utils/musicPlaybackResolver.ts';
+
+export { resolvePlaybackSource, extractYouTubeVideoId, type PlaybackSourceResolution };
+import {
   Play,
   Pause,
   SkipBack,
@@ -29,7 +36,7 @@ import {
   Loader2,
 } from 'lucide-react';
 
-export type TrackSource = 'dodik' | 'youtube';
+export type TrackSource = 'dodik' | 'youtube' | 'external';
 
 export interface ExternalYouTubeTrack {
   source: 'youtube';
@@ -94,43 +101,37 @@ export function convertYouTubeTrackToPlayerTrack(yt: ExternalYouTubeTrack): Trac
 }
 
 export function normalizePlayerTrack(track: Track): Track {
-  const hasAudioFile = Boolean(track.audioFile && track.audioFile.trim() !== '');
-  const isExplicitDodik = (track.source as string) === 'dodik' || (track.source as string) === 'local';
+  const resolution = resolvePlaybackSource(track);
 
-  const isYt =
-    track.source === 'youtube' ||
-    (typeof track.id === 'string' && track.id.startsWith('yt_')) ||
-    (!isExplicitDodik && !hasAudioFile && Boolean(track.videoId));
-
-  const videoId =
-    track.videoId ||
-    (typeof track.id === 'string' && track.id.startsWith('yt_')
-      ? track.id.replace(/^yt_/, '')
-      : undefined);
-
-  let audioFile = track.audioFile || '';
-  if (audioFile && !audioFile.startsWith('/') && !audioFile.startsWith('http://') && !audioFile.startsWith('https://')) {
-    audioFile = '/' + audioFile;
-  }
-
-  if (isYt && videoId) {
+  if (resolution.sourceType === 'youtube' && resolution.videoId) {
     return {
       ...track,
-      id: typeof track.id === 'string' && track.id.startsWith('yt_') ? track.id : `yt_${videoId}`,
       source: 'youtube',
-      videoId,
-      youtubeUrl: track.youtubeUrl || `https://www.youtube.com/watch?v=${videoId}`,
+      videoId: resolution.videoId,
+      youtubeUrl: track.youtubeUrl || resolution.url || `https://www.youtube.com/watch?v=${resolution.videoId}`,
       releaseCover: track.releaseCover || track.thumbnail || null,
       thumbnail: track.thumbnail || track.releaseCover || null,
       artistName: track.artistName || 'Исполнитель',
       releaseTitle: track.releaseTitle || track.album || 'Сингл',
+      audioFile: track.audioFile || `yt_${resolution.videoId}`,
+      playable: true,
+    };
+  }
+
+  if (resolution.playable && resolution.url) {
+    return {
+      ...track,
+      source: resolution.sourceType === 'external' ? 'external' : 'dodik',
+      audioFile: resolution.url,
+      playable: true,
     };
   }
 
   return {
     ...track,
     source: track.source || 'dodik',
-    audioFile,
+    audioFile: track.audioFile || '',
+    playable: false,
   };
 }
 
@@ -415,23 +416,76 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     reported: boolean;
   } | null>(null);
 
+  const previousTrackDataRef = useRef<{
+    track: Track;
+    startTime: number;
+    playedSeconds: number;
+  } | null>(null);
+
   useEffect(() => {
-    currentTrackRef.current = currentTrack;
-    if (currentTrack && dbUser) {
-      authFetch('/api/music/history', {
+    // When track transitions or finishes, report outcome of previous track
+    if (previousTrackDataRef.current && dbUser) {
+      const prev = previousTrackDataRef.current;
+      const elapsed = Math.max(0, (Date.now() - prev.startTime) / 1000);
+      const played = Math.max(prev.playedSeconds, elapsed);
+      const totalDur = prev.track.duration && prev.track.duration > 0 ? prev.track.duration : 180;
+      const ratio = Math.min(1.0, played / totalDur);
+      const isCompleted = ratio >= 0.85 || played >= 180;
+      const isQuickSkip = !isCompleted && played < 15;
+      const isSkipped = !isCompleted && played < totalDur * 0.6;
+
+      authFetch('/api/music/history/progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          trackId: currentTrack.id,
-          provider: currentTrack.source || 'dodik',
-          title: currentTrack.title,
-          artistName: currentTrack.artistName || 'Исполнитель',
-          artistId: currentTrack.artistId || null,
-          releaseTitle: currentTrack.releaseTitle || null,
-          releaseCover: currentTrack.releaseCover || currentTrack.thumbnail || null,
-          durationSeconds: currentTrack.duration || null,
+          trackId: prev.track.id,
+          provider: prev.track.source || 'dodik',
+          title: prev.track.title,
+          artistName: prev.track.artistName || 'Исполнитель',
+          artistId: prev.track.artistId || null,
+          releaseTitle: prev.track.releaseTitle || null,
+          releaseCover: prev.track.releaseCover || prev.track.thumbnail || null,
+          durationSeconds: prev.track.duration || null,
+          playedSeconds: Math.round(played),
+          completionRatio: Number(ratio.toFixed(3)),
+          isCompleted,
+          isSkipped,
+          isQuickSkip,
+          contextSource: 'queue',
+          fromTrackId: null,
         }),
       }).catch(() => {});
+    }
+
+    const previousId = previousTrackDataRef.current?.track.id ? String(previousTrackDataRef.current.track.id) : null;
+
+    currentTrackRef.current = currentTrack;
+    if (currentTrack) {
+      previousTrackDataRef.current = {
+        track: currentTrack,
+        startTime: Date.now(),
+        playedSeconds: 0,
+      };
+
+      if (dbUser) {
+        authFetch('/api/music/history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            trackId: currentTrack.id,
+            provider: currentTrack.source || 'dodik',
+            title: currentTrack.title,
+            artistName: currentTrack.artistName || 'Исполнитель',
+            artistId: currentTrack.artistId || null,
+            releaseTitle: currentTrack.releaseTitle || null,
+            releaseCover: currentTrack.releaseCover || currentTrack.thumbnail || null,
+            durationSeconds: currentTrack.duration || null,
+            fromTrackId: previousId,
+          }),
+        }).catch(() => {});
+      }
+    } else {
+      previousTrackDataRef.current = null;
     }
   }, [currentTrack?.id, dbUser?.id]);
 
@@ -673,9 +727,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
       const cur = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
       if (!cur || cur.source === 'youtube') return;
-      const src = audioNode.getAttribute('src');
+      const src = audioNode.getAttribute('src') || audioNode.src || '';
       // If external track or no audio file src was set, ignore HTMLAudioElement error event
-      if (!src || src === '' || src === window.location.href) {
+      if (!src || src === '' || src === window.location.href || src.endsWith('/')) {
         return;
       }
       console.warn('[MusicPlayer] HTMLAudioElement error:', e);
@@ -684,7 +738,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       const fallbackVideoId = cur.videoId || (cur.youtubeUrl ? extractYouTubeVideoId(cur.youtubeUrl) : null);
       if (fallbackVideoId) {
         console.info('[MusicPlayer] Direct audio failed, attempting YouTube fallback for:', cur.title);
-        setCurrentTrack((prev) => (prev ? { ...prev, source: 'youtube', videoId: fallbackVideoId } : null));
+        const resolved = { ...cur, source: 'youtube' as const, videoId: fallbackVideoId, playable: true };
+        currentTrackRef.current = resolved;
+        setCurrentTrack(resolved);
         initOrGetYouTubePlayer(fallbackVideoId, true);
         return;
       }
@@ -906,12 +962,20 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           }
         }
 
-        let container = document.getElementById('dodik-yt-player-container');
         const wrapper = document.getElementById('dodik-yt-player-container-wrapper');
-        if (!container && wrapper) {
+        if (wrapper) {
+          if (ytPlayerRef.current) {
+            try {
+              if (typeof ytPlayerRef.current.destroy === 'function') {
+                ytPlayerRef.current.destroy();
+              }
+            } catch {}
+            ytPlayerRef.current = null;
+          }
           wrapper.innerHTML = '<div id="dodik-yt-player-container"></div>';
-          container = document.getElementById('dodik-yt-player-container');
         }
+
+        const container = document.getElementById('dodik-yt-player-container');
         if (!container) return;
 
         const validOrigin =
@@ -977,11 +1041,13 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
               const track = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
               if (!track) return;
 
-              // Fallback check: If YouTube fails, check if track has an audioFile source (HTML5 Audio fallback)
+              // Fallback check: If YouTube fails, check if track has a direct audioFile source (HTML5 Audio fallback)
               const directAudioSrc = (track.audioFile || '').trim();
-              if (directAudioSrc && directAudioSrc !== '' && directAudioSrc !== window.location.href) {
+              if (directAudioSrc && !directAudioSrc.startsWith('yt_') && directAudioSrc !== '' && directAudioSrc !== window.location.href) {
                 console.info('[MusicPlayer] YouTube error received, attempting HTML5 audio fallback for:', track.title);
-                setCurrentTrack((prev) => (prev ? { ...prev, source: 'dodik' } : null));
+                const resolved = { ...track, source: 'dodik' as const };
+                currentTrackRef.current = resolved;
+                setCurrentTrack(resolved);
                 setPlaybackStatus('loading');
                 if (audioRef.current) {
                   audioRef.current.src = directAudioSrc;
@@ -1002,7 +1068,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
                 return;
               }
 
-              // No alternative provider available -> dispatch error & advance if queue permits
               handleTrackPlaybackFailure(track, code);
             },
           },
@@ -1052,7 +1117,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
 
     const nextAudioSrc = (nextTrack.audioFile || '').trim();
-    if (!nextAudioSrc) return;
+    if (!nextAudioSrc || nextAudioSrc.startsWith('yt_')) return;
 
     crossfadeStartedRef.current = true;
     console.info(`[MusicPlayer] Initiating crossfade from current track to next track: «${nextTrack.title}»`);
@@ -1095,7 +1160,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
             fadeOutAudio.pause();
             fadeOutAudio.removeAttribute('src');
-            fadeOutAudio.load();
 
             // Swap active node references
             audioRef.current = fadeInAudio;
@@ -1103,6 +1167,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
             fadeInAudio.volume = maxVolume;
 
+            currentTrackRef.current = nextTrack;
             setCurrentTrack(nextTrack);
             setQueueIndex(nextIdx);
             setCurrentTime(0);
@@ -1133,7 +1198,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         } else {
           initOrGetYouTubePlayer(curTrack.videoId, true);
         }
-      } else if (audioRef.current && curTrack.audioFile) {
+      } else if (audioRef.current && curTrack.audioFile && !curTrack.audioFile.startsWith('yt_')) {
         audioRef.current.currentTime = 0;
         audioRef.current
           .play()
@@ -1175,6 +1240,37 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   };
 
+  const handleUnplayable = (track: Track) => {
+    console.warn(`[MusicPlayer] Track "${track.title}" has no playable audio source.`);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
+    if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
+      try {
+        ytPlayerRef.current.pauseVideo();
+      } catch {}
+    }
+    setPlaybackStatus('error');
+    setPlaybackError({
+      trackId: track.id,
+      trackTitle: track.title,
+      reason: 'unplayable',
+      message: `Источник воспроизведения для трека «${track.title}» недоступен`,
+      canOpenExternal: false,
+      provider: track.source,
+    });
+    setIsPlaying(false);
+    window.dispatchEvent(
+      new CustomEvent('notification:toast', {
+        detail: {
+          type: 'warning',
+          message: `Источник воспроизведения для трека «${track.title}» недоступен`,
+        },
+      })
+    );
+  };
+
   const playTrackInternal = (rawTrack: Track, rawQueue?: Track[], newRelease?: ReleaseInfo | null) => {
     // Clear crossfade timers and stop fading-in audio to prevent bleeding
     if (crossfadeTimerRef.current) {
@@ -1184,13 +1280,18 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     if (crossfadeAudioRef.current) {
       crossfadeAudioRef.current.pause();
       crossfadeAudioRef.current.removeAttribute('src');
-      crossfadeAudioRef.current.load();
     }
     crossfadeStartedRef.current = false;
 
     const track = normalizePlayerTrack(rawTrack);
+    const playbackRes = resolvePlaybackSource(track);
+
+    console.log(
+      `[MusicPlayer] Resolving playback for track #${track.id}: "${track.title}" by "${track.artistName}". SourceType: ${playbackRes.sourceType}, Playable: ${playbackRes.playable}`
+    );
+
     const finalQueue = rawQueue && rawQueue.length > 0 ? rawQueue.map(normalizePlayerTrack) : [track];
-    const trackIdx = finalQueue.findIndex((t) => t.id === track.id);
+    const trackIdx = finalQueue.findIndex((t) => String(t.id) === String(track.id));
 
     setQueue(finalQueue);
     setQueueIndex(trackIdx >= 0 ? trackIdx : 0);
@@ -1205,7 +1306,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
 
     const isSameTrack = currentTrack?.id === track.id;
-    if (isSameTrack) {
+    if (isSameTrack && currentTrack?.source === track.source && playbackRes.playable) {
       togglePlayPause();
       return;
     }
@@ -1213,25 +1314,70 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     // Reset error state and start loading
     consecutiveErrorsRef.current = 0;
     setPlaybackError(null);
-    setPlaybackStatus('loading');
+    currentTrackRef.current = track;
     setCurrentTrack(track);
     setCurrentTime(0);
     setDuration(track.duration || 0);
 
-    if (track.playable === false) {
-      handleTrackPlaybackFailure(track, 'unplayable');
+    // If unplayable, attempt dynamic on-the-fly resolution
+    if (!playbackRes.playable) {
+      const title = track.title || '';
+      const artist = track.artistName || newRelease?.artistName || '';
+      const album = track.releaseTitle || track.album || newRelease?.title || '';
+
+      if (title) {
+        console.info(`[MusicPlayer] Attempting on-the-fly source resolution for «${title}» by «${artist}»...`);
+        setPlaybackStatus('loading');
+
+        const queryParams = new URLSearchParams();
+        queryParams.set('title', title);
+        if (artist) queryParams.set('artist', artist);
+        if (album) queryParams.set('album', album);
+        if (track.id && (typeof track.id === 'number' || /^\d+$/.test(String(track.id)))) {
+          queryParams.set('trackId', String(track.id));
+        }
+
+        fetch(`/api/music/resolve-source?${queryParams.toString()}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data && data.playable && data.videoId) {
+              const resolvedTrack: Track = {
+                ...track,
+                source: 'youtube',
+                videoId: data.videoId,
+                youtubeUrl: `https://www.youtube.com/watch?v=${data.videoId}`,
+                audioFile: `yt_${data.videoId}`,
+                duration: track.duration || data.duration || null,
+                playable: true,
+              };
+              currentTrackRef.current = resolvedTrack;
+              setCurrentTrack(resolvedTrack);
+              setPlaybackStatus('loading');
+              initOrGetYouTubePlayer(data.videoId, true);
+              return;
+            }
+            handleUnplayable(track);
+          })
+          .catch(() => {
+            handleUnplayable(track);
+          });
+        return;
+      }
+
+      handleUnplayable(track);
       return;
     }
 
-    if (track.source === 'youtube' && track.videoId) {
+    setPlaybackStatus('loading');
+
+    if (playbackRes.sourceType === 'youtube' && playbackRes.videoId) {
       // Pause HTMLAudioElement and clear src so it never triggers playback errors
       if (audioRef.current) {
         audioRef.current.pause();
-        audioRef.current.removeAttribute('src');
-        audioRef.current.load();
+        audioRef.current.src = '';
       }
-      initOrGetYouTubePlayer(track.videoId, true);
-    } else {
+      initOrGetYouTubePlayer(playbackRes.videoId, true);
+    } else if (playbackRes.url) {
       // Dodik / Direct Audio Track
       if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
         try {
@@ -1239,23 +1385,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         } catch {}
       }
 
-      const audioSrc = (track.audioFile || '').trim();
-      if (!audioSrc) {
-        // Fallback check: Does track have YouTube backup videoId or URL?
-        const fallbackVideoId = track.videoId || (track.youtubeUrl ? extractYouTubeVideoId(track.youtubeUrl) : null);
-        if (fallbackVideoId) {
-          console.info('[MusicPlayer] Dodik track has no audio file, falling back to YouTube for:', track.title);
-          setCurrentTrack((prev) => (prev ? { ...prev, source: 'youtube', videoId: fallbackVideoId } : null));
-          initOrGetYouTubePlayer(fallbackVideoId, true);
-          return;
-        }
-
-        handleTrackPlaybackFailure(track, 'audio_missing');
-        return;
-      }
-
       if (audioRef.current) {
-        audioRef.current.src = audioSrc;
+        audioRef.current.src = playbackRes.url;
         audioRef.current.currentTime = 0;
         audioRef.current.volume = isMuted ? 0 : volume;
         audioRef.current
@@ -1267,13 +1398,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           })
           .catch((e) => {
             console.warn('[MusicPlayer] Playback start error:', e);
-            // Check if YouTube fallback is possible
-            const fallbackVideoId = track.videoId || (track.youtubeUrl ? extractYouTubeVideoId(track.youtubeUrl) : null);
-            if (fallbackVideoId) {
-              setCurrentTrack((prev) => (prev ? { ...prev, source: 'youtube', videoId: fallbackVideoId } : null));
-              initOrGetYouTubePlayer(fallbackVideoId, true);
-              return;
-            }
             handleTrackPlaybackFailure(track, 'audio_missing');
           });
       }
@@ -1354,10 +1478,11 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const togglePlayPause = () => {
     if (!currentTrack) return;
     const track = normalizePlayerTrack(currentTrack);
+    const resolution = resolvePlaybackSource(track);
 
-    if (track.source === 'youtube' && track.videoId) {
+    if (resolution.sourceType === 'youtube' && resolution.videoId) {
       if (!ytPlayerRef.current) {
-        initOrGetYouTubePlayer(track.videoId, true);
+        initOrGetYouTubePlayer(resolution.videoId, true);
         return;
       }
       if (isPlaying) {
@@ -1371,17 +1496,14 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
         setIsPlaying(true);
       }
-    } else {
+    } else if (resolution.playable && resolution.url) {
       if (!audioRef.current) return;
       if (isPlaying) {
         audioRef.current.pause();
         setIsPlaying(false);
       } else {
-        const audioSrc = (track.audioFile || '').trim();
-        if (!audioSrc) {
-          console.warn('[MusicPlayer] Dodik track has no audio source to play:', track.title);
-          setIsPlaying(false);
-          return;
+        if (!audioRef.current.src || audioRef.current.src !== resolution.url) {
+          audioRef.current.src = resolution.url;
         }
         audioRef.current
           .play()
@@ -1391,6 +1513,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
             setIsPlaying(false);
           });
       }
+    } else {
+      playTrackInternal(track, queue);
     }
   };
 
