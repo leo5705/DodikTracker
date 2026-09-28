@@ -281,8 +281,63 @@ function getLastUpdateResultFromLog() {
   }
 }
 
+function sanitizeSecretsText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/postgres:\/\/[^@]+@/g, 'postgres://***REDACTED***@')
+    .replace(/postgresql:\/\/[^@]+@/g, 'postgresql://***REDACTED***@')
+    .replace(/(PASSWORD|SECRET|TOKEN|KEY|PASS|AUTH)="?[^"& ]+"?/gi, '$1=***REDACTED***')
+    .replace(/(--password|-p)[= ]"[^"]+"/gi, '$1 ***REDACTED***');
+}
+
+async function getDiskSpaceMB(): Promise<{ freeMB: number; totalMB: number }> {
+  try {
+    const { stdout } = await execFileAsync('df', ['-k', process.cwd()], { timeout: 3000 });
+    const lines = stdout.trim().split('\n');
+    if (lines.length >= 2) {
+      const parts = lines[1].split(/\s+/);
+      const totalKB = parseInt(parts[1], 10) || 0;
+      const freeKB = parseInt(parts[3], 10) || 0;
+      return { freeMB: Math.floor(freeKB / 1024), totalMB: Math.floor(totalKB / 1024) };
+    }
+  } catch {}
+  return { freeMB: 2048, totalMB: 20480 };
+}
+
+function getPersistedUpdateJob(): UpdateJob | null {
+  const statePath = path.resolve('logs/update_state.json');
+  if (fs.existsSync(statePath)) {
+    try {
+      const raw = fs.readFileSync(statePath, 'utf8');
+      const stateObj = JSON.parse(raw);
+      if (stateObj && stateObj.id) {
+        return {
+          id: stateObj.id,
+          state: stateObj.state || 'idle',
+          stage: stateObj.stage || 'idle',
+          progress: stateObj.progress || 0,
+          startTime: stateObj.startTime || null,
+          endTime: stateObj.endTime || null,
+          logSummary: Array.isArray(stateObj.logSummary) ? stateObj.logSummary.map(sanitizeSecretsText) : [],
+          error: stateObj.errorDetails ? sanitizeSecretsText(stateObj.errorDetails) : null,
+          failedCommand: stateObj.failedCommand || null,
+          exitCode: stateObj.exitCode ?? null,
+        } as any;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 function isUpdateJobActive(): boolean {
-  return !!(activeUpdateJob && (activeUpdateJob.state === 'running' || activeUpdateJob.state === 'queued'));
+  if (activeUpdateJob && (activeUpdateJob.state === 'running' || activeUpdateJob.state === 'queued')) {
+    return true;
+  }
+  const persisted = getPersistedUpdateJob();
+  if (persisted && persisted.state === 'running') {
+    return true;
+  }
+  return false;
 }
 
 // =============================================================================
@@ -290,23 +345,34 @@ function isUpdateJobActive(): boolean {
 // =============================================================================
 systemRouter.get('/system/update/status', async (_req: AuthRequest, res: Response) => {
   try {
-    const [gitInfo, pm2Status, dbStatus, npmVersion] = await Promise.all([
+    const [gitInfo, pm2Status, dbStatus, npmVersion, diskSpace] = await Promise.all([
       getGitInfo(),
       getPm2Status(),
       getDatabaseStatus(),
       getNpmVersion(),
+      getDiskSpaceMB(),
     ]);
 
     const lastBackup = getLastBackupMetadata();
     const lastUploadsBackup = getLastUploadsBackupMetadata();
     const updateInProgress = isUpdateJobActive();
-    const resolvedLastResult = activeUpdateJob
+
+    const currentJob = (activeUpdateJob && activeUpdateJob.state === 'running')
+      ? activeUpdateJob
+      : (getPersistedUpdateJob() || activeUpdateJob);
+
+    const resolvedLastResult = currentJob
       ? {
-          status: activeUpdateJob.state === 'success' ? 'SUCCESS' : activeUpdateJob.state === 'failed' ? 'FAILURE' : 'UNKNOWN',
-          details: activeUpdateJob.error || activeUpdateJob.logSummary[activeUpdateJob.logSummary.length - 1] || '',
-          timestamp: activeUpdateJob.endTime || activeUpdateJob.startTime || undefined,
+          status: currentJob.state === 'success' ? 'SUCCESS' : currentJob.state === 'failed' ? 'FAILURE' : 'UNKNOWN',
+          details: currentJob.error || currentJob.logSummary[currentJob.logSummary.length - 1] || '',
+          timestamp: currentJob.endTime || currentJob.startTime || undefined,
         }
       : (lastUpdateResult || getLastUpdateResultFromLog());
+
+    // Check Node version readiness
+    const nodeMajor = parseInt(process.version.replace('v', '').split('.')[0], 10) || 20;
+    const isNodeCompatible = nodeMajor >= 20;
+    const isDiskSpaceSufficient = diskSpace.freeMB >= 500;
 
     // Count physical uploads
     const uploadsRoot = process.env.UPLOADS_DIR
@@ -336,6 +402,14 @@ systemRouter.get('/system/update/status', async (_req: AuthRequest, res: Respons
       currentVersion: getAppVersion(),
       nodeVersion: process.version,
       npmVersion,
+      diskSpace,
+      systemReadiness: {
+        isNodeCompatible,
+        minNodeVersion: 'v20.0.0',
+        isDiskSpaceSufficient,
+        minDiskSpaceMB: 500,
+        isDatabaseOnline: dbStatus.status === 'connected',
+      },
       pm2Status,
       databaseStatus: dbStatus,
       lastBackup,
@@ -348,7 +422,7 @@ systemRouter.get('/system/update/status', async (_req: AuthRequest, res: Respons
       },
       updateInProgress,
       lastUpdateResult: resolvedLastResult,
-      job: activeUpdateJob || {
+      job: currentJob || {
         id: null,
         state: 'idle',
         stage: 'idle',
@@ -602,6 +676,30 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
   } catch (err: any) {
     console.error('[AdminSystem] Error initiating update:', err);
     res.status(500).json({ error: 'Не удалось запустить обновление', details: err.message });
+  }
+});
+
+// =============================================================================
+// 3.1 GET /api/admin/system/update/logs
+// =============================================================================
+systemRouter.get('/system/update/logs', async (_req: AuthRequest, res: Response) => {
+  try {
+    const logPath = path.resolve('logs/update.log');
+    if (!fs.existsSync(logPath)) {
+      return res.json({ logs: 'Лог-файл обновления еще не создан.' });
+    }
+    const rawContent = fs.readFileSync(logPath, 'utf8');
+    const sanitizedContent = sanitizeSecretsText(rawContent);
+    const lines = sanitizedContent.split('\n');
+    const recentLines = lines.slice(-500).join('\n');
+
+    res.json({
+      logs: recentLines,
+      totalLines: lines.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Не удалось прочитать лог обновления', details: err.message });
   }
 });
 

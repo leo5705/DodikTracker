@@ -15,6 +15,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { dedupePlaylists, getStablePlaylistKey } from '../../utils/musicIdentity.ts';
 
 export interface AddToPlaylistTrackInfo {
   id: number | string;
@@ -70,7 +71,7 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
     authFetch(`/api/music/playlists/my/for-track/${track.id}`)
       .then((res) => (res.ok ? res.json() : { playlists: [] }))
       .then((data) => {
-        setPlaylists(data.playlists || []);
+        setPlaylists(dedupePlaylists(data.playlists || []));
       })
       .catch((err) => console.error('Error fetching user playlists for track:', err))
       .finally(() => setLoading(false));
@@ -303,11 +304,11 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
             </div>
           ) : (
             <div className="space-y-2">
-              {playlists.map((pl) => {
+              {playlists.map((pl, idx) => {
                 const isToggling = togglingPlaylistId === pl.id;
                 return (
                   <div
-                    key={pl.id}
+                    key={getStablePlaylistKey(pl, idx)}
                     onClick={() => handleToggleTrackInPlaylist(pl)}
                     className={`flex items-center justify-between p-3 rounded-2xl border transition-all cursor-pointer group select-none ${
                       pl.containsTrack

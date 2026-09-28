@@ -232,6 +232,9 @@ interface MusicPlayerContextType {
   clearPlaybackError: () => void;
   currentTime: number;
   duration: number;
+  subscribeTime: (callback: (time: number, duration: number) => void) => () => void;
+  getCurrentTime: () => number;
+  getDuration: () => number;
   volume: number;
   isMuted: boolean;
   playerState: PlayerState;
@@ -287,8 +290,33 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [playbackStatus, setPlaybackStatus] = useState<PlayerPlaybackStatus>('idle');
   const [playbackError, setPlaybackError] = useState<PlaybackErrorState | null>(null);
-  const [currentTime, setCurrentTime] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(0);
+
+  // High-frequency playback progress refs & subscription model
+  const currentTimeRef = useRef<number>(0);
+  const durationRef = useRef<number>(0);
+  const timeSubscribersRef = useRef<Set<(time: number, duration: number) => void>>(new Set());
+
+  const geniusCacheRef = useRef<Map<string, GeniusTrackInfo | null>>(new Map());
+  const geniusInFlightRef = useRef<Set<string>>(new Set());
+  const pendingResolutionsRef = useRef<Map<string, Promise<any>>>(new Map());
+
+  const subscribeTime = React.useCallback((callback: (time: number, duration: number) => void) => {
+    timeSubscribersRef.current.add(callback);
+    callback(currentTimeRef.current, durationRef.current);
+    return () => {
+      timeSubscribersRef.current.delete(callback);
+    };
+  }, []);
+
+  const getCurrentTime = React.useCallback(() => currentTimeRef.current, []);
+  const getDuration = React.useCallback(() => durationRef.current, []);
+
+  const notifyTimeUpdate = React.useCallback((cur: number, dur: number) => {
+    currentTimeRef.current = cur;
+    durationRef.current = dur;
+    timeSubscribersRef.current.forEach((cb) => cb(cur, dur));
+  }, []);
+
   const [volume, setVolumeState] = useState<number>(0.8);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [playerState, setPlayerStateInternal] = useState<PlayerState>('mini');
@@ -489,7 +517,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   }, [currentTrack?.id, dbUser?.id]);
 
-  // Fetch Genius Track Insights automatically when current track changes
+  // Fetch Genius Track Insights automatically when current track changes (with in-memory caching & deduplication)
   useEffect(() => {
     if (!currentTrack) {
       setGeniusInfo(null);
@@ -498,6 +526,22 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       return;
     }
 
+    const trackKey = String(currentTrack.id);
+
+    // 1. Check in-memory cache
+    if (geniusCacheRef.current.has(trackKey)) {
+      setGeniusInfo(geniusCacheRef.current.get(trackKey) || null);
+      setIsLoadingGenius(false);
+      setFocusedAnnotation(null);
+      return;
+    }
+
+    // 2. Prevent duplicate in-flight requests
+    if (geniusInFlightRef.current.has(trackKey)) {
+      return;
+    }
+
+    geniusInFlightRef.current.add(trackKey);
     let isMounted = true;
     setIsLoadingGenius(true);
     setFocusedAnnotation(null);
@@ -511,20 +555,24 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     if (artist) queryParams.set('artist', artist);
     if (album) queryParams.set('album', album);
 
-    fetch(`/api/music/tracks/${encodeURIComponent(String(currentTrack.id))}/genius?${queryParams.toString()}`)
+    fetch(`/api/music/tracks/${encodeURIComponent(trackKey)}/genius?${queryParams.toString()}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
+        const info = data?.genius || null;
+        geniusCacheRef.current.set(trackKey, info);
         if (!isMounted) return;
-        setGeniusInfo(data?.genius || null);
+        setGeniusInfo(info);
         if (typeof data?.configured === 'boolean') {
           setIsGeniusConfigured(data.configured);
         }
       })
       .catch(() => {
+        geniusCacheRef.current.set(trackKey, null);
         if (!isMounted) return;
         setGeniusInfo(null);
       })
       .finally(() => {
+        geniusInFlightRef.current.delete(trackKey);
         if (!isMounted) return;
         setIsLoadingGenius(false);
       });
@@ -532,7 +580,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     return () => {
       isMounted = false;
     };
-  }, [currentTrack?.id, currentTrack?.title, currentTrack?.artistName]);
+  }, [currentTrack?.id]);
 
   useEffect(() => {
     repeatModeRef.current = repeatMode;
@@ -636,8 +684,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       const isExternal = cur?.source === 'youtube' || (typeof cur?.id === 'string' && cur.id.startsWith('yt_')) || Boolean(cur?.videoId);
       if (isExternal) return;
 
-      setCurrentTime(audioNode.currentTime);
-      setDuration(audioNode.duration || 0);
+      notifyTimeUpdate(audioNode.currentTime, audioNode.duration || 0);
 
       // Check crossfade trigger conditions:
       const isCrossfadeEnabled = Boolean((dbUser as any)?.musicCrossfadeEnabled);
@@ -859,10 +906,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         try {
           const cur = ytPlayerRef.current.getCurrentTime() || 0;
           const dur = ytPlayerRef.current.getDuration() || 0;
-          setCurrentTime(cur);
-          if (dur > 0) {
-            setDuration(dur);
-          }
+          notifyTimeUpdate(cur, dur);
         } catch {
           // ignore
         }
@@ -870,7 +914,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }, 150);
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentTrack?.id, currentTrack?.source]);
+  }, [isPlaying, currentTrack?.id, currentTrack?.source, notifyTimeUpdate]);
 
   // Media Session API Sync
   useEffect(() => {
@@ -1170,8 +1214,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
             currentTrackRef.current = nextTrack;
             setCurrentTrack(nextTrack);
             setQueueIndex(nextIdx);
-            setCurrentTime(0);
-            setDuration(nextTrack.duration || 0);
+            notifyTimeUpdate(0, nextTrack.duration || 0);
 
             crossfadeStartedRef.current = false;
             console.info(`[MusicPlayer] Crossfade completed. Active track is now «${nextTrack.title}»`);
@@ -1305,8 +1348,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       setArtistInfo({ stageName: newRelease.artistName, slug: newRelease.artistSlug });
     }
 
-    const isSameTrack = currentTrack?.id === track.id;
-    if (isSameTrack && currentTrack?.source === track.source && playbackRes.playable) {
+    const isSameTrack = String(currentTrack?.id) === String(track.id);
+    if (isSameTrack && currentTrack?.playable) {
       togglePlayPause();
       return;
     }
@@ -1316,8 +1359,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     setPlaybackError(null);
     currentTrackRef.current = track;
     setCurrentTrack(track);
-    setCurrentTime(0);
-    setDuration(track.duration || 0);
+    notifyTimeUpdate(0, track.duration || 0);
 
     // If unplayable, attempt dynamic on-the-fly resolution
     if (!playbackRes.playable) {
@@ -1326,6 +1368,31 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       const album = track.releaseTitle || track.album || newRelease?.title || '';
 
       if (title) {
+        const trackKey = String(track.id);
+        const existingPromise = pendingResolutionsRef.current.get(trackKey);
+        if (existingPromise) {
+          existingPromise.then((data) => {
+            if (data && data.playable && data.videoId) {
+              const resolvedTrack: Track = {
+                ...track,
+                source: 'youtube',
+                videoId: data.videoId,
+                youtubeUrl: `https://www.youtube.com/watch?v=${data.videoId}`,
+                audioFile: `yt_${data.videoId}`,
+                duration: track.duration || data.duration || null,
+                playable: true,
+              };
+              currentTrackRef.current = resolvedTrack;
+              setCurrentTrack(resolvedTrack);
+              setPlaybackStatus('loading');
+              initOrGetYouTubePlayer(data.videoId, true);
+            } else {
+              handleUnplayable(track);
+            }
+          });
+          return;
+        }
+
         console.info(`[MusicPlayer] Attempting on-the-fly source resolution for «${title}» by «${artist}»...`);
         setPlaybackStatus('loading');
 
@@ -1337,7 +1404,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           queryParams.set('trackId', String(track.id));
         }
 
-        fetch(`/api/music/resolve-source?${queryParams.toString()}`)
+        const resolvePromise = fetch(`/api/music/resolve-source?${queryParams.toString()}`)
           .then((res) => (res.ok ? res.json() : null))
           .then((data) => {
             if (data && data.playable && data.videoId) {
@@ -1354,13 +1421,20 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
               setCurrentTrack(resolvedTrack);
               setPlaybackStatus('loading');
               initOrGetYouTubePlayer(data.videoId, true);
-              return;
+              return data;
             }
             handleUnplayable(track);
+            return null;
           })
           .catch(() => {
             handleUnplayable(track);
+            return null;
+          })
+          .finally(() => {
+            pendingResolutionsRef.current.delete(trackKey);
           });
+
+        pendingResolutionsRef.current.set(trackKey, resolvePromise);
         return;
       }
 
@@ -1461,7 +1535,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   const playPrev = () => {
-    if (currentTime > 3) {
+    if (currentTimeRef.current > 3) {
       seek(0);
       return;
     }
@@ -1520,7 +1594,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const seek = (seconds: number) => {
     crossfadeStartedRef.current = false;
-    setCurrentTime(seconds);
+    notifyTimeUpdate(seconds, durationRef.current);
     const cur = currentTrackRef.current ? normalizePlayerTrack(currentTrackRef.current) : null;
     if (cur?.source === 'youtube') {
       if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
@@ -1698,8 +1772,11 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         playbackStatus,
         playbackError,
         clearPlaybackError,
-        currentTime,
-        duration,
+        currentTime: currentTimeRef.current,
+        duration: durationRef.current,
+        subscribeTime,
+        getCurrentTime,
+        getDuration,
         volume,
         isMuted,
         playerState,
@@ -1769,6 +1846,31 @@ export const useMusicPlayer = () => {
     throw new Error('useMusicPlayer must be used within MusicPlayerProvider');
   }
   return ctx;
+};
+
+export const useMusicTime = () => {
+  const ctx = useContext(MusicPlayerContext);
+  if (!ctx) {
+    throw new Error('useMusicTime must be used within MusicPlayerProvider');
+  }
+
+  const [timeState, setTimeState] = useState<{ currentTime: number; duration: number }>(() => ({
+    currentTime: ctx.getCurrentTime(),
+    duration: ctx.getDuration(),
+  }));
+
+  useEffect(() => {
+    return ctx.subscribeTime((newTime, newDuration) => {
+      setTimeState((prev) => {
+        if (Math.abs(prev.currentTime - newTime) < 0.15 && prev.duration === newDuration) {
+          return prev;
+        }
+        return { currentTime: newTime, duration: newDuration };
+      });
+    });
+  }, [ctx]);
+
+  return { currentTime: timeState.currentTime, duration: timeState.duration };
 };
 
 

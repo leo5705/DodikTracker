@@ -109,6 +109,75 @@ export function getStableReleaseKey(rel: any, index?: number): string {
   return index !== undefined ? `${baseKey}-${index}` : baseKey;
 }
 
+export function getStablePlaylistBaseKey(playlist: any): string {
+  if (!playlist) return 'playlist-fallback';
+
+  if (playlist.id !== undefined && playlist.id !== null) {
+    const idStr = String(playlist.id).trim();
+    if (idStr && idStr !== '0' && idStr !== 'undefined' && idStr !== 'null') {
+      return `dodik-pl-${idStr}`;
+    }
+  }
+
+  const title = (playlist.title || '').trim().toLowerCase();
+  const userId = playlist.userId || playlist.owner?.id || '';
+  if (title) {
+    return `meta-pl-${userId}-${title}`;
+  }
+
+  return 'playlist-fallback';
+}
+
+export function getStablePlaylistKey(playlist: any, index?: number): string {
+  const baseKey = getStablePlaylistBaseKey(playlist);
+  return index !== undefined ? `${baseKey}-${index}` : baseKey;
+}
+
+export function getStablePlaylistTrackKey(track: any, index?: number): string {
+  if (!track) return index !== undefined ? `pl-track-fallback-${index}` : 'pl-track-fallback';
+
+  // If junctionId from music_playlist_tracks exists, it is the unique primary key of the playlist track item
+  if (track.junctionId !== undefined && track.junctionId !== null && track.junctionId !== '') {
+    return `pl-junction-${track.junctionId}`;
+  }
+
+  // If playlist_track_id or playlistTrackId exists
+  if (track.playlistTrackId !== undefined && track.playlistTrackId !== null) {
+    return `pl-junction-${track.playlistTrackId}`;
+  }
+
+  // If position and playlistId exist
+  if (track.playlistId !== undefined && track.position !== undefined) {
+    return `pl-${track.playlistId}-pos-${track.position}-tr-${track.id}`;
+  }
+
+  const baseTrackKey = getStableTrackBaseKey(track);
+  if (index !== undefined) {
+    return `pl-tr-${baseTrackKey}-${index}`;
+  }
+  return `pl-tr-${baseTrackKey}`;
+}
+
+/**
+ * Deduplicate playlists in an array using stable playlist identity
+ */
+export function dedupePlaylists<T>(playlists: T[]): T[] {
+  if (!Array.isArray(playlists)) return [];
+  const seen = new Set<string>();
+  const result: T[] = [];
+
+  playlists.forEach((item) => {
+    if (!item) return;
+    const key = getStablePlaylistBaseKey(item);
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(item);
+    }
+  });
+
+  return result;
+}
+
 /**
  * Deduplicate tracks in an array using stable track identity
  */

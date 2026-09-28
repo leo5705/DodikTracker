@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
+import { dedupeTracks, getStableTrackKey } from '../../utils/musicIdentity.ts';
 
 interface TrackItem {
   id: number;
@@ -62,12 +63,12 @@ export const PlaylistAddTrackModal: React.FC<PlaylistAddTrackModalProps> = ({
       try {
         const url = query.trim()
           ? `/api/music/search?q=${encodeURIComponent(query.trim())}&limit=20`
-          : `/api/music/tracks/recent?limit=15`;
+          : `/api/music/search?limit=15`;
         const res = await authFetch(url);
         if (res.ok) {
           const data = await res.json();
           const list = data.tracks || data.items || data || [];
-          setTracks(list);
+          setTracks(dedupeTracks(list));
         }
       } catch (err: any) {
         console.error('Error fetching tracks for playlist modal:', err);
@@ -170,14 +171,14 @@ export const PlaylistAddTrackModal: React.FC<PlaylistAddTrackModalProps> = ({
               <p className="text-xs">Треки не найдены</p>
             </div>
           ) : (
-            tracks.map((trk) => {
+            tracks.map((trk, idx) => {
               const inPlaylist = existingTrackIds.has(trk.id) || addedIds.has(trk.id);
               const isAdding = addingId === trk.id;
               const isCurrentPlaying = currentTrack?.id === trk.id && isPlaying;
 
               return (
                 <div
-                  key={trk.id}
+                  key={getStableTrackKey(trk, idx)}
                   className="p-2.5 rounded-2xl bg-[#121633]/60 hover:bg-[#181E44] border border-[#1E2442] flex items-center justify-between gap-3 transition"
                 >
                   <div className="flex items-center gap-3 min-w-0">

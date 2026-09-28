@@ -17,6 +17,7 @@ import { useRouter } from '../../context/RouterContext.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
 import { PlaylistModal } from '../modals/PlaylistModal.tsx';
+import { dedupePlaylists, getStablePlaylistKey } from '../../utils/musicIdentity.ts';
 
 interface PublicPlaylistItem {
   id: number;
@@ -67,7 +68,7 @@ export const MusicPlaylistsView: React.FC = () => {
     authFetch(`/api/music/playlists?${params.toString()}`)
       .then((res) => (res.ok ? res.json() : { playlists: [], pagination: { total: 0, totalPages: 1 } }))
       .then((data) => {
-        setPlaylists(data.playlists || []);
+        setPlaylists(dedupePlaylists(data.playlists || []));
         setTotal(data.pagination?.total || 0);
         setTotalPages(data.pagination?.totalPages || 1);
       })
@@ -221,9 +222,9 @@ export const MusicPlaylistsView: React.FC = () => {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-          {playlists.map((pl) => (
+          {playlists.map((pl, idx) => (
             <div
-              key={pl.id}
+              key={getStablePlaylistKey(pl, idx)}
               onClick={() => navigate(`/music/playlist/${pl.id}`)}
               className="group relative flex flex-col rounded-3xl bg-[#11152A] border border-[#1E2442] hover:border-purple-500/50 hover:shadow-2xl hover:shadow-purple-600/10 transition-all duration-300 overflow-hidden cursor-pointer"
             >

@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
+import { useMusicPlayer, useMusicTime } from '../../context/MusicPlayerContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import {
   Play,
@@ -21,14 +21,13 @@ export const CompactMusicPlayer: React.FC<{
   className?: string;
 }> = ({ className = '' }) => {
   const { navigate } = useRouter();
+  const { currentTime, duration } = useMusicTime();
   const {
     currentTrack,
     releaseInfo,
     artistInfo,
     isPlaying,
     playbackStatus,
-    currentTime,
-    duration,
     togglePlayPause,
     playNext,
     playPrev,

@@ -3,6 +3,10 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
@@ -33,6 +37,7 @@
     "test:soundcloud": "tsx src/server/tests/soundcloudArchitecture.ts",
     "test:lyrics": "tsx src/server/tests/lyricsParserTests.ts && tsx src/server/tests/liveLyricsLogicTests.ts",
     "test:step22": "tsx src/server/tests/step22GeniusAndMusicLayoutTests.ts",
+    "test:playlist-keys": "tsx src/server/tests/playlistIdentityKeysTests.ts",
     "test:safety": "tsx src/scripts/testUpdateSafety.ts"
   },
   "dependencies": {

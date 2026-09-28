@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
+import { useMusicPlayer, useMusicTime } from '../../context/MusicPlayerContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
 import {
@@ -26,6 +26,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { getBestMusicImageUrl } from '../../utils/musicImageUtils.ts';
+import { getStableTrackKey } from '../../utils/musicIdentity.ts';
 import { LiveLyrics } from './LiveLyrics.tsx';
 import { TrackActionsMenu } from './TrackActionsMenu.tsx';
 import { ArtistLinks } from './ArtistLinks.tsx';
@@ -99,6 +100,7 @@ const rightColumnVariants: any = {
 export const FullscreenMusicPlayer: React.FC = () => {
   const { navigate } = useRouter();
   const { dbUser } = useAuth();
+  const { currentTime, duration } = useMusicTime();
   const {
     currentTrack,
     releaseInfo,
@@ -106,8 +108,6 @@ export const FullscreenMusicPlayer: React.FC = () => {
     isPlaying,
     playbackStatus,
     playbackError,
-    currentTime,
-    duration,
     volume,
     isMuted,
     playerState,
@@ -586,7 +586,7 @@ export const FullscreenMusicPlayer: React.FC = () => {
                       const itemCover = t.releaseCover || t.thumbnail;
                       return (
                         <div
-                          key={`${t.id}-${idx}`}
+                          key={`fs-queue-${getStableTrackKey(t, idx)}`}
                           onClick={() => playQueueIndex(idx)}
                           className={`flex items-center justify-between p-3 rounded-2xl transition cursor-pointer group ${
                             isCurrent

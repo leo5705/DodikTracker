@@ -175,7 +175,7 @@ export interface MusicTrackRowProps {
   onPlay?: (track: AnyTrackItem) => void;
 }
 
-export const MusicTrackRow: React.FC<MusicTrackRowProps> = ({
+export const MusicTrackRow: React.FC<MusicTrackRowProps> = React.memo(({
   track,
   index,
   queueContext,
@@ -627,4 +627,4 @@ export const MusicTrackRow: React.FC<MusicTrackRowProps> = ({
       </div>
     </div>
   );
-};
+});

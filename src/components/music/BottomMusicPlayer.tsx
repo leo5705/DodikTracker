@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
+import { useMusicPlayer, useMusicTime } from '../../context/MusicPlayerContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { getBestMusicImageUrl } from '../../utils/musicImageUtils.ts';
 import { ArtistLinks } from './ArtistLinks.tsx';
@@ -33,6 +33,7 @@ export const BottomMusicPlayer: React.FC<{
   onOpenMobileInsights?: () => void;
 }> = ({ className = '', onOpenMobileInsights }) => {
   const { navigate } = useRouter();
+  const { currentTime, duration } = useMusicTime();
   const {
     currentTrack,
     releaseInfo,
@@ -40,8 +41,6 @@ export const BottomMusicPlayer: React.FC<{
     isPlaying,
     playbackStatus,
     playbackError,
-    currentTime,
-    duration,
     volume,
     isMuted,
     setVolume,

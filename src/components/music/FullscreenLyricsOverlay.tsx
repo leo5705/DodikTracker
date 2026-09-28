@@ -26,7 +26,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { parseLyrics, findActiveLineIndex, LyricsData, LyricsLine } from '../../utils/lyricsParser.ts';
-import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
+import { useMusicPlayer, useMusicTime } from '../../context/MusicPlayerContext.tsx';
 import { TrackActionsMenu } from './TrackActionsMenu.tsx';
 import { ArtistLinks } from './ArtistLinks.tsx';
 import { TrackInsightsPanel } from './TrackInsightsPanel.tsx';
@@ -40,6 +40,7 @@ function formatTime(seconds: number): string {
 }
 
 export const FullscreenLyricsOverlay: React.FC = () => {
+  const { currentTime, duration } = useMusicTime();
   const {
     currentTrack,
     releaseInfo,
@@ -48,8 +49,6 @@ export const FullscreenLyricsOverlay: React.FC = () => {
     playerState,
     closeLyrics,
     openFullscreen,
-    currentTime,
-    duration,
     isPlaying,
     playbackStatus,
     playbackError,

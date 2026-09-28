@@ -103,7 +103,7 @@ const REVIEW_CRITERIA = [
 export const MusicReleaseView: React.FC<{ idOrSlug: string }> = ({ idOrSlug }) => {
   const { navigate } = useRouter();
   const { dbUser, authFetch } = useAuth();
-  const { playTrack, currentTrack, isPlaying, currentTime, seek } = useMusicPlayer();
+  const { playTrack, currentTrack, isPlaying } = useMusicPlayer();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

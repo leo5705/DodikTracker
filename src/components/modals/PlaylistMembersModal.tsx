@@ -264,7 +264,7 @@ export const PlaylistMembersModal: React.FC<PlaylistMembersModalProps> = ({
                 <div className="p-2 rounded-2xl bg-[#080A18] border border-[#232B54] space-y-1 shadow-xl animate-in fade-in">
                   {searchResults.map((user) => (
                     <div
-                      key={user.id}
+                      key={`pl-invite-user-${user.id}`}
                       className="p-2 rounded-xl bg-[#121633]/60 hover:bg-[#1C224B] flex items-center justify-between transition"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
@@ -353,7 +353,7 @@ export const PlaylistMembersModal: React.FC<PlaylistMembersModalProps> = ({
 
                 return (
                   <div
-                    key={member.id}
+                    key={`pl-member-${member.id}`}
                     className="p-3.5 rounded-2xl bg-[#090C1B] border border-[#1E2442] space-y-2.5"
                   >
                     <div className="flex items-center justify-between gap-3">

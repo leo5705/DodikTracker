@@ -39,6 +39,7 @@ import { PlaylistModal, PlaylistData } from '../modals/PlaylistModal.tsx';
 import { AddToPlaylistModal, AddToPlaylistTrackInfo } from '../modals/AddToPlaylistModal.tsx';
 import { MusicTrackCard } from '../music/MusicTrackCard.tsx';
 import { ArtistLinks } from '../music/ArtistLinks.tsx';
+import { dedupePlaylists, getStablePlaylistKey } from '../../utils/musicIdentity.ts';
 
 type LibraryTab = 'tracks' | 'releases' | 'playlists' | 'recent' | 'reviews' | 'subscriptions';
 
@@ -296,7 +297,7 @@ export const MusicLibraryView: React.FC = () => {
     authFetch(`/api/music/playlists/my?${params.toString()}`)
       .then((res) => (res.ok ? res.json() : { playlists: [], pagination: { total: 0, totalPages: 1 } }))
       .then((data) => {
-        setMyPlaylists(data.playlists || []);
+        setMyPlaylists(dedupePlaylists(data.playlists || []));
         setMyPlaylistsTotal(data.pagination?.total || 0);
         setMyPlaylistsTotalPages(data.pagination?.totalPages || 1);
       })
@@ -1113,9 +1114,9 @@ export const MusicLibraryView: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {myPlaylists.map((pl) => (
+                  {myPlaylists.map((pl, idx) => (
                     <div
-                      key={pl.id}
+                      key={getStablePlaylistKey(pl, idx)}
                       onClick={() => navigate(`/music/playlist/${pl.id}`)}
                       className="group p-4 rounded-3xl bg-[#0B0D20] hover:bg-[#121632] border border-[#1E2442] hover:border-purple-500/40 transition-all cursor-pointer flex flex-col justify-between relative shadow-lg"
                     >

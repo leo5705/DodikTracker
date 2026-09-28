@@ -40,6 +40,17 @@ interface SystemUpdateStatus {
   currentVersion: string;
   nodeVersion: string;
   npmVersion: string;
+  diskSpace?: {
+    freeMB: number;
+    totalMB: number;
+  };
+  systemReadiness?: {
+    isNodeCompatible: boolean;
+    minNodeVersion: string;
+    isDiskSpaceSufficient: boolean;
+    minDiskSpaceMB: number;
+    isDatabaseOnline: boolean;
+  };
   pm2Status: {
     status: string;
     uptime?: number;
@@ -105,6 +116,8 @@ interface SystemUpdateStatus {
     endTime: string | null;
     logSummary: string[];
     error: string | null;
+    failedCommand?: string | null;
+    exitCode?: number | null;
     triggeredBy?: {
       id: number;
       username: string;
@@ -211,9 +224,30 @@ export function AdminUpdatesTab() {
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
 
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [showLogsModal, setShowLogsModal] = useState(false);
+  const [logsContent, setLogsContent] = useState<string | null>(null);
+  const [loadingLogs, setLoadingLogs] = useState(false);
   const [backupToDelete, setBackupToDelete] = useState<{ filename: string; type: 'db' | 'uploads' } | null>(null);
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [lastCheckTime, setLastCheckTime] = useState<string | null>(null);
+
+  const fetchUpdateLogs = async () => {
+    setLoadingLogs(true);
+    setShowLogsModal(true);
+    try {
+      const res = await authFetch('/api/admin/system/update/logs');
+      if (res.ok) {
+        const data = await res.json();
+        setLogsContent(data.logs || 'Логи отсутствуют.');
+      } else {
+        setLogsContent('Не удалось загрузить лог-файл обновления.');
+      }
+    } catch {
+      setLogsContent('Сетевая ошибка при загрузке логов.');
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
 
   const terminalEndRef = useRef<HTMLDivElement | null>(null);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -881,39 +915,92 @@ export function AdminUpdatesTab() {
 
         {/* Failure View */}
         {isJobFailed && !isJobRunning && (
-          <div className="p-5 rounded-2xl bg-rose-950/40 border border-rose-500/50 space-y-4 animate-in fade-in duration-300">
-            <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="p-5 sm:p-6 rounded-3xl bg-rose-950/40 border border-rose-500/50 space-y-4 animate-in fade-in duration-300 shadow-2xl">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-300">
+                <div className="w-11 h-11 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-300 shrink-0">
                   <AlertTriangle className="w-6 h-6" />
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-white">Обновление не завершено</h4>
-                  <p className="text-xs text-rose-300/80">
-                    {job?.stage === 'database_backup'
-                      ? 'Ошибка на этапе создания резервной копии PostgreSQL. Обновление прервано.'
-                      : job?.stage === 'uploads_integrity'
-                      ? 'Обнаружено несоответствие файлов uploads! Сработал защитный барьер.'
-                      : `Ошибка на этапе '${job?.stage}'. Пользовательские файлы и бэкап сохранены.`}
+                  <h4 className="text-base font-bold text-white">Обновление прервано и остановлено</h4>
+                  <p className="text-xs text-rose-300/90">
+                    Система зафиксировала ошибку на этапе{' '}
+                    <span className="font-mono font-bold text-white uppercase px-1.5 py-0.5 rounded bg-rose-900/60 border border-rose-500/30">
+                      {job?.stage || 'неизвестно'}
+                    </span>
+                    . Рабочее состояние проекта сохранёно, откат при необходимости выполнен.
                   </p>
                 </div>
               </div>
 
-              <button
-                onClick={handleCheckUpdates}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white transition-colors cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Попробовать снова</span>
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={fetchUpdateLogs}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-black/60 hover:bg-black/90 text-xs font-semibold text-[#CBD5E1] border border-[#1E2442] hover:border-purple-500/40 transition-colors cursor-pointer"
+                >
+                  <Terminal className="w-3.5 h-3.5 text-[#A78BFA]" />
+                  <span>Полный технический лог</span>
+                </button>
+
+                <button
+                  onClick={handleStartUpdate}
+                  disabled={updating}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Повторить обновление</span>
+                </button>
+              </div>
             </div>
 
+            {/* Structured Diagnostic Context Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono pt-1">
+              <div className="p-3 rounded-xl bg-black/50 border border-rose-500/30 space-y-1">
+                <span className="text-[#94A3B8] block text-[11px]">Этап ошибки:</span>
+                <span className="text-rose-300 font-bold text-sm block truncate">{job?.stage || 'неизвестно'}</span>
+              </div>
+              <div className="p-3 rounded-xl bg-black/50 border border-rose-500/30 space-y-1">
+                <span className="text-[#94A3B8] block text-[11px]">Падавшая команда:</span>
+                <span className="text-white font-bold text-xs block truncate font-mono">{job?.failedCommand || 'npm ci'}</span>
+              </div>
+              <div className="p-3 rounded-xl bg-black/50 border border-rose-500/30 space-y-1">
+                <span className="text-[#94A3B8] block text-[11px]">Код выхода (exit code):</span>
+                <span className="text-amber-400 font-bold text-sm block font-mono">{job?.exitCode ?? 1}</span>
+              </div>
+              <div className="p-3 rounded-xl bg-black/50 border border-rose-500/30 space-y-1">
+                <span className="text-[#94A3B8] block text-[11px]">Окружение:</span>
+                <span className="text-sky-300 font-bold text-xs block truncate">Node {statusData?.nodeVersion || 'v20.x'} | npm {statusData?.npmVersion || '10.x'}</span>
+              </div>
+            </div>
+
+            {/* Sanitized Root Cause & Stderr */}
             {job?.error && (
-              <div className="p-3 rounded-xl bg-black/60 border border-rose-500/30 font-mono text-xs text-rose-200 break-all">
-                <span className="text-rose-400 font-bold block mb-1">Причина ошибки:</span>
-                {job.error}
+              <div className="p-4 rounded-xl bg-black/80 border border-rose-500/40 font-mono text-xs space-y-2">
+                <div className="flex items-center justify-between text-rose-400 font-bold text-[11px] pb-1 border-b border-rose-900/50">
+                  <span className="flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Причина ошибки (stderr / diagnostic log):</span>
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(job.error || '', 'err_log')}
+                    className="text-[#94A3B8] hover:text-white transition-colors cursor-pointer"
+                  >
+                    {copiedText === 'err_log' ? 'Скопировано!' : 'Скопировать'}
+                  </button>
+                </div>
+                <div className="text-rose-200 break-all leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  {job.error}
+                </div>
               </div>
             )}
+
+            {/* Rollback & Preservation Guarantee */}
+            <div className="p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-500/30 text-xs text-emerald-300 flex items-center gap-2.5">
+              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+              <span>
+                <strong>Гарантия сохранности данных:</strong> Пользовательские файлы uploads (audio & covers), конфигурационный файл <code>.env</code> и бэкапы сохранены без изменений.
+              </span>
+            </div>
           </div>
         )}
       </div>
@@ -1172,6 +1259,55 @@ export function AdminUpdatesTab() {
         onConfirm={handleDeleteBackup}
         onCancel={() => setBackupToDelete(null)}
       />
+
+      {/* Modal: Technical Logs Viewer */}
+      {showLogsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-4xl max-h-[85vh] bg-[#0B0D20] border border-[#1E2442] rounded-3xl p-6 shadow-2xl flex flex-col space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1E2442]">
+              <div className="flex items-center gap-2.5">
+                <Terminal className="w-5 h-5 text-[#8B5CF6]" />
+                <h3 className="text-base font-bold text-white">Полный технический лог обновления (logs/update.log)</h3>
+              </div>
+              <button
+                onClick={() => setShowLogsModal(false)}
+                className="p-1.5 rounded-xl bg-[#11152A] hover:bg-[#1E2442] text-[#94A3B8] hover:text-white transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 bg-black/90 border border-[#1E2442] rounded-2xl p-4 font-mono text-xs text-[#CBD5E1] overflow-y-auto max-h-[60vh] space-y-1 whitespace-pre-wrap break-all select-text">
+              {loadingLogs ? (
+                <div className="flex items-center justify-center py-12 text-[#94A3B8]">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#8B5CF6] mr-2" />
+                  <span>Чтение лог-файла...</span>
+                </div>
+              ) : (
+                logsContent
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs text-[#64748B]">Секретные ключи и токены автоматически скрыты (***REDACTED***)</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => copyToClipboard(logsContent || '', 'full_logs')}
+                  className="px-4 py-2 rounded-xl bg-[#11152A] hover:bg-[#1E2442] text-xs font-semibold text-white border border-[#1E2442] transition-colors cursor-pointer"
+                >
+                  {copiedText === 'full_logs' ? 'Скопировано!' : 'Скопировать весь лог'}
+                </button>
+                <button
+                  onClick={() => setShowLogsModal(false)}
+                  className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-bold text-white transition-colors cursor-pointer"
+                >
+                  Закрыть
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

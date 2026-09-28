@@ -38,6 +38,7 @@ import { LiveLyrics } from '../music/LiveLyrics.tsx';
 import { TrackActionsMenu } from '../music/TrackActionsMenu.tsx';
 import { ArtistLinks } from '../music/ArtistLinks.tsx';
 import { MusicTrackRow } from '../music/MusicTrackRow.tsx';
+import { getStablePlaylistTrackKey } from '../../utils/musicIdentity.ts';
 
 interface PlaylistOwner {
   id: number;
@@ -80,7 +81,7 @@ export const MusicPlaylistView: React.FC<{ id: string }> = ({ id }) => {
   const playlistId = parseInt(id, 10);
   const { navigate } = useRouter();
   const { dbUser, authFetch } = useAuth();
-  const { playTrack, currentTrack, isPlaying, currentTime, seek } = useMusicPlayer();
+  const { playTrack, currentTrack, isPlaying } = useMusicPlayer();
 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -229,7 +230,9 @@ export const MusicPlaylistView: React.FC<{ id: string }> = ({ id }) => {
         method: 'DELETE',
       });
       if (res.ok) {
-        setTracks((prev) => prev.filter((t) => t.id !== trackItem.id));
+        setTracks((prev) =>
+          prev.filter((t) => (trackItem.junctionId && t.junctionId ? t.junctionId !== trackItem.junctionId : t.id !== trackItem.id))
+        );
         setPlaylist((prev) =>
           prev
             ? {
@@ -679,7 +682,7 @@ export const MusicPlaylistView: React.FC<{ id: string }> = ({ id }) => {
 
                 return (
                   <MusicTrackRow
-                    key={`${trk.id}-${index}`}
+                    key={getStablePlaylistTrackKey(trk, index)}
                     track={{
                       ...trk,
                       audioFile: trk.audioFile,
