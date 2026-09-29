@@ -551,7 +551,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectMedia }) => {
           {results.length > 0 ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 sm:gap-5">
               {results.map((item, idx) => {
-                const itemKey = `${item.provider || 'm'}-${item.externalId || item.mediaId || item.id || idx}`;
+                const itemKey = `${item.provider || 'm'}-${item.externalId || item.mediaId || item.id || 'item'}-${idx}`;
                 const dodikRating = item.dodikRating ?? (item.provider === 'DODIK_DB' ? item.rating : null);
                 const dodikVotes = item.dodikRatingCount || 0;
                 const userRating = item.userRating;

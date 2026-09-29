@@ -51,6 +51,7 @@ import { MusicPlaylistView } from './components/views/MusicPlaylistView.tsx';
 import { MusicPlaylistImportView } from './components/views/MusicPlaylistImportView.tsx';
 import { MusicSectionLayout } from './components/music/MusicSectionLayout.tsx';
 import { MusicPlayerProvider } from './context/MusicPlayerContext.tsx';
+import { MusicPlayerAppView } from './components/music/MusicPlayerAppView.tsx';
 import { AuthGatekeeper } from './components/auth/AuthGatekeeper.tsx';
 import { ResetPasswordView } from './components/auth/ResetPasswordView.tsx';
 import { MiniMessenger } from './components/modals/MiniMessenger.tsx';
@@ -86,9 +87,9 @@ function MainApp() {
     return <ResetPasswordView token={route.params.token} />;
   }
 
-  // Gatekeeper: Closed project requirement - no access without registration/login
+  // Default music player view for all web visitors & mobile app users
   if (!dbUser) {
-    return <AuthGatekeeper />;
+    return <MusicPlayerAppView />;
   }
 
   // Render view based on route
@@ -303,19 +304,10 @@ function MainApp() {
           />
         );
 
+      case 'music-home':
       case 'home':
       default:
-        return (
-          <HomeView
-            onNavigate={(tab) => {
-              if (tab === 'profile') {
-                navigate(dbUser ? `/u/${dbUser.username}` : '/profile');
-              } else {
-                navigate(`/${tab === 'home' ? '' : tab}`);
-              }
-            }}
-          />
-        );
+        return <MusicPlayerAppView />;
     }
   };
 

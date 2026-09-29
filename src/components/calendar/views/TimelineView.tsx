@@ -92,9 +92,9 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
 
             {/* Release Cards under node */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              {group.items.map((item) => (
+              {group.items.map((item, idx) => (
                 <ReleaseCard
-                  key={item.id}
+                  key={`tm-${item.id ?? idx}-${idx}`}
                   item={item}
                   onOpenDetails={onOpenDetails}
                   onToggleFollow={onToggleFollow}

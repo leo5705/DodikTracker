@@ -345,9 +345,9 @@ export const AdminNewsTab: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-4">
-          {articles.map((art) => (
+          {articles.map((art, idx) => (
             <div
-              key={art.id}
+              key={`admin-news-${art.id ?? idx}-${idx}`}
               className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#8B5CF6]/40 transition-all flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg"
             >
               <div className="flex items-start gap-4 min-w-0 flex-1">

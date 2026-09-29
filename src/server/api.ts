@@ -66,7 +66,12 @@ import { promisify } from 'util';
 
 const lookupAsync = promisify(dns.lookup);
 
+import { musicStreamRouter } from './routes/music_stream.ts';
+
 export const apiRouter = Router();
+
+// Mount yt-dlp & track catalog streaming endpoints
+apiRouter.use('/', musicStreamRouter);
 
 // ==========================================
 // SYSTEM & HEALTH (No auth required)

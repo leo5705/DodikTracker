@@ -320,9 +320,9 @@ export const GameCatalogView: React.FC = () => {
       ) : (
         <div className="space-y-6">
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
-            {games.map((g) => (
+            {games.map((g, idx) => (
               <button
-                key={g.id}
+                key={`game-${g.id || g.slug || idx}-${idx}`}
                 onClick={() => navigate(`/games/${encodeURIComponent(g.slug || String(g.id))}`)}
                 className="group p-2.5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#8B5CF6]/50 hover:bg-[#11152A] transition-all flex flex-col text-left shadow-lg cursor-pointer"
               >

@@ -97,9 +97,9 @@ export const ListView: React.FC<ListViewProps> = ({
 
           {/* Cards Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {group.items.map((item) => (
+            {group.items.map((item, idx) => (
               <ReleaseCard
-                key={item.id}
+                key={`lst-${item.id || idx}-${idx}`}
                 item={item}
                 onOpenDetails={onOpenDetails}
                 onToggleFollow={onToggleFollow}

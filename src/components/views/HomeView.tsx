@@ -562,9 +562,9 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           />
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 sm:gap-5">
-            {inProgress.map((item) => (
+            {inProgress.map((item, idx) => (
               <div
-                key={item.userMediaId || item.id}
+                key={`in-prog-${item.userMediaId || item.id || idx}-${idx}`}
                 onClick={() => handleHeroNavigate(item)}
                 className="group relative flex flex-col justify-between p-3 rounded-2xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#8B5CF6]/50 transition-all duration-200 cursor-pointer hover:-translate-y-1 shadow-lg"
               >
@@ -675,7 +675,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 sm:gap-5">
             {recommendations.map((item, idx) => (
               <MediaCard
-                key={item.mediaId || item.id || idx}
+                key={`rec-${item.mediaId || item.id || idx}-${idx}`}
                 media={{
                   id: item.mediaId || item.id,
                   title: item.title,
@@ -907,7 +907,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                 : null;
 
               return (
-                <div key={rel.id || rel.mediaId || idx} className="relative group">
+                <div key={`upc-${rel.id || rel.mediaId || idx}-${idx}`} className="relative group">
                   <MediaCard
                     media={{
                       id: rel.mediaId || rel.id,

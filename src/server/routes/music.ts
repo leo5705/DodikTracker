@@ -46,6 +46,9 @@ import { lyricsService } from '../services/externalMusic/lyricsService.ts';
 import { geniusProvider } from '../services/externalMusic/lyrics/geniusProvider.ts';
 import { musicRecommendationService } from '../services/musicRecommendationService.ts';
 import { parseRawInput, matchParsedTracks } from '../services/playlistImportService.ts';
+import { globalPlaybackService } from '../services/music/playback/PlaybackService.ts';
+import { PlaybackError, AudioQuality } from '../services/music/playback/types.ts';
+import { extractYouTubeVideoId } from '../../utils/musicPlaybackResolver.ts';
 
 export const musicRouter = Router();
 
@@ -1664,6 +1667,108 @@ musicRouter.delete('/tracks/:id', requireAuth, async (req: AuthRequest, res: Res
     res.json({ success: true, message: 'Трек успешно удалён' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/music/tracks/:trackId/playback?quality=low|standard|high|maximum
+ * Unified Playback API for Web, Android (ExoPlayer), and iOS clients.
+ * Resolves direct playable audio streams (MP3/WebM/googlevideo) from internal uploaded audio files or YouTube resolver microservice.
+ */
+musicRouter.get('/tracks/:trackId/playback', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const rawTrackId = req.params.trackId;
+    const quality = (req.query.quality as AudioQuality) || 'high';
+
+    let trackToResolve: any = null;
+
+    // Check if trackId is YouTube external track (e.g. "yt_dQw4w9WgXcQ" or "youtube:dQw4w9WgXcQ")
+    if (typeof rawTrackId === 'string' && (rawTrackId.startsWith('yt_') || rawTrackId.startsWith('youtube:'))) {
+      const extractedYtId = extractYouTubeVideoId(rawTrackId);
+      if (extractedYtId) {
+        trackToResolve = {
+          id: rawTrackId,
+          videoId: extractedYtId,
+          title: 'YouTube Track',
+        };
+      }
+    }
+
+    if (!trackToResolve) {
+      const numericId = parseInt(rawTrackId, 10);
+      if (!isNaN(numericId) && numericId > 0) {
+        const [trackRow] = await db
+          .select({
+            id: musicTracks.id,
+            releaseId: musicTracks.releaseId,
+            artistId: musicTracks.artistId,
+            title: musicTracks.title,
+            audioFile: musicTracks.audioFile,
+            duration: musicTracks.duration,
+            status: musicTracks.status,
+          })
+          .from(musicTracks)
+          .where(eq(musicTracks.id, numericId))
+          .limit(1);
+
+        if (trackRow) {
+          trackToResolve = trackRow;
+        }
+      }
+    }
+
+    if (!trackToResolve) {
+      // Fallback: If string ID is an 11-char video ID or other yt string
+      const ytId = extractYouTubeVideoId(rawTrackId);
+      if (ytId) {
+        trackToResolve = {
+          id: rawTrackId,
+          videoId: ytId,
+          title: 'YouTube Track',
+        };
+      }
+    }
+
+    if (!trackToResolve) {
+      return res.status(404).json({
+        error: {
+          code: 'TRACK_NOT_FOUND',
+          message: 'Track not found',
+        },
+      });
+    }
+
+    const resolved = await globalPlaybackService.resolve(trackToResolve, { quality });
+
+    res.json({
+      trackId: resolved.trackId,
+      sourceType: resolved.sourceType,
+      streamUrl: resolved.streamUrl,
+      videoId: resolved.videoId || undefined,
+      mimeType: resolved.mimeType,
+      bitrate: resolved.bitrate,
+      quality: resolved.quality,
+      expiresAt: resolved.expiresAt,
+      isSeekable: resolved.isSeekable ?? true,
+      duration: resolved.duration,
+    });
+  } catch (err: any) {
+    if (err instanceof PlaybackError) {
+      return res.status(err.statusCode).json({
+        error: {
+          code: err.code,
+          message: err.message,
+        },
+      });
+    }
+
+    console.error('[Playback API Error]', err);
+    res.status(500).json({
+      error: {
+        code: 'PLAYBACK_RESOLUTION_FAILED',
+        message: 'Internal server error resolving track playback source',
+      },
+    });
   }
 });
 

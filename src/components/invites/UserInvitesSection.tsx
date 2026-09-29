@@ -311,14 +311,14 @@ export const UserInvitesSection: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-2.5">
-            {data?.codes.map((item) => {
+            {data?.codes.map((item, idx) => {
               const inviteUrl = `${window.location.origin}/?invite=${item.code}`;
               const isUsed = item.isUsed;
               const isDisabled = !item.isActive;
 
               return (
                 <div
-                  key={item.id}
+                  key={`usr-invite-${item.id ?? idx}-${idx}`}
                   className={`p-4 rounded-xl border transition-all ${
                     isUsed
                       ? 'bg-[#0B0D20]/60 border-[#1E2442] opacity-85'

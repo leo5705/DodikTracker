@@ -54,9 +54,9 @@ export const DayDetailModal: React.FC<DayDetailModalProps> = ({
         {/* Content */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-3.5 flex-1 scrollbar-thin">
           {items.length > 0 ? (
-            items.map((item) => (
+            items.map((item, idx) => (
               <ReleaseCard
-                key={item.id}
+                key={`day-modal-${item.id ?? idx}-${idx}`}
                 item={item}
                 onOpenDetails={(clickedItem) => {
                   onClose();

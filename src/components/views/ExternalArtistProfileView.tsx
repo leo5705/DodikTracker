@@ -315,7 +315,7 @@ export const ExternalArtistProfileView: React.FC<ExternalArtistProfileProps> = (
             <div className="space-y-2">
               {fullProfile.popularTracks.map((track, idx) => (
                 <MusicTrackRow
-                  key={track.id}
+                  key={`pop-track-${track.id}-${idx}`}
                   track={{
                     id: track.id,
                     source: 'youtube',
@@ -428,9 +428,9 @@ export const ExternalArtistProfileView: React.FC<ExternalArtistProfileProps> = (
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {visibleAlbums.map((rel) => (
+            {visibleAlbums.map((rel, idx) => (
               <div
-                key={rel.providerReleaseId}
+                key={`album-${rel.providerReleaseId}-${idx}`}
                 onClick={() => navigate(`/music/external/release/${rel.provider}/${rel.providerReleaseId}`)}
                 className="p-3 rounded-2xl bg-[#080A18]/60 hover:bg-[#151932]/60 border border-[#1E2442] hover:border-purple-500/40 transition duration-300 cursor-pointer group flex flex-col justify-between"
               >
@@ -476,9 +476,9 @@ export const ExternalArtistProfileView: React.FC<ExternalArtistProfileProps> = (
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {visibleSingles.map((rel) => (
+            {visibleSingles.map((rel, idx) => (
               <div
-                key={rel.providerReleaseId}
+                key={`single-${rel.providerReleaseId}-${idx}`}
                 onClick={() => navigate(`/music/external/release/${rel.provider}/${rel.providerReleaseId}`)}
                 className="p-3 rounded-2xl bg-[#080A18]/60 hover:bg-[#151932]/60 border border-[#1E2442] hover:border-indigo-500/40 transition duration-300 cursor-pointer group flex flex-col justify-between"
               >
@@ -524,9 +524,9 @@ export const ExternalArtistProfileView: React.FC<ExternalArtistProfileProps> = (
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {visibleCompilations.map((rel) => (
+            {visibleCompilations.map((rel, idx) => (
               <div
-                key={rel.providerReleaseId}
+                key={`compilation-${rel.providerReleaseId}-${idx}`}
                 onClick={() => navigate(`/music/external/release/${rel.provider}/${rel.providerReleaseId}`)}
                 className="p-3 rounded-2xl bg-[#080A18]/60 hover:bg-[#151932]/60 border border-[#1E2442] hover:border-amber-500/40 transition duration-300 cursor-pointer group flex flex-col justify-between"
               >
@@ -572,9 +572,9 @@ export const ExternalArtistProfileView: React.FC<ExternalArtistProfileProps> = (
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {visibleLive.map((rel) => (
+            {visibleLive.map((rel, idx) => (
               <div
-                key={rel.providerReleaseId}
+                key={`live-${rel.providerReleaseId}-${idx}`}
                 onClick={() => navigate(`/music/external/release/${rel.provider}/${rel.providerReleaseId}`)}
                 className="p-3 rounded-2xl bg-[#080A18]/60 hover:bg-[#151932]/60 border border-[#1E2442] hover:border-rose-500/40 transition duration-300 cursor-pointer group flex flex-col justify-between"
               >
@@ -610,9 +610,9 @@ export const ExternalArtistProfileView: React.FC<ExternalArtistProfileProps> = (
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {fullProfile.featuring.map((featTrack) => (
+            {fullProfile.featuring.map((featTrack, idx) => (
               <div
-                key={featTrack.id}
+                key={`feat-${featTrack.id}-${idx}`}
                 onClick={() => handlePlayTrack(featTrack)}
                 className="p-3.5 rounded-2xl bg-[#080A18]/60 hover:bg-[#151932]/60 border border-[#1E2442] hover:border-emerald-500/40 transition duration-300 flex items-center gap-3.5 cursor-pointer group"
               >
@@ -646,9 +646,9 @@ export const ExternalArtistProfileView: React.FC<ExternalArtistProfileProps> = (
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {fullProfile.similarArtists.map((sa) => (
+            {fullProfile.similarArtists.map((sa, idx) => (
               <div
-                key={sa.providerArtistId}
+                key={`sa-${sa.providerArtistId}-${idx}`}
                 onClick={() => navigate(`/music/external/artist/${sa.provider}/${sa.providerArtistId}`)}
                 className="p-4 rounded-2xl bg-[#080A18]/60 hover:bg-[#151932]/60 border border-[#1E2442] hover:border-violet-500/40 transition duration-300 flex flex-col items-center text-center cursor-pointer group space-y-3"
               >

@@ -54,8 +54,8 @@ export const ContentMusicTracklist: React.FC<ContentMusicTracklistProps> = ({ tr
       {/* Tracks Table */}
       <div className="space-y-1.5">
         {tracks.map((track, idx) => {
-          const trackKey = track.id || track.trackNumber || idx + 1;
-          const isPlaying = playingTrackId === trackKey;
+          const trackKey = track.id !== undefined && track.id !== null ? `tr-${track.id}` : `tr-num-${track.trackNumber ?? idx}-${idx}`;
+          const isPlaying = playingTrackId === (track.id || track.trackNumber || trackKey);
 
           return (
             <div

@@ -43,7 +43,7 @@ export const ContentSeasonsEpisodes: React.FC<ContentSeasonsEpisodesProps> = ({
             const isSelected = idx === selectedSeasonIdx;
             return (
               <button
-                key={s.id || idx}
+                key={`season-${s.id ?? s.seasonNumber ?? idx}-${idx}`}
                 onClick={() => setSelectedSeasonIdx(idx)}
                 className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
                   isSelected
@@ -68,13 +68,13 @@ export const ContentSeasonsEpisodes: React.FC<ContentSeasonsEpisodesProps> = ({
       {/* Episodes List */}
       {episodes.length > 0 ? (
         <div className="space-y-3">
-          {episodes.map((ep) => {
+          {episodes.map((ep, idx) => {
             const epKey = `${currentSeason.seasonNumber}-${ep.episodeNumber}`;
             const isWatched = watchedEpisodes.has(epKey) || Boolean(ep.watched);
 
             return (
               <div
-                key={ep.id || ep.episodeNumber}
+                key={`ep-${currentSeason.seasonNumber}-${ep.id ?? ep.episodeNumber}-${idx}`}
                 className="p-4 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 hover:border-zinc-700/80 transition-all flex flex-col md:flex-row gap-4 items-start"
               >
                 {/* Thumbnail / Still */}

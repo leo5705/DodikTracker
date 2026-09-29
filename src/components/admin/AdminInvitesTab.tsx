@@ -352,8 +352,8 @@ export const AdminInvitesTab: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#1E2442]">
-                {items.map((item) => (
-                  <tr key={item.id} className="hover:bg-[#11152A]/80 transition-colors">
+                {items.map((item, idx) => (
+                  <tr key={`adm-invite-${item.id ?? idx}-${idx}`} className="hover:bg-[#11152A]/80 transition-colors">
                     {/* Code */}
                     <td className="py-4 px-5">
                       <div className="flex items-center gap-2.5">

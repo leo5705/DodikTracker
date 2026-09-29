@@ -126,12 +126,12 @@ export const MonthView: React.FC<MonthViewProps> = ({
 
               {/* Day mini preview items */}
               <div className="space-y-1 overflow-hidden my-auto">
-                {dayItems.slice(0, 2).map((item) => {
+                {dayItems.slice(0, 2).map((item, itemIdx) => {
                   const meta = getCategoryBadge(item.type);
                   const targetId = item.mediaId || item.id;
                   return (
                     <div
-                      key={item.id}
+                      key={`month-item-${item.id ?? item.mediaId ?? itemIdx}-${itemIdx}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         navigate(`/media/${formatMediaTypePath(item.type)}/${targetId}`);

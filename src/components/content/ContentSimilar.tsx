@@ -50,7 +50,7 @@ export const ContentSimilar: React.FC<ContentSimilarProps> = ({
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
         {items.map((item, idx) => (
           <button
-            key={item.id || item.externalId || idx}
+            key={`sim-${item.id ?? item.externalId ?? idx}-${idx}`}
             onClick={() => handleItemClick(item)}
             className="group p-2.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 hover:border-purple-500/50 hover:bg-zinc-950 transition-all flex flex-col text-left"
           >

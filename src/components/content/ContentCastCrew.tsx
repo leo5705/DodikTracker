@@ -77,7 +77,7 @@ export const ContentCastCrew: React.FC<ContentCastCrewProps> = ({ cast = [], cre
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
         {currentList.map((person, idx) => (
           <button
-            key={person.id || idx}
+            key={`person-${activeTab}-${person.id ?? person.name ?? idx}-${idx}`}
             onClick={() => handlePersonClick(person)}
             className="group p-2.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 hover:border-purple-500/50 hover:bg-zinc-950 transition-all flex flex-col text-left"
           >

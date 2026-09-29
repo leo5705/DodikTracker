@@ -17,10 +17,19 @@ import { PUBLIC_UPLOADS_DIR, ensureUploadDirsExist } from './src/server/routes/u
 
 async function startServer() {
   ensureUploadDirsExist();
-  await initDbSettings();
+
+  try {
+    await initDbSettings();
+  } catch (err) {
+    console.warn('[Server] DB init warning:', err);
+  }
 
   // Start background services
-  startMessageCleanupCron();
+  try {
+    startMessageCleanupCron();
+  } catch (err) {
+    console.warn('[Server] Cleanup cron warning:', err);
+  }
 
   const app = express();
   const PORT = 3000;

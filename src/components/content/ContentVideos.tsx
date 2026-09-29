@@ -69,7 +69,7 @@ export const ContentVideos: React.FC<ContentVideosProps> = ({ videos, contentTit
 
           return (
             <div
-              key={vid.id || idx}
+              key={`vid-${vid.id ?? vid.key ?? idx}-${idx}`}
               onClick={() => setSelectedVideo(vid)}
               className="group cursor-pointer p-3 rounded-2xl bg-[#080A18] border border-[#1E2442] hover:border-[#8B5CF6]/60 hover:bg-[#11152A] transition-all flex flex-col justify-between"
             >

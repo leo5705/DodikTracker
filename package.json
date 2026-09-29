@@ -34,6 +34,7 @@
     "test:ytplayer": "tsx src/server/tests/youtubePlayerIntegration.ts",
     "test:catalog": "tsx src/server/tests/catalogArchitecture.ts",
     "test:search": "tsx src/server/tests/musicSearchIntegration.ts",
+    "test:playback": "tsx src/server/tests/playbackService.test.ts",
     "test:soundcloud": "tsx src/server/tests/soundcloudArchitecture.ts",
     "test:lyrics": "tsx src/server/tests/lyricsParserTests.ts && tsx src/server/tests/liveLyricsLogicTests.ts",
     "test:step22": "tsx src/server/tests/step22GeniusAndMusicLayoutTests.ts",

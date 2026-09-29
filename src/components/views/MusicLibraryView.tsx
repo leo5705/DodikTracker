@@ -813,9 +813,9 @@ export const MusicLibraryView: React.FC = () => {
               ) : (
                 <>
                   <div className="space-y-2">
-                    {tracks.map((trk) => (
+                    {tracks.map((trk, idx) => (
                       <MusicTrackCard
-                        key={trk.id}
+                        key={`fav-trk-${trk.id}-${idx}`}
                         track={{ ...trk, isFavorite: true }}
                         queueContext={tracks}
                         variant="row"
@@ -937,9 +937,9 @@ export const MusicLibraryView: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                  {releases.map((rel) => (
+                  {releases.map((rel, idx) => (
                     <div
-                      key={rel.id}
+                      key={`fav-rel-${rel.id}-${idx}`}
                       onClick={() => navigate(`/music/release/${rel.slug || rel.id}`)}
                       className="group p-3 rounded-2xl bg-[#0B0D20] hover:bg-[#121632] border border-[#1E2442] hover:border-purple-500/40 transition-all cursor-pointer flex flex-col justify-between relative shadow-lg"
                     >
@@ -1301,9 +1301,9 @@ export const MusicLibraryView: React.FC = () => {
               ) : (
                 <>
                   <div className="space-y-2">
-                    {recentTracks.map((trk) => (
+                    {recentTracks.map((trk, idx) => (
                       <MusicTrackCard
-                        key={trk.id}
+                        key={`recent-trk-${trk.id}-${idx}`}
                         track={trk}
                         queueContext={recentTracks}
                         variant="row"
@@ -1365,9 +1365,9 @@ export const MusicLibraryView: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {reviews.map((rev) => (
+                  {reviews.map((rev, idx) => (
                     <div
-                      key={rev.id}
+                      key={`rev-${rev.id}-${idx}`}
                       onClick={() => navigate(`/music/release/${rev.releaseSlug || rev.releaseId}`)}
                       className="p-5 rounded-2xl bg-[#0B0D20] hover:bg-[#121632] border border-[#1E2442] hover:border-purple-500/40 transition-all cursor-pointer space-y-4 shadow-lg"
                     >
@@ -1480,9 +1480,9 @@ export const MusicLibraryView: React.FC = () => {
                         <span>Локальные музыканты ({subscribedDodikArtists.length})</span>
                       </h3>
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                        {subscribedDodikArtists.map((art) => (
+                        {subscribedDodikArtists.map((art, idx) => (
                           <div
-                            key={art.id}
+                            key={`sub-art-${art.id}-${idx}`}
                             onClick={() => navigate(`/music/artist/${art.slug || art.id}`)}
                             className="p-4 rounded-2xl bg-[#0B0D20] border border-[#1E2442]/80 hover:border-purple-500/40 hover:bg-[#121632] text-center transition-all cursor-pointer group shadow-lg"
                           >

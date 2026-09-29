@@ -95,9 +95,9 @@ export const WeekView: React.FC<WeekViewProps> = ({
 
           {itemsByDate[activeMobileDay] && itemsByDate[activeMobileDay].length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {itemsByDate[activeMobileDay].map((item) => (
+              {itemsByDate[activeMobileDay].map((item, idx) => (
                 <ReleaseCard
-                  key={item.id}
+                  key={`wk-mob-${item.id || idx}-${idx}`}
                   item={item}
                   onToggleFollow={onToggleFollow}
                 />
@@ -168,9 +168,9 @@ export const WeekView: React.FC<WeekViewProps> = ({
               {/* Releases List: Normal vertical stacked items without absolute clipping */}
               <div className="p-2 flex flex-col gap-2.5 flex-1 w-full">
                 {dayItems.length > 0 ? (
-                  dayItems.map((item) => (
+                  dayItems.map((item, idx) => (
                     <ReleaseCard
-                      key={item.id}
+                      key={`wk-desk-${item.id || idx}-${idx}`}
                       item={item}
                       onToggleFollow={onToggleFollow}
                       compact={true}

@@ -379,9 +379,9 @@ export const AdminMusiciansTab: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredApps.map((app) => (
+              {filteredApps.map((app, idx) => (
                 <div
-                  key={app.id}
+                  key={`musician-app-${app.id ?? idx}-${idx}`}
                   className="p-5 rounded-3xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#2E365C] transition-all flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4"
                 >
                   {/* Left User & Info */}
@@ -526,9 +526,9 @@ export const AdminMusiciansTab: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredMusicians.map((m) => (
+              {filteredMusicians.map((m, idx) => (
                 <div
-                  key={m.id}
+                  key={`musician-${m.id ?? idx}-${idx}`}
                   className="p-5 rounded-3xl bg-[#0B0D20] border border-[#1E2442] hover:border-[#2E365C] transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
                 >
                   <div className="flex items-center gap-4 min-w-0">

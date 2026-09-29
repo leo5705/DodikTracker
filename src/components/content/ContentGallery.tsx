@@ -49,7 +49,7 @@ export const ContentGallery: React.FC<ContentGalleryProps> = ({
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
         {images.map((img, idx) => (
           <button
-            key={img.id || idx}
+            key={`gallery-img-${img.id ?? idx}-${idx}`}
             onClick={() => setActiveIdx(idx)}
             className="group relative aspect-video rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-950 hover:border-purple-500/60 transition-all focus:outline-none focus:ring-2 focus:ring-purple-500"
           >

@@ -158,7 +158,7 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
         </div>
       ) : reviews.length > 0 ? (
         <div className="space-y-4">
-          {reviews.map((rev) => {
+          {reviews.map((rev, idx) => {
             const isAuthor = dbUser && dbUser.id === rev.userId;
             const score = rev.score || rev.rating;
             const hasSpoilers = Boolean(rev.containsSpoilers);
@@ -166,7 +166,7 @@ export const ContentReviewsSection: React.FC<ContentReviewsSectionProps> = ({
 
             return (
               <div
-                key={rev.id}
+                key={`rev-${rev.id ?? idx}-${idx}`}
                 className="p-5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] space-y-3.5 hover:border-[#8B5CF6]/40 transition-all"
               >
                 {/* Author Info & Rating */}

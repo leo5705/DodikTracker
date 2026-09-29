@@ -134,28 +134,20 @@ export function getStablePlaylistKey(playlist: any, index?: number): string {
 }
 
 export function getStablePlaylistTrackKey(track: any, index?: number): string {
-  if (!track) return index !== undefined ? `pl-track-fallback-${index}` : 'pl-track-fallback';
+  if (!track) return `pl-track-fallback-${index ?? 0}`;
 
-  // If junctionId from music_playlist_tracks exists, it is the unique primary key of the playlist track item
+  let key = '';
   if (track.junctionId !== undefined && track.junctionId !== null && track.junctionId !== '') {
-    return `pl-junction-${track.junctionId}`;
+    key = `pl-junction-${track.junctionId}`;
+  } else if (track.playlistTrackId !== undefined && track.playlistTrackId !== null) {
+    key = `pl-junction-${track.playlistTrackId}`;
+  } else if (track.playlistId !== undefined && track.position !== undefined) {
+    key = `pl-${track.playlistId}-pos-${track.position}-tr-${track.id}`;
+  } else {
+    key = `pl-tr-${getStableTrackBaseKey(track)}`;
   }
 
-  // If playlist_track_id or playlistTrackId exists
-  if (track.playlistTrackId !== undefined && track.playlistTrackId !== null) {
-    return `pl-junction-${track.playlistTrackId}`;
-  }
-
-  // If position and playlistId exist
-  if (track.playlistId !== undefined && track.position !== undefined) {
-    return `pl-${track.playlistId}-pos-${track.position}-tr-${track.id}`;
-  }
-
-  const baseTrackKey = getStableTrackBaseKey(track);
-  if (index !== undefined) {
-    return `pl-tr-${baseTrackKey}-${index}`;
-  }
-  return `pl-tr-${baseTrackKey}`;
+  return index !== undefined ? `${key}-${index}` : key;
 }
 
 /**

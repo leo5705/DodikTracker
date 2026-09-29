@@ -418,7 +418,7 @@ export const ContentMetadataGrid: React.FC<ContentMetadataGridProps> = ({ item }
           const Icon = row.icon;
           return (
             <div
-              key={idx}
+              key={`meta-row-${row.label}-${idx}`}
               className="p-3.5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] flex items-start gap-3"
             >
               <div className="p-2 rounded-xl bg-[#151932] border border-[#1E2442] text-[#A78BFA] shrink-0 mt-0.5">

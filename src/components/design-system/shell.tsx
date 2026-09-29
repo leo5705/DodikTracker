@@ -34,7 +34,7 @@ import { useNotifications } from '../../context/NotificationContext.tsx';
 import { useMusicPlayer } from '../../context/MusicPlayerContext.tsx';
 import { FeedbackModal } from '../modals/FeedbackModal.tsx';
 import { Avatar } from './user-and-social.tsx';
-import { GlobalMusicPlayer } from '../music/GlobalMusicPlayer.tsx';
+import { DesktopTopBarMusicPlayer, MobileBottomMusicPlayer } from '../music/GlobalMusicPlayer.tsx';
 import { AnimatePresence } from 'motion/react';
 
 export interface NavItemConfig {
@@ -476,7 +476,7 @@ export const TopBar: React.FC<{
       </div>
 
       {/* Global Search Bar in TopBar */}
-      <div ref={searchContainerRef} className="hidden sm:flex items-center flex-1 max-w-lg mx-auto relative">
+      <div ref={searchContainerRef} className="hidden sm:flex items-center flex-1 max-w-sm lg:max-w-md 2xl:max-w-lg relative">
         <form onSubmit={handleSearchSubmit} className="relative w-full flex items-center">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-[#8B5CF6] pointer-events-none" />
           <input
@@ -485,7 +485,7 @@ export const TopBar: React.FC<{
             onChange={handleInputChange}
             onFocus={() => setIsOpenSuggestions(true)}
             placeholder="Быстрый поиск фильмов, аниме, игр, книг..."
-            className="w-full h-11 pl-10 pr-16 rounded-xl bg-[#0B0D20] hover:bg-[#11152A] focus:bg-[#0B0D20] text-sm text-[#F8FAFC] placeholder-[#64748B] border border-[#1E2442] focus:border-[#8B5CF6]/80 focus:ring-1 focus:ring-[#8B5CF6]/30 transition-all outline-none"
+            className="w-full h-10 pl-10 pr-16 rounded-xl bg-[#0B0D20] hover:bg-[#11152A] focus:bg-[#0B0D20] text-sm text-[#F8FAFC] placeholder-[#64748B] border border-[#1E2442] focus:border-[#8B5CF6]/80 focus:ring-1 focus:ring-[#8B5CF6]/30 transition-all outline-none"
           />
           <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
             {searchValue && (
@@ -502,7 +502,7 @@ export const TopBar: React.FC<{
             )}
             <button
               type="submit"
-              className="p-2 rounded-lg bg-[#151932] hover:bg-[#8B5CF6] text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg bg-[#151932] hover:bg-[#8B5CF6] text-[#A78BFA] hover:text-white transition-colors cursor-pointer"
               title="Поиск"
             >
               <Search className="w-3.5 h-3.5" />
@@ -590,6 +590,9 @@ export const TopBar: React.FC<{
           </div>
         )}
       </div>
+
+      {/* Desktop Mini Player placed directly in TopBar alongside Search */}
+      <DesktopTopBarMusicPlayer />
 
 
 
@@ -711,6 +714,7 @@ export const AppShell: React.FC<{
   children: React.ReactNode;
 }> = ({ children }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { currentTrack } = useMusicPlayer();
 
   return (
     <div className="min-h-screen bg-[#080A18] text-[#F8FAFC] flex antialiased">
@@ -736,13 +740,16 @@ export const AppShell: React.FC<{
       <div className="flex-1 min-w-0 flex flex-col min-h-screen">
         <TopBar onOpenMobileMenu={() => setMobileMenuOpen(true)} />
 
-        {/* Global Top Music Player */}
-        <GlobalMusicPlayer />
-
-        <main className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 2xl:px-10 py-6 max-w-[1760px] 2xl:max-w-[1920px] mx-auto w-full transition-all">
+        <main className={`flex-1 min-w-0 px-4 sm:px-6 lg:px-8 2xl:px-10 py-6 max-w-[1760px] 2xl:max-w-[1920px] mx-auto w-full transition-all ${
+          currentTrack ? 'pb-36 md:pb-6' : 'pb-24 md:pb-6'
+        }`}>
           {children}
         </main>
 
+        {/* Mobile Fixed Bottom Music Player */}
+        <MobileBottomMusicPlayer />
+
+        {/* Mobile Bottom Navigation Bar */}
         <MobileBottomNav />
       </div>
     </div>

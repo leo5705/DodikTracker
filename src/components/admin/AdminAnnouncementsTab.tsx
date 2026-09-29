@@ -310,11 +310,11 @@ export const AdminAnnouncementsTab: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-4">
-          {items.map((ann) => {
+          {items.map((ann, idx) => {
             const isCurrentlyPublished = ann.status === 'PUBLISHED' && ann.isActive;
             return (
               <div
-                key={ann.id}
+                key={`ann-${ann.id ?? idx}-${idx}`}
                 className={`p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border transition-all duration-200 space-y-4 shadow-lg ${
                   ann.priority === 'CRITICAL' && isCurrentlyPublished
                     ? 'border-rose-500/40 bg-gradient-to-br from-rose-950/10 via-[#0B0D20] to-[#0B0D20]'

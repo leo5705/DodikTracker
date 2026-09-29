@@ -36,8 +36,8 @@ export const MusicNewReleasesView: React.FC = () => {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-          {releases.map((rel) => (
-            <MusicReleaseCard key={rel.id} release={rel} />
+          {releases.map((rel, idx) => (
+            <MusicReleaseCard key={`new-rel-${rel.id || idx}-${idx}`} release={rel} />
           ))}
         </div>
       )}
