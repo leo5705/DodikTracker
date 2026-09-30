@@ -1673,7 +1673,7 @@ musicRouter.delete('/tracks/:id', requireAuth, async (req: AuthRequest, res: Res
 /**
  * GET /api/music/tracks/:trackId/playback?quality=low|standard|high|maximum
  * Unified Playback API for Web, Android (ExoPlayer), and iOS clients.
- * Resolves direct playable audio streams (MP3/WebM/googlevideo) from internal uploaded audio files or YouTube resolver microservice.
+ * Resolves direct playable audio streams (MP3/WAV/external) or YouTube playback metadata through PlaybackService.
  */
 musicRouter.get('/tracks/:trackId/playback', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -1682,18 +1682,21 @@ musicRouter.get('/tracks/:trackId/playback', optionalAuth, async (req: AuthReque
 
     let trackToResolve: any = null;
 
-    // Check if trackId is YouTube external track (e.g. "yt_dQw4w9WgXcQ" or "youtube:dQw4w9WgXcQ")
+    // 1. Check if trackId is YouTube external track (e.g. "yt_dQw4w9WgXcQ" or "youtube:dQw4w9WgXcQ")
     if (typeof rawTrackId === 'string' && (rawTrackId.startsWith('yt_') || rawTrackId.startsWith('youtube:'))) {
       const extractedYtId = extractYouTubeVideoId(rawTrackId);
       if (extractedYtId) {
         trackToResolve = {
           id: rawTrackId,
           videoId: extractedYtId,
-          title: 'YouTube Track',
+          title: (req.query.title as string) || 'YouTube Track',
+          artistName: (req.query.artist as string) || '',
+          releaseTitle: (req.query.album as string) || '',
         };
       }
     }
 
+    // 2. Check if numeric database track
     if (!trackToResolve) {
       const numericId = parseInt(rawTrackId, 10);
       if (!isNaN(numericId) && numericId > 0) {
@@ -1706,27 +1709,75 @@ musicRouter.get('/tracks/:trackId/playback', optionalAuth, async (req: AuthReque
             audioFile: musicTracks.audioFile,
             duration: musicTracks.duration,
             status: musicTracks.status,
+            artistName: artistProfiles.stageName,
+            artistSlug: artistProfiles.slug,
+            releaseTitle: musicReleases.title,
+            releaseCover: musicReleases.cover,
           })
           .from(musicTracks)
+          .leftJoin(artistProfiles, eq(musicTracks.artistId, artistProfiles.id))
+          .leftJoin(musicReleases, eq(musicTracks.releaseId, musicReleases.id))
           .where(eq(musicTracks.id, numericId))
           .limit(1);
 
         if (trackRow) {
-          trackToResolve = trackRow;
+          trackToResolve = { ...trackRow };
+
+          // If track has missing/empty audio file, attempt on-the-fly YouTube Music resolution and persist
+          if (!trackRow.audioFile || trackRow.audioFile.trim() === '') {
+            const query = [trackRow.artistName, trackRow.title].filter(Boolean).join(' ').trim();
+            if (query) {
+              try {
+                const searchResults = await youtubeMusicService.searchSongs(query, 1);
+                if (searchResults && searchResults.length > 0) {
+                  const top = searchResults[0];
+                  const newAudioFile = `yt_${top.videoId}`;
+                  trackToResolve.audioFile = newAudioFile;
+                  trackToResolve.videoId = top.videoId;
+                  if (!trackToResolve.duration && top.durationSeconds) {
+                    trackToResolve.duration = top.durationSeconds;
+                  }
+                  await db
+                    .update(musicTracks)
+                    .set({
+                      audioFile: newAudioFile,
+                      duration: trackToResolve.duration || undefined,
+                      updatedAt: new Date(),
+                    })
+                    .where(eq(musicTracks.id, numericId))
+                    .catch(() => {});
+                }
+              } catch (e) {
+                console.warn(`[Playback API] Search fallback warning for track #${numericId}:`, e);
+              }
+            }
+          }
         }
       }
     }
 
+    // 3. Fallback: If string ID is an 11-char video ID or other yt string
     if (!trackToResolve) {
-      // Fallback: If string ID is an 11-char video ID or other yt string
       const ytId = extractYouTubeVideoId(rawTrackId);
       if (ytId) {
         trackToResolve = {
           id: rawTrackId,
           videoId: ytId,
-          title: 'YouTube Track',
+          title: (req.query.title as string) || 'YouTube Track',
+          artistName: (req.query.artist as string) || '',
+          releaseTitle: (req.query.album as string) || '',
         };
       }
+    }
+
+    // 4. Fallback: Query parameters if title provided
+    if (!trackToResolve && req.query.title) {
+      trackToResolve = {
+        id: rawTrackId,
+        title: String(req.query.title).trim(),
+        artistName: String(req.query.artist || '').trim(),
+        releaseTitle: String(req.query.album || '').trim(),
+      };
     }
 
     if (!trackToResolve) {
@@ -1751,6 +1802,10 @@ musicRouter.get('/tracks/:trackId/playback', optionalAuth, async (req: AuthReque
       expiresAt: resolved.expiresAt,
       isSeekable: resolved.isSeekable ?? true,
       duration: resolved.duration,
+      title: trackToResolve.title,
+      artistName: trackToResolve.artistName,
+      releaseTitle: trackToResolve.releaseTitle,
+      cover: trackToResolve.releaseCover,
     });
   } catch (err: any) {
     if (err instanceof PlaybackError) {

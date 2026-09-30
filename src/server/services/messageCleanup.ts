@@ -164,8 +164,8 @@ export async function runMessageCleanupJob(): Promise<{ deletedCount: number; du
     status.lastDurationMs = durationMs;
     status.lastError = errorMsg;
 
-    console.error(`[Message Cleanup Worker] ERROR occurred during message cleanup after ${durationMs}ms:`, error);
-    throw error;
+    console.warn(`[Message Cleanup Worker] Cleanup skipped (database unreachable or query failed): ${errorMsg}`);
+    return { deletedCount: 0, durationMs };
   } finally {
     isCleanupRunning = false;
     status.isRunning = false;

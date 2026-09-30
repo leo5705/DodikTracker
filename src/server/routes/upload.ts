@@ -92,7 +92,7 @@ uploadRouter.post('/cover', requireAuth, (req: AuthRequest, res: Response) => {
     return res.status(403).json({ error: 'Загрузка обложек релизов доступна только музыкантам и администрации' });
   }
 
-  coverUpload.single('cover')(req, res, (err: any) => {
+  coverUpload.single('cover')(req as any, res as any, (err: any) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: 'Размер обложки не должен превышать 15 МБ' });
@@ -124,7 +124,7 @@ uploadRouter.post('/audio', requireAuth, (req: AuthRequest, res: Response) => {
     return res.status(403).json({ error: 'Загрузка аудиофайлов доступна только музыкантам и администраторам' });
   }
 
-  audioUpload.single('audio')(req, res, (err: any) => {
+  audioUpload.single('audio')(req as any, res as any, (err: any) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: 'Размер аудиофайла не должен превышать 100 МБ' });

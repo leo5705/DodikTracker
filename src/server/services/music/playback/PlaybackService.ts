@@ -42,8 +42,13 @@ export class PlaybackService implements PlaybackResolver {
 
     // 2. Check for direct audio indicators
     const directFile = track.audioFile || track.audioUrl || track.playbackUrl;
-    if (directFile && typeof directFile === 'string' && directFile.trim() && !directFile.startsWith('yt_')) {
+    if (directFile && typeof directFile === 'string' && directFile.trim() && !directFile.startsWith('yt_') && !directFile.startsWith('youtube:')) {
       return 'direct_audio';
+    }
+
+    // 3. Fallback: tracks with title/artist can be resolved dynamically via YouTube Music
+    if (track.title || track.name) {
+      return 'youtube';
     }
 
     return 'none';

@@ -98,6 +98,13 @@ export const AuthGatekeeper: React.FC = () => {
       ) {
         setPopupBlocked(true);
         setError('Браузер заблокировал всплывающее окно авторизации Google. Нажмите кнопку ниже, чтобы открыть приложение в новой вкладке, или воспользуйтесь входом по паролю / Telegram.');
+      } else if (
+        err?.code === 'auth/unauthorized-domain' ||
+        err?.message?.includes('unauthorized-domain')
+      ) {
+        setError(
+          `Домен приложения (${window.location.hostname}) не добавлен в список авторизованных в Firebase Console (Authentication → Settings → Authorized domains). Пожалуйста, используйте вход по логину и паролю (вкладки «Вход» / «Регистрация») или авторизуйте домен в Firebase.`
+        );
       } else if (err.message && err.message.includes('Pending promise was never set')) {
         // Ignore this internal assertion
       } else {

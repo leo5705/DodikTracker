@@ -145,6 +145,44 @@ export async function runPlaybackServiceTests(): Promise<{
     results.push({ name: '4. Cache Stampede Protection', passed: false, error: err.message });
   }
 
+  // 5. YouTube Track Resolution via PlaybackService (in-process, no FastAPI required)
+  try {
+    const ytTrack = {
+      id: 'yt_dQw4w9WgXcQ',
+      videoId: 'dQw4w9WgXcQ',
+      title: 'Never Gonna Give You Up',
+    };
+
+    const resolved = await service.resolve(ytTrack, { quality: 'high' });
+    if (resolved.sourceType !== 'youtube') throw new Error(`Expected sourceType "youtube", got "${resolved.sourceType}"`);
+    if (resolved.videoId !== 'dQw4w9WgXcQ') throw new Error(`Expected videoId "dQw4w9WgXcQ", got "${resolved.videoId}"`);
+    if (!resolved.streamUrl || !resolved.streamUrl.includes('dQw4w9WgXcQ')) {
+      throw new Error(`Expected streamUrl containing videoId, got "${resolved.streamUrl}"`);
+    }
+    if (resolved.isSeekable !== true) throw new Error('Expected isSeekable true for YouTube');
+
+    results.push({ name: '5. YouTube Playback Resolution (in-process)', passed: true });
+  } catch (err: any) {
+    results.push({ name: '5. YouTube Playback Resolution (in-process)', passed: false, error: err.message });
+  }
+
+  // 6. Non-existent unplayable track rejection
+  try {
+    const emptyTrack = { id: 'bad_track' };
+    let errorThrown = false;
+    try {
+      await service.resolve(emptyTrack);
+    } catch (e: any) {
+      errorThrown = true;
+      if (e.name !== 'PlaybackError') throw new Error(`Expected PlaybackError, got ${e.name}`);
+    }
+    if (!errorThrown) throw new Error('Expected resolve() to reject empty unplayable track');
+
+    results.push({ name: '6. PlaybackError rejection for empty tracks', passed: true });
+  } catch (err: any) {
+    results.push({ name: '6. PlaybackError rejection for empty tracks', passed: false, error: err.message });
+  }
+
   const passed = results.filter((r) => r.passed).length;
   const total = results.length;
   return { total, passed, failed: total - passed, results };

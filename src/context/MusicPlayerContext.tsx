@@ -1393,34 +1393,50 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           return;
         }
 
-        console.info(`[MusicPlayer] Attempting on-the-fly source resolution for «${title}» by «${artist}»...`);
+        console.info(`[MusicPlayer] Resolving playback via /api/music/tracks/${track.id}/playback for «${title}» by «${artist}»...`);
         setPlaybackStatus('loading');
 
         const queryParams = new URLSearchParams();
         queryParams.set('title', title);
         if (artist) queryParams.set('artist', artist);
         if (album) queryParams.set('album', album);
-        if (track.id && (typeof track.id === 'number' || /^\d+$/.test(String(track.id)))) {
-          queryParams.set('trackId', String(track.id));
-        }
 
-        const resolvePromise = fetch(`/api/music/resolve-source?${queryParams.toString()}`)
+        const trackEndpointId = track.id ? encodeURIComponent(String(track.id)) : 'query';
+        const resolvePromise = fetch(`/api/music/tracks/${trackEndpointId}/playback?${queryParams.toString()}`)
           .then((res) => (res.ok ? res.json() : null))
           .then((data) => {
-            if (data && data.playable && data.videoId) {
+            if (data && (data.videoId || data.streamUrl)) {
+              const isYouTube = data.sourceType === 'youtube' || Boolean(data.videoId);
               const resolvedTrack: Track = {
                 ...track,
-                source: 'youtube',
-                videoId: data.videoId,
-                youtubeUrl: `https://www.youtube.com/watch?v=${data.videoId}`,
-                audioFile: `yt_${data.videoId}`,
+                source: isYouTube ? 'youtube' : 'dodik',
+                videoId: data.videoId || (isYouTube ? extractYouTubeVideoId(data.streamUrl) : undefined),
+                youtubeUrl: data.videoId ? `https://www.youtube.com/watch?v=${data.videoId}` : track.youtubeUrl,
+                audioFile: data.videoId ? `yt_${data.videoId}` : (data.streamUrl || track.audioFile),
                 duration: track.duration || data.duration || null,
                 playable: true,
               };
               currentTrackRef.current = resolvedTrack;
               setCurrentTrack(resolvedTrack);
               setPlaybackStatus('loading');
-              initOrGetYouTubePlayer(data.videoId, true);
+              if (isYouTube && resolvedTrack.videoId) {
+                if (audioRef.current) {
+                  audioRef.current.pause();
+                  audioRef.current.src = '';
+                }
+                initOrGetYouTubePlayer(resolvedTrack.videoId, true);
+              } else if (data.streamUrl && audioRef.current) {
+                if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
+                  try { ytPlayerRef.current.pauseVideo(); } catch {}
+                }
+                audioRef.current.src = data.streamUrl;
+                audioRef.current.currentTime = 0;
+                audioRef.current.volume = isMuted ? 0 : volume;
+                audioRef.current.play().then(() => {
+                  setIsPlaying(true);
+                  setPlaybackStatus('playing');
+                }).catch(() => handleUnplayable(track));
+              }
               return data;
             }
             handleUnplayable(track);

@@ -66,12 +66,7 @@ import { promisify } from 'util';
 
 const lookupAsync = promisify(dns.lookup);
 
-import { musicStreamRouter } from './routes/music_stream.ts';
-
 export const apiRouter = Router();
-
-// Mount yt-dlp & track catalog streaming endpoints
-apiRouter.use('/', musicStreamRouter);
 
 // ==========================================
 // SYSTEM & HEALTH (No auth required)
@@ -440,8 +435,15 @@ const getRegistrationStatusHandler = async (_req: any, res: any) => {
       isMaintenance: mode === 'MAINTENANCE',
       botUsername,
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (_err: any) {
+    res.json({
+      mode: 'OPEN',
+      allowsRegistration: true,
+      requiresInvite: false,
+      isClosed: false,
+      isMaintenance: false,
+      botUsername: 'DodikTrackerBot',
+    });
   }
 };
 

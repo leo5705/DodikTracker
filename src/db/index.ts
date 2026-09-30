@@ -18,7 +18,18 @@ export const createPool = () => {
 
     let poolConfig: PoolConfig;
 
-    if (connectionString) {
+    if (process.env.SQL_HOST && process.env.SQL_USER) {
+      // Cloud SQL instance (Unix Domain Socket or proxy host)
+      poolConfig = {
+        host: process.env.SQL_HOST,
+        user: process.env.SQL_USER,
+        password: process.env.SQL_PASSWORD ? String(process.env.SQL_PASSWORD) : undefined,
+        database: process.env.SQL_DB_NAME,
+        max: 10,
+        connectionTimeoutMillis: 15000,
+        idleTimeoutMillis: 30000,
+      };
+    } else if (connectionString) {
       poolConfig = {
         connectionString,
         max: 10,
@@ -26,12 +37,12 @@ export const createPool = () => {
         idleTimeoutMillis: 30000,
       };
     } else {
-      const host = process.env.SQL_HOST || process.env.PGHOST || 'localhost';
+      const host = process.env.PGHOST || 'localhost';
       const port = parseInt(process.env.SQL_PORT || process.env.PGPORT || '5432', 10);
-      const user = process.env.SQL_USER || process.env.PGUSER || 'postgres';
-      const rawPassword = process.env.SQL_PASSWORD ?? process.env.PGPASSWORD ?? '';
+      const user = process.env.PGUSER || 'postgres';
+      const rawPassword = process.env.PGPASSWORD ?? '';
       const password = String(rawPassword);
-      const database = process.env.SQL_DB_NAME || process.env.PGDATABASE || 'dodik_tracker';
+      const database = process.env.PGDATABASE || 'dodik_tracker';
 
       poolConfig = {
         host,
