@@ -4,7 +4,7 @@
 # Safe, atomic, idempotent, resilient, and diagnostic-rich update mechanism.
 # Guarantees ZERO DATA LOSS for PostgreSQL database and user uploads.
 # Includes preflight checks, disk space checks, lockfile verification,
-# automatic rollback, and secret-sanitized state persistence.
+# automatic rollback, process liveness heartbeat, and secret-sanitized state persistence.
 # ==============================================================================
 
 set -euo pipefail
@@ -18,20 +18,69 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Ensure update engine is detached from parent process group / session to prevent
-# termination when parent service (dodik-tracker) is restarted by PM2
-if [ -z "${DODIK_UPDATE_DETACHED:-}" ]; then
-  export DODIK_UPDATE_DETACHED=1
-  if command -v setsid >/dev/null 2>&1; then
-    exec setsid bash "$0" "$@"
+# 2. Daemonization & Process Isolation
+# If not already running as the isolated daemon worker, launch worker in background with setsid
+# and exit immediately (or follow logs if interactive terminal).
+# Because the launcher exits immediately, the worker is orphaned and re-parented to PID 1 (init/systemd).
+# This guarantees that when PM2 restarts dodik-tracker in Stage 9, PM2's recursive tree-kill
+# on dodik-tracker CANNOT find or kill this worker process!
+if [ -z "${DODIK_UPDATE_WORKER:-}" ]; then
+  export DODIK_UPDATE_WORKER=1
+  mkdir -p "$PROJECT_ROOT/logs"
+
+  # Launch independent worker daemon in background with own session
+  ( setsid bash "$0" "$@" </dev/null >> "$PROJECT_ROOT/logs/update.log" 2>&1 & )
+  WORKER_PID=$!
+
+  # If running in an interactive SSH terminal (and not spawned by server API):
+  if [ -t 1 ] && [ -z "${DODIK_UPDATE_SERVER_SPAWNED:-}" ]; then
+    echo "=================================================="
+    echo "🚀 Dodik Tracker - Safe Production Update Engine"
+    echo "=================================================="
+    echo "Worker process detached (PID: $WORKER_PID, reparenting to PID 1)."
+    echo "Streaming logs from logs/update.log..."
+    echo "(You may press Ctrl+C at any time to disconnect; update will safely continue in background)"
+    echo "=================================================="
+    sleep 1
+
+    # Stream logs until update reaches terminal state or worker exits
+    tail -n 30 -f "$PROJECT_ROOT/logs/update.log" &
+    TAIL_PID=$!
+
+    while true; do
+      if [ -f "$PROJECT_ROOT/logs/update_state.json" ]; then
+        if grep -q -E '"state":[[:space:]]*"(success|failed|rollback_failed)"' "$PROJECT_ROOT/logs/update_state.json" 2>/dev/null; then
+          break
+        fi
+      fi
+      if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+        break
+      fi
+      sleep 2
+    done
+
+    sleep 2
+    kill "$TAIL_PID" 2>/dev/null || true
+    wait "$TAIL_PID" 2>/dev/null || true
+    echo ""
+    echo "=================================================="
+    if [ -f "$PROJECT_ROOT/logs/update_state.json" ] && grep -q '"state":[[:space:]]*"success"' "$PROJECT_ROOT/logs/update_state.json" 2>/dev/null; then
+      echo "✅ Dodik Tracker update completed successfully!"
+    else
+      echo "⚠️ Update process finished. Check logs/update.log for details."
+    fi
+    echo "=================================================="
   fi
+
+  # Exit launcher process immediately with code 0 so worker is orphaned to PID 1
+  exit 0
 fi
 
 # Ensure PATH includes common binary directories
 NODE_CUR_VER=$(node -v 2>/dev/null || echo "")
 export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${HOME:-/root}/.nvm/versions/node/${NODE_CUR_VER}/bin:${HOME:-/root}/.npm-global/bin"
 
-# 2. Directories & Persistent Log Files
+# 3. Directories & Persistent Log Files
 LOG_DIR="$PROJECT_ROOT/logs"
 LOG_FILE="$LOG_DIR/update.log"
 STATE_FILE="$LOG_DIR/update_state.json"
@@ -42,7 +91,7 @@ if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)" -gt 20
   tail -n 2000 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv "${LOG_FILE}.tmp" "$LOG_FILE"
 fi
 
-# 3. Acquire update lock (prevent concurrent update runs)
+# 4. Acquire update lock (prevent concurrent update runs)
 LOCK_FILE="/tmp/dodik-tracker-update.lock"
 exec 200>"$LOCK_FILE"
 if ! flock -n 200; then
@@ -50,7 +99,7 @@ if ! flock -n 200; then
   exit 1
 fi
 
-# 4. Helper functions
+# 5. Helper functions
 
 # Sanitize secrets from logs & error output (hide DB credentials, passwords, tokens)
 sanitize_secrets() {
@@ -122,7 +171,9 @@ DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 
 # State variables
 JOB_ID="update_$(date +%s)"
+JOB_PID="$$"
 JOB_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+LAST_HEARTBEAT_AT="$JOB_START_TIME"
 CURRENT_STAGE="init"
 CURRENT_STATE="running"
 PROGRESS=5
@@ -153,33 +204,9 @@ advance_stage() {
   write_state_file
 }
 
-log() {
-  local level="$1"
-  shift
-  local raw_msg="$*"
-  local msg
-  msg=$(sanitize_secrets "$raw_msg")
-  local ts
-  ts=$(date +"%Y-%m-%d %H:%M:%S")
-
-  echo "[$ts] [$level] $msg" >> "$LOG_FILE"
-
-  # Safely print to stdout/stderr without dying if parent pipe was severed
-  if [ "$level" = "ERROR" ]; then
-    echo "$msg" >&2 2>/dev/null || true
-  else
-    echo "$msg" 2>/dev/null || true
-  fi
-
-  LOG_SUMMARY+=("[$ts] [$level] $msg")
-  if [ "${#LOG_SUMMARY[@]}" -gt 100 ]; then
-    LOG_SUMMARY=("${LOG_SUMMARY[@]: -100}")
-  fi
-
-  write_state_file
-}
-
 write_state_file() {
+  LAST_HEARTBEAT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
   # Construct JSON array of log summary lines safely
   local logs_json="["
   local first_entry=1
@@ -207,10 +234,12 @@ write_state_file() {
   cat <<EOF > "$STATE_FILE.tmp"
 {
   "id": "$JOB_ID",
+  "pid": $JOB_PID,
   "state": "$CURRENT_STATE",
   "stage": "$CURRENT_STAGE",
   "progress": $PROGRESS,
   "startTime": "$JOB_START_TIME",
+  "lastHeartbeatAt": "$LAST_HEARTBEAT_AT",
   "endTime": $(if [ "$CURRENT_STATE" = "running" ]; then echo "null"; else echo "\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\""; fi),
   "deployBranch": "$DEPLOY_BRANCH",
   "previousCommit": "$PREVIOUS_COMMIT",
@@ -229,10 +258,75 @@ EOF
   mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
 }
 
+log() {
+  local level="$1"
+  shift
+  local raw_msg="$*"
+  local msg
+  msg=$(sanitize_secrets "$raw_msg")
+  local ts
+  ts=$(date +"%Y-%m-%d %H:%M:%S")
+
+  echo "[$ts] [$level] $msg" >> "$LOG_FILE"
+
+  # Safely print to stdout/stderr without dying if parent pipe was severed
+  if [ "$level" = "ERROR" ]; then
+    echo "$msg" >&2 2>/dev/null || true
+  else
+    echo "$msg" 2>/dev/null || true
+  fi
+
+  LOG_SUMMARY+=("[$ts] [$level] $msg")
+  if [ "${#LOG_SUMMARY[@]}" -gt 100 ]; then
+    LOG_SUMMARY=("${LOG_SUMMARY[@]: -100}")
+  fi
+
+  write_state_file
+}
+
+# ------------------------------------------------------------------------------
+# HEARTBEAT WORKER (Periodic liveness proof for long-running operations)
+# ------------------------------------------------------------------------------
+HEARTBEAT_PID=""
+start_heartbeat() {
+  local parent_pid="$$"
+  (
+    while true; do
+      sleep 10
+      # If parent process has died, stop heartbeat worker immediately
+      if ! kill -0 "$parent_pid" 2>/dev/null; then
+        break
+      fi
+      if [ ! -f "$STATE_FILE" ]; then
+        continue
+      fi
+      if grep -q '"state": "running"' "$STATE_FILE" 2>/dev/null; then
+        local now_iso
+        now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        sed -i -E "s/\"lastHeartbeatAt\": \"[^\"]+\"/\"lastHeartbeatAt\": \"$now_iso\"/" "$STATE_FILE" 2>/dev/null || true
+      else
+        break
+      fi
+    done
+  ) &
+  HEARTBEAT_PID=$!
+}
+
+stop_heartbeat() {
+  if [ -n "${HEARTBEAT_PID:-}" ]; then
+    kill "$HEARTBEAT_PID" 2>/dev/null || true
+    wait "$HEARTBEAT_PID" 2>/dev/null || true
+    HEARTBEAT_PID=""
+  fi
+}
+
 log "INFO" "[STAGE: init] =================================================="
 log "INFO" "[STAGE: init]     🚀 Dodik Tracker - Safe Production Update Engine"
 log "INFO" "[STAGE: init] =================================================="
 log "INFO" "[STAGE: init] Process ID: $$ | Initial commit: ${PREVIOUS_COMMIT:0:7}"
+
+# Start background liveness heartbeat worker
+start_heartbeat
 
 # ------------------------------------------------------------------------------
 # ROLLBACK SUBROUTINE
@@ -305,11 +399,7 @@ rollback_update() {
   if command -v "$pm2_bin" &>/dev/null || [ -x "$pm2_bin" ]; then
     log "INFO" "[STAGE: rollback] Restarting PM2 process 'dodik-tracker' for rollback..."
     local rb_pm2_exit=0
-    if command -v setsid >/dev/null 2>&1; then
-      run_timed 60 setsid "$pm2_bin" restart dodik-tracker </dev/null >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
-    else
-      run_timed 60 "$pm2_bin" restart dodik-tracker </dev/null >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
-    fi
+    run_timed 60 "$pm2_bin" restart dodik-tracker --update-env </dev/null >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
     if [ $rb_pm2_exit -ne 0 ]; then
       if is_timeout $rb_pm2_exit; then
         log "ERROR" "[STAGE: rollback] [TIMEOUT] PM2 restart during rollback exceeded 60 seconds."
@@ -330,6 +420,8 @@ rollback_update() {
   if check_health "http://localhost:3000/api/health" 10 2; then
     rollback_hc_ok=1
   fi
+
+  stop_heartbeat
 
   if [ $rollback_hc_ok -eq 1 ]; then
     ROLLBACK_STATUS="success"
@@ -364,6 +456,7 @@ handle_signal() {
     return
   fi
 
+  stop_heartbeat
   ERROR_DETAILS="Process received signal $sig at stage '$CURRENT_STAGE'."
   CURRENT_STATE="failed"
   write_state_file
@@ -389,6 +482,7 @@ catch_error() {
   if [ "$CURRENT_STAGE" = "git_pull" ] || [ "$CURRENT_STAGE" = "dependencies" ] || [ "$CURRENT_STAGE" = "build" ] || [ "$CURRENT_STAGE" = "migrations" ] || [ "$CURRENT_STAGE" = "restart" ] || [ "$CURRENT_STAGE" = "healthcheck" ]; then
     rollback_update "Execution failed at line $line_no with exit code $exit_code"
   else
+    stop_heartbeat
     CURRENT_STATE="failed"
     ERROR_DETAILS="Update failed at stage '$CURRENT_STAGE' (Line $line_no, exit code $exit_code)."
     write_state_file
@@ -398,9 +492,11 @@ catch_error() {
 }
 trap 'catch_error $? $LINENO' ERR
 
-# Safe EXIT trap: Never overwrites success, never triggers rollback on normal completion
+# Safe EXIT trap: Never overwrites success, stops heartbeat, records failure if exited while still marked running
 handle_exit() {
   local exit_code=$?
+  stop_heartbeat
+
   # If already marked success, failed, or rollback_failed, leave state pristine
   if [ "$CURRENT_STATE" = "success" ] || [ "$CURRENT_STATE" = "failed" ] || [ "$CURRENT_STATE" = "rollback_failed" ]; then
     return
@@ -554,6 +650,7 @@ if [ $db_backup_exit -ne 0 ]; then
     ERROR_DETAILS="Database backup execution failed (exit code $db_backup_exit)! Update halted to protect existing database."
     log "ERROR" "[STAGE: database_backup] ❌ Database backup failed!"
   fi
+  stop_heartbeat
   CURRENT_STATE="failed"
   write_state_file
   exit 1
@@ -563,6 +660,7 @@ fi
 LATEST_DB_BACKUP=$(ls -1t "$PROJECT_ROOT/backups/db"/dodik_tracker_backup_*.sql "$PROJECT_ROOT/backups"/dodik_tracker_backup_*.sql 2>/dev/null | head -n 1 || echo "")
 if [ -z "$LATEST_DB_BACKUP" ] || [ ! -s "$LATEST_DB_BACKUP" ]; then
   ERROR_DETAILS="Database backup output file is missing or empty!"
+  stop_heartbeat
   CURRENT_STATE="failed"
   write_state_file
   log "ERROR" "[STAGE: database_backup] ❌ Database backup file verification failed!"
@@ -605,6 +703,7 @@ if [ "$PRE_TOTAL_FILES" -gt 0 ]; then
   # If PRE_TOTAL_FILES > 0 and archive is missing or empty, stop update before Git stage
   if [ -z "$LATEST_UPLOADS_ARCHIVE" ] || [ ! -s "$LATEST_UPLOADS_ARCHIVE" ] || [ $uploads_backup_exit -ne 0 ]; then
     ERROR_DETAILS="Uploads backup failed or archive not created, but $PRE_TOTAL_FILES persistent files exist. Halting update to protect user uploads."
+    stop_heartbeat
     CURRENT_STATE="failed"
     write_state_file
     log "ERROR" "[STAGE: uploads_snapshot] ❌ $ERROR_DETAILS"
@@ -837,17 +936,13 @@ if command -v "$PM2_BIN" &>/dev/null || [ -x "$PM2_BIN" ]; then
   pm2_available=1
 fi
 
-# Execute restart safely isolated in a separate session
+# Execute restart safely isolated with closed stdin and redirected output
 if [ -n "${DODIK_TEST_RESTART_CMD:-}" ]; then
   # Test override hook for verified local testing
   log "INFO" "[STAGE: restart] Test restart override active: $DODIK_TEST_RESTART_CMD"
   run_timed 60 bash -c "$DODIK_TEST_RESTART_CMD" >> "$LOG_FILE" 2>&1 || restart_exit=$?
 elif [ $pm2_available -eq 1 ]; then
-  if command -v setsid >/dev/null 2>&1; then
-    run_timed 60 setsid "$PM2_BIN" restart dodik-tracker </dev/null >> "$LOG_FILE" 2>&1 || restart_exit=$?
-  else
-    run_timed 60 "$PM2_BIN" restart dodik-tracker </dev/null >> "$LOG_FILE" 2>&1 || restart_exit=$?
-  fi
+  run_timed 60 "$PM2_BIN" restart dodik-tracker --update-env </dev/null >> "$LOG_FILE" 2>&1 || restart_exit=$?
 else
   log "WARN" "[STAGE: restart] PM2 not found in system path; relying on server process supervisor."
 fi
@@ -866,7 +961,7 @@ else
 
   log "INFO" "[STAGE: restart] Checking application health before making rollback decision..."
   sleep 2
-  if check_health "http://localhost:3000/api/health" 5 2; then
+  if check_health "http://localhost:3000/api/health" 10 2; then
     log "WARN" "[STAGE: restart] Application is verified UP despite PM2 warning ($restart_exit). Continuing deployment."
     clear_stage_error
     write_state_file
@@ -939,6 +1034,7 @@ if [ "$POST_TOTAL_FILES" -lt "$PRE_TOTAL_FILES" ]; then
   fi
 
   if [ $recovered -ne 1 ]; then
+    stop_heartbeat
     CURRENT_STAGE="uploads_integrity_failed"
     CURRENT_STATE="failed"
     ERROR_DETAILS="Uploads integrity check failed: expected at least $PRE_TOTAL_FILES files, but only $POST_TOTAL_FILES available after recovery."
@@ -980,6 +1076,8 @@ write_state_file
 # ------------------------------------------------------------------------------
 # STAGE 13: Update Successfully Completed
 # ------------------------------------------------------------------------------
+stop_heartbeat
+
 CURRENT_STAGE="completed"
 CURRENT_STATE="success"
 PROGRESS=100

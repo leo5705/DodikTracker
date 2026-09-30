@@ -50,13 +50,21 @@ export type UpdateState = 'idle' | 'queued' | 'running' | 'success' | 'failed';
 
 export interface UpdateJob {
   id: string;
+  pid?: number | null;
   state: UpdateState;
   stage: UpdateStage;
   progress: number;
   startTime: string | null;
+  lastHeartbeatAt?: string | null;
   endTime: string | null;
   logSummary: string[];
   error: string | null;
+  failedCommand?: string | null;
+  exitCode?: number | null;
+  rollbackStatus?: string | null;
+  rollbackReason?: string | null;
+  failedStage?: string | null;
+  deployBranch?: string | null;
   triggeredBy?: {
     id: number;
     username: string;
@@ -304,6 +312,16 @@ async function getDiskSpaceMB(): Promise<{ freeMB: number; totalMB: number }> {
   return { freeMB: 2048, totalMB: 20480 };
 }
 
+function isProcessAlive(pid?: number | null): boolean {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e.code === 'EPERM';
+  }
+}
+
 function getPersistedUpdateJob(): UpdateJob | null {
   const statePath = path.resolve('logs/update_state.json');
   if (fs.existsSync(statePath)) {
@@ -311,17 +329,26 @@ function getPersistedUpdateJob(): UpdateJob | null {
       const raw = fs.readFileSync(statePath, 'utf8');
       const stateObj = JSON.parse(raw);
       if (stateObj && stateObj.id) {
+        const rawState = stateObj.state || 'idle';
+        const normalizedState: UpdateState =
+          rawState === 'rollback_failed' ? 'failed' : (rawState as UpdateState);
         return {
           id: stateObj.id,
-          state: stateObj.state || 'idle',
+          pid: stateObj.pid || null,
+          state: normalizedState,
           stage: stateObj.stage || 'idle',
           progress: stateObj.progress || 0,
           startTime: stateObj.startTime || null,
+          lastHeartbeatAt: stateObj.lastHeartbeatAt || null,
           endTime: stateObj.endTime || null,
           logSummary: Array.isArray(stateObj.logSummary) ? stateObj.logSummary.map(sanitizeSecretsText) : [],
           error: stateObj.errorDetails ? sanitizeSecretsText(stateObj.errorDetails) : null,
           failedCommand: stateObj.failedCommand || null,
           exitCode: stateObj.exitCode ?? null,
+          rollbackStatus: stateObj.rollbackStatus || null,
+          rollbackReason: stateObj.rollbackReason || null,
+          failedStage: stateObj.failedStage || null,
+          deployBranch: stateObj.deployBranch || null,
         } as any;
       }
     } catch {}
@@ -330,11 +357,33 @@ function getPersistedUpdateJob(): UpdateJob | null {
 }
 
 function isUpdateJobActive(): boolean {
-  if (activeUpdateJob && (activeUpdateJob.state === 'running' || activeUpdateJob.state === 'queued')) {
-    return true;
-  }
   const persisted = getPersistedUpdateJob();
   if (persisted && persisted.state === 'running') {
+    // If PID is stored and not alive, and heartbeat is stale (> 45s),
+    // mark persisted job as failed to prevent stuck 'running' UI state
+    if (persisted.pid && !isProcessAlive(persisted.pid)) {
+      const lastHb = persisted.lastHeartbeatAt ? new Date(persisted.lastHeartbeatAt).getTime() : 0;
+      if (!lastHb || Date.now() - lastHb > 45000) {
+        persisted.state = 'failed';
+        persisted.error = 'Процесс обновления аварийно завершился (PID процесса отсутствует в системе)';
+        persisted.endTime = new Date().toISOString();
+        const statePath = path.resolve('logs/update_state.json');
+        try {
+          const raw = fs.readFileSync(statePath, 'utf8');
+          const obj = JSON.parse(raw);
+          fs.writeFileSync(statePath, JSON.stringify({
+            ...obj,
+            state: 'failed',
+            errorDetails: persisted.error,
+            endTime: persisted.endTime,
+          }, null, 2));
+        } catch {}
+        return false;
+      }
+    }
+    return true;
+  }
+  if (activeUpdateJob && (activeUpdateJob.state === 'running' || activeUpdateJob.state === 'queued')) {
     return true;
   }
   return false;
@@ -357,9 +406,8 @@ systemRouter.get('/system/update/status', async (_req: AuthRequest, res: Respons
     const lastUploadsBackup = getLastUploadsBackupMetadata();
     const updateInProgress = isUpdateJobActive();
 
-    const currentJob = (activeUpdateJob && activeUpdateJob.state === 'running')
-      ? activeUpdateJob
-      : (getPersistedUpdateJob() || activeUpdateJob);
+    const persisted = getPersistedUpdateJob();
+    const currentJob = persisted || activeUpdateJob;
 
     const resolvedLastResult = currentJob
       ? {
@@ -552,119 +600,26 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
       ip: req.ip,
     });
 
-    // Spawn child process running scripts/update.sh
+    // Spawn detached child process running scripts/update.sh
     const child = spawn('bash', [scriptPath], {
       cwd: process.cwd(),
-      env: { ...process.env },
+      env: { ...process.env, DODIK_UPDATE_SERVER_SPAWNED: '1' },
+      detached: true,
+      stdio: 'ignore',
     });
-
-    const processLine = (rawLine: string) => {
-      const line = rawLine.trim();
-      if (!line) return;
-
-      if (activeUpdateJob) {
-        activeUpdateJob.logSummary.push(line);
-        if (activeUpdateJob.logSummary.length > 80) {
-          activeUpdateJob.logSummary.shift();
-        }
-
-        // Comprehensive Stage & Progress parsing
-        if (line.includes('[STAGE: init]')) {
-          activeUpdateJob.stage = 'init';
-          activeUpdateJob.progress = 5;
-        } else if (line.includes('[STAGE: preflight]')) {
-          activeUpdateJob.stage = 'preflight';
-          activeUpdateJob.progress = 10;
-        } else if (line.includes('[STAGE: git_safety]')) {
-          activeUpdateJob.stage = 'git_safety';
-          activeUpdateJob.progress = 18;
-        } else if (line.includes('[STAGE: database_backup]')) {
-          activeUpdateJob.stage = 'database_backup';
-          activeUpdateJob.progress = 28;
-        } else if (line.includes('[STAGE: uploads_snapshot]')) {
-          activeUpdateJob.stage = 'uploads_snapshot';
-          activeUpdateJob.progress = 38;
-        } else if (line.includes('[STAGE: git_pull]')) {
-          activeUpdateJob.stage = 'git_pull';
-          activeUpdateJob.progress = 48;
-        } else if (line.includes('[STAGE: dependencies]')) {
-          activeUpdateJob.stage = 'dependencies';
-          activeUpdateJob.progress = 58;
-        } else if (line.includes('[STAGE: migrations]')) {
-          activeUpdateJob.stage = 'migrations';
-          activeUpdateJob.progress = 68;
-        } else if (line.includes('[STAGE: build]')) {
-          activeUpdateJob.stage = 'build';
-          activeUpdateJob.progress = 80;
-        } else if (line.includes('[STAGE: restart]')) {
-          activeUpdateJob.stage = 'restart';
-          activeUpdateJob.progress = 88;
-        } else if (line.includes('[STAGE: healthcheck]')) {
-          activeUpdateJob.stage = 'healthcheck';
-          activeUpdateJob.progress = 92;
-        } else if (line.includes('[STAGE: uploads_integrity]')) {
-          activeUpdateJob.stage = 'uploads_integrity';
-          activeUpdateJob.progress = 96;
-        } else if (line.includes('[STAGE: database_integrity]')) {
-          activeUpdateJob.stage = 'database_integrity';
-          activeUpdateJob.progress = 98;
-        } else if (line.includes('[STAGE: completed]') || line.includes('SUCCESS: Dodik Tracker updated')) {
-          activeUpdateJob.stage = 'completed';
-          activeUpdateJob.state = 'success';
-          activeUpdateJob.progress = 100;
-        } else if (line.includes('UPDATE FAILED') || line.includes('FAILURE: Health check failed')) {
-          activeUpdateJob.state = 'failed';
-          activeUpdateJob.error = line;
-        }
-      }
-    };
-
-    child.stdout.on('data', (chunk) => {
-      const text = chunk.toString();
-      text.split('\n').forEach(processLine);
-    });
-
-    child.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      text.split('\n').forEach(processLine);
-    });
+    child.unref();
 
     child.on('error', (err) => {
+      console.error('[AdminSystem] Error spawning update process:', err);
       if (activeUpdateJob) {
         activeUpdateJob.state = 'failed';
-        activeUpdateJob.error = err.message;
+        activeUpdateJob.error = `Failed to spawn update process: ${err.message}`;
         activeUpdateJob.endTime = new Date().toISOString();
         lastUpdateResult = {
           status: 'FAILURE',
-          error: err.message,
+          error: activeUpdateJob.error,
           timestamp: activeUpdateJob.endTime,
         };
-      }
-    });
-
-    child.on('close', (code) => {
-      if (activeUpdateJob) {
-        activeUpdateJob.endTime = new Date().toISOString();
-        if (code === 0) {
-          activeUpdateJob.state = 'success';
-          activeUpdateJob.stage = 'completed';
-          activeUpdateJob.progress = 100;
-          lastUpdateResult = {
-            status: 'SUCCESS',
-            details: 'Update completed successfully with verified database & uploads integrity',
-            timestamp: activeUpdateJob.endTime,
-          };
-        } else {
-          activeUpdateJob.state = 'failed';
-          if (!activeUpdateJob.error) {
-            activeUpdateJob.error = `Update process exited with error code ${code}`;
-          }
-          lastUpdateResult = {
-            status: 'FAILURE',
-            error: activeUpdateJob.error,
-            timestamp: activeUpdateJob.endTime,
-          };
-        }
       }
     });
 
