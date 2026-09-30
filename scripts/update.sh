@@ -61,6 +61,52 @@ calc_sha256() {
   fi
 }
 
+# Execute command with timeout and return exact exit status without triggering ERR trap unexpectedly
+run_timed() {
+  local seconds="$1"
+  shift
+
+  local exit_code=0
+  if ! command -v timeout >/dev/null 2>&1; then
+    "$@" || exit_code=$?
+    return $exit_code
+  fi
+
+  timeout --signal=TERM --kill-after=10s "${seconds}s" "$@" || exit_code=$?
+  return $exit_code
+}
+
+# Determine if an exit code indicates command timeout
+is_timeout() {
+  local code="$1"
+  [ "$code" -eq 124 ] || [ "$code" -eq 137 ] || [ "$code" -eq 143 ]
+}
+
+# Reusable healthcheck verification against /api/health
+check_health() {
+  local health_url="${1:-http://localhost:3000/api/health}"
+  local max_attempts="${2:-10}"
+  local delay_sec="${3:-2}"
+  local attempt=1
+  local health_body=""
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    health_body=$(curl --connect-timeout 3 --max-time 5 -fsS "$health_url" 2>/dev/null || echo "")
+    if [[ "$health_body" =~ \"status\"[[:space:]]*:[[:space:]]*\"UP\" ]]; then
+      return 0
+    fi
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      sleep "$delay_sec"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
+# Explicit production target branch
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+
 # State variables
 JOB_ID="update_$(date +%s)"
 CURRENT_STAGE="init"
@@ -68,6 +114,9 @@ CURRENT_STATE="running"
 PROGRESS=5
 PREVIOUS_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 TARGET_COMMIT="unknown"
+ROLLBACK_REASON=""
+FAILED_STAGE=""
+ROLLBACK_STATUS="not_needed"
 FAILED_COMMAND=""
 EXIT_CODE=0
 ERROR_DETAILS=""
@@ -119,6 +168,10 @@ write_state_file() {
 
   local escaped_error
   escaped_error=$(echo "$ERROR_DETAILS" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\r\n')
+  local escaped_rollback_reason
+  escaped_rollback_reason=$(echo "$ROLLBACK_REASON" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\r\n')
+  local escaped_failed_stage
+  escaped_failed_stage=$(echo "$FAILED_STAGE" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\r\n')
 
   cat <<EOF > "$STATE_FILE.tmp"
 {
@@ -128,11 +181,15 @@ write_state_file() {
   "progress": $PROGRESS,
   "startTime": "$start_iso",
   "endTime": $(if [ "$CURRENT_STATE" = "running" ]; then echo "null"; else echo "\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\""; fi),
+  "deployBranch": "$DEPLOY_BRANCH",
   "previousCommit": "$PREVIOUS_COMMIT",
   "targetCommit": "$TARGET_COMMIT",
+  "rollbackStatus": "$ROLLBACK_STATUS",
+  "rollbackReason": "$escaped_rollback_reason",
+  "failedStage": "$escaped_failed_stage",
   "nodeVersion": "$(node -v 2>/dev/null || echo 'unknown')",
   "npmVersion": "$(npm -v 2>/dev/null || echo 'unknown')",
-  "failedCommand": "$(echo "$FAILED_COMMAND" | sed 's/"/\\"/g')",
+  "failedCommand": "$(echo "$FAILED_COMMAND" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')",
   "exitCode": $EXIT_CODE,
   "errorDetails": "$escaped_error",
   "logSummary": $logs_json
@@ -151,38 +208,110 @@ log "INFO" "[STAGE: init] Process ID: $$ | Initial commit: ${PREVIOUS_COMMIT:0:7
 # ------------------------------------------------------------------------------
 rollback_update() {
   local reason="${1:-'Unspecified update error'}"
+  ROLLBACK_REASON="$reason"
+  local failed_stage="$CURRENT_STAGE"
+  FAILED_STAGE="$failed_stage"
+
   log "ERROR" "=================================================="
   log "ERROR" "[STAGE: rollback] ⚠️ INITIATING AUTOMATIC ROLLBACK TO PREVIOUS WORKING STATE..."
-  log "ERROR" "[STAGE: rollback] Cause: $reason"
+  log "ERROR" "[STAGE: rollback] Failed stage: $failed_stage"
+  log "ERROR" "[STAGE: rollback] Cause: $ROLLBACK_REASON"
   log "ERROR" "[STAGE: rollback] Target rollback commit: ${PREVIOUS_COMMIT:0:7}"
 
   CURRENT_STAGE="rolling_back"
+  ROLLBACK_STATUS="in_progress"
   PROGRESS=85
   write_state_file
 
   if [ "$PREVIOUS_COMMIT" != "unknown" ] && [ -d ".git" ]; then
-    log "INFO" "[STAGE: rollback] Resetting git working tree to $PREVIOUS_COMMIT..."
-    git reset --hard "$PREVIOUS_COMMIT" >> "$LOG_FILE" 2>&1 || true
-    git clean -fd -e public/uploads -e .env -e backups -e logs >> "$LOG_FILE" 2>&1 || true
+    log "INFO" "[STAGE: rollback] Resetting git working tree to $PREVIOUS_COMMIT (git reset --hard)..."
+    local rb_git_exit=0
+    run_timed 60 git reset --hard "$PREVIOUS_COMMIT" >> "$LOG_FILE" 2>&1 || rb_git_exit=$?
+    if [ $rb_git_exit -ne 0 ]; then
+      if is_timeout $rb_git_exit; then
+        log "ERROR" "[STAGE: rollback] [TIMEOUT] Git reset to $PREVIOUS_COMMIT exceeded 60 seconds."
+      else
+        log "ERROR" "[STAGE: rollback] Git reset to $PREVIOUS_COMMIT failed with exit code $rb_git_exit."
+      fi
+    fi
   fi
 
+  # Dependencies rollback (check lockfile existence, never run git clean)
   log "INFO" "[STAGE: rollback] Re-installing dependencies for rollback commit..."
-  npm install --no-audit --no-fund >> "$LOG_FILE" 2>&1 || true
-
-  log "INFO" "[STAGE: rollback] Re-building application for rollback commit..."
-  npm run build >> "$LOG_FILE" 2>&1 || true
-
-  if command -v pm2 &>/dev/null || [ -x "/usr/local/bin/pm2" ]; then
-    log "INFO" "[STAGE: rollback] Restarting PM2 process 'dodik-tracker'..."
-    (pm2 restart dodik-tracker || /usr/local/bin/pm2 restart dodik-tracker) >> "$LOG_FILE" 2>&1 || true
+  local rb_npm_exit=0
+  if [ -f "package-lock.json" ]; then
+    log "INFO" "[STAGE: rollback] package-lock.json found -> using npm ci"
+    run_timed 300 npm ci --no-audit --no-fund >> "$LOG_FILE" 2>&1 || rb_npm_exit=$?
+  else
+    log "INFO" "[STAGE: rollback] package-lock.json not found -> using npm install"
+    run_timed 300 npm install --no-audit --no-fund >> "$LOG_FILE" 2>&1 || rb_npm_exit=$?
+  fi
+  if [ $rb_npm_exit -ne 0 ]; then
+    if is_timeout $rb_npm_exit; then
+      log "ERROR" "[STAGE: rollback] [TIMEOUT] Dependency re-install during rollback exceeded 300 seconds."
+    else
+      log "ERROR" "[STAGE: rollback] Dependency re-install during rollback failed with exit code $rb_npm_exit."
+    fi
   fi
 
-  CURRENT_STAGE="failed"
-  CURRENT_STATE="failed"
-  ERROR_DETAILS="Update failed during '$CURRENT_STAGE': $reason. Codebase safely rolled back to ${PREVIOUS_COMMIT:0:7}. User files and database remain intact."
-  write_state_file
+  # Build rollback
+  log "INFO" "[STAGE: rollback] Re-building application for rollback commit..."
+  local rb_build_exit=0
+  run_timed 300 npm run build >> "$LOG_FILE" 2>&1 || rb_build_exit=$?
+  if [ $rb_build_exit -ne 0 ]; then
+    if is_timeout $rb_build_exit; then
+      log "ERROR" "[STAGE: rollback] [TIMEOUT] Production build during rollback exceeded 300 seconds."
+    else
+      log "ERROR" "[STAGE: rollback] Production build during rollback failed with exit code $rb_build_exit."
+    fi
+  fi
 
-  log "ERROR" "[STAGE: rollback] ❌ ROLLBACK COMPLETED. Application restored to $PREVIOUS_COMMIT."
+  # PM2 restart rollback
+  local pm2_bin="pm2"
+  if ! command -v pm2 &>/dev/null && [ -x "/usr/local/bin/pm2" ]; then
+    pm2_bin="/usr/local/bin/pm2"
+  fi
+  if command -v "$pm2_bin" &>/dev/null || [ -x "$pm2_bin" ]; then
+    log "INFO" "[STAGE: rollback] Restarting PM2 process 'dodik-tracker' for rollback..."
+    local rb_pm2_exit=0
+    run_timed 60 "$pm2_bin" restart dodik-tracker >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
+    if [ $rb_pm2_exit -ne 0 ]; then
+      if is_timeout $rb_pm2_exit; then
+        log "ERROR" "[STAGE: rollback] [TIMEOUT] PM2 restart during rollback exceeded 60 seconds."
+      else
+        log "ERROR" "[STAGE: rollback] PM2 restart during rollback failed with exit code $rb_pm2_exit."
+      fi
+    fi
+  fi
+
+  # Database migration notice: Never automatically rollback PostgreSQL migrations
+  log "WARN" "[STAGE: rollback] Note: PostgreSQL database migrations are intentionally not reverted during rollback to prevent data loss or schema corruption."
+
+  # Healthcheck verification for rollback state
+  log "INFO" "[STAGE: rollback] Verifying server healthcheck endpoint (/api/health) after rollback..."
+  sleep 2
+
+  local rollback_hc_ok=0
+  if check_health "http://localhost:3000/api/health" 10 2; then
+    rollback_hc_ok=1
+  fi
+
+  if [ $rollback_hc_ok -eq 1 ]; then
+    ROLLBACK_STATUS="success"
+    CURRENT_STAGE="failed"
+    CURRENT_STATE="failed"
+    ERROR_DETAILS="Update failed during '$failed_stage': $ROLLBACK_REASON. Codebase rolled back to ${PREVIOUS_COMMIT:0:7}."
+    write_state_file
+    log "INFO" "[STAGE: rollback] Rollback completed successfully."
+    log "ERROR" "[STAGE: rollback] ❌ UPDATE FAILED. Codebase rolled back to $PREVIOUS_COMMIT (healthcheck UP)."
+  else
+    ROLLBACK_STATUS="failed"
+    CURRENT_STAGE="rollback_failed"
+    CURRENT_STATE="rollback_failed"
+    ERROR_DETAILS="Update failed during '$failed_stage': $ROLLBACK_REASON. CRITICAL: Rollback healthcheck failed! Manual intervention required."
+    write_state_file
+    log "ERROR" "[STAGE: rollback] ❌ ROLLBACK FAILED: Healthcheck did not pass after rollback!"
+  fi
   log "ERROR" "=================================================="
 }
 
@@ -191,6 +320,12 @@ catch_error() {
   local exit_code="$1"
   local line_no="$2"
   EXIT_CODE="$exit_code"
+
+  # Avoid re-triggering rollback if already rolling back or failed
+  if [ "$CURRENT_STAGE" = "rolling_back" ] || [ "$ROLLBACK_STATUS" = "in_progress" ]; then
+    log "ERROR" "[STAGE: rollback] Unexpected process exit during rollback at line $line_no with exit code $exit_code."
+    exit "$exit_code"
+  fi
 
   if [ "$CURRENT_STAGE" = "git_pull" ] || [ "$CURRENT_STAGE" = "dependencies" ] || [ "$CURRENT_STAGE" = "build" ] || [ "$CURRENT_STAGE" = "migrations" ] || [ "$CURRENT_STAGE" = "restart" ] || [ "$CURRENT_STAGE" = "healthcheck" ]; then
     rollback_update "Execution failed at line $line_no with exit code $exit_code"
@@ -208,8 +343,8 @@ trap 'catch_error $? $LINENO' ERR
 # STAGE 1: Preflight & Environment Compatibility Check
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="preflight"
-PROGRESS=10
-log "INFO" "[STAGE: preflight] [1/11] Running comprehensive preflight environment checks..."
+PROGRESS=8
+log "INFO" "[STAGE: preflight] [1/13] Running comprehensive preflight environment checks..."
 
 # 1. Load .env configuration
 if [ -f .env ]; then
@@ -283,8 +418,8 @@ log "INFO" "[STAGE: preflight] All preflight checks passed: Node v${NODE_VER_NUM
 # STAGE 2: Git Safety Guard (assert_uploads_safe)
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="git_safety"
-PROGRESS=18
-log "INFO" "[STAGE: git_safety] [2/11] Enforcing Git safety guard for persistent uploads..."
+PROGRESS=15
+log "INFO" "[STAGE: git_safety] [2/13] Enforcing Git safety guard for persistent uploads..."
 
 if [ ! -d ".git" ]; then
   ERROR_DETAILS="Git repository directory (.git) not found in $PROJECT_ROOT."
@@ -316,8 +451,8 @@ log "INFO" "[STAGE: git_safety] Git safety assertions passed: persistent user up
 # STAGE 3: Database Backup (PostgreSQL SQL Dump)
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="database_backup"
-PROGRESS=28
-log "INFO" "[STAGE: database_backup] [3/11] Performing PostgreSQL database backup..."
+PROGRESS=23
+log "INFO" "[STAGE: database_backup] [3/13] Performing PostgreSQL database backup..."
 
 if [ ! -f "scripts/backup.sh" ]; then
   ERROR_DETAILS="scripts/backup.sh not found."
@@ -328,11 +463,18 @@ if [ ! -f "scripts/backup.sh" ]; then
 fi
 
 FAILED_COMMAND="bash scripts/backup.sh db"
-if ! bash scripts/backup.sh db >> "$LOG_FILE" 2>&1; then
-  ERROR_DETAILS="Database backup execution failed! Update halted to protect existing database."
+db_backup_exit=0
+run_timed 120 bash scripts/backup.sh db >> "$LOG_FILE" 2>&1 || db_backup_exit=$?
+if [ $db_backup_exit -ne 0 ]; then
+  if is_timeout $db_backup_exit; then
+    ERROR_DETAILS="Database backup execution timed out after 120 seconds! Update halted to protect existing database."
+    log "ERROR" "[STAGE: database_backup] [TIMEOUT] Database backup exceeded 120 seconds."
+  else
+    ERROR_DETAILS="Database backup execution failed (exit code $db_backup_exit)! Update halted to protect existing database."
+    log "ERROR" "[STAGE: database_backup] ❌ Database backup failed!"
+  fi
   CURRENT_STATE="failed"
   write_state_file
-  log "ERROR" "[STAGE: database_backup] ❌ Database backup failed!"
   exit 1
 fi
 
@@ -352,8 +494,8 @@ log "INFO" "[STAGE: database_backup] Database backup verified: $(basename "$LATE
 # STAGE 4: Uploads Snapshot & Archive
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="uploads_snapshot"
-PROGRESS=38
-log "INFO" "[STAGE: uploads_snapshot] [4/11] Generating pre-update snapshot of user uploads..."
+PROGRESS=31
+log "INFO" "[STAGE: uploads_snapshot] [4/13] Generating pre-update snapshot of user uploads..."
 
 SNAPSHOT_TS=$(date +"%Y%m%d_%H%M%S")
 SNAPSHOT_FILE="$PROJECT_ROOT/backups/snapshots/pre_update_manifest_${SNAPSHOT_TS}.json"
@@ -364,77 +506,157 @@ PRE_TOTAL_FILES=$((PRE_AUDIO_COUNT + PRE_COVERS_COUNT))
 
 log "INFO" "[STAGE: uploads_snapshot] Creating pre-update archive of $PRE_TOTAL_FILES uploaded files..."
 FAILED_COMMAND="bash scripts/backup.sh uploads"
-bash scripts/backup.sh uploads >> "$LOG_FILE" 2>&1 || true
+uploads_backup_exit=0
+run_timed 120 bash scripts/backup.sh uploads >> "$LOG_FILE" 2>&1 || uploads_backup_exit=$?
 
 LATEST_UPLOADS_ARCHIVE=$(ls -1t "$PROJECT_ROOT/backups/uploads"/dodik_tracker_uploads_*.tar.gz 2>/dev/null | head -n 1 || echo "")
+
+if [ $uploads_backup_exit -ne 0 ]; then
+  if is_timeout $uploads_backup_exit; then
+    log "ERROR" "[STAGE: uploads_snapshot] [TIMEOUT] Uploads archive backup exceeded 120 seconds."
+  else
+    log "ERROR" "[STAGE: uploads_snapshot] ❌ Uploads archive backup script failed with exit code $uploads_backup_exit."
+  fi
+fi
+
+if [ "$PRE_TOTAL_FILES" -gt 0 ]; then
+  # If PRE_TOTAL_FILES > 0 and archive is missing or empty, stop update before Git stage
+  if [ -z "$LATEST_UPLOADS_ARCHIVE" ] || [ ! -s "$LATEST_UPLOADS_ARCHIVE" ] || [ $uploads_backup_exit -ne 0 ]; then
+    ERROR_DETAILS="Uploads backup failed or archive not created, but $PRE_TOTAL_FILES persistent files exist. Halting update to protect user uploads."
+    CURRENT_STATE="failed"
+    write_state_file
+    log "ERROR" "[STAGE: uploads_snapshot] ❌ $ERROR_DETAILS"
+    exit 1
+  fi
+else
+  log "INFO" "[STAGE: uploads_snapshot] Zero uploaded files found; absence of archive is acceptable."
+fi
+
 log "INFO" "[STAGE: uploads_snapshot] Uploads snapshot complete: audio: $PRE_AUDIO_COUNT, covers: $PRE_COVERS_COUNT."
 
 # ------------------------------------------------------------------------------
-# STAGE 5: Git Fetch & Fast-Forward Pull
+# STAGE 5: Git Fetch & Target Branch Reset
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="git_pull"
-PROGRESS=48
-log "INFO" "[STAGE: git_pull] [5/11] Fetching updates from remote repository..."
+PROGRESS=40
+log "INFO" "[STAGE: git_pull] [5/13] Production deployment branch: $DEPLOY_BRANCH"
 
-GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-FAILED_COMMAND="git fetch origin $GIT_BRANCH"
+CURRENT_LOCAL_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
+if [ "$CURRENT_LOCAL_BRANCH" != "$DEPLOY_BRANCH" ] && [ "$CURRENT_LOCAL_BRANCH" != "HEAD" ]; then
+  log "WARN" "[STAGE: git_pull] WARNING: current local branch is $CURRENT_LOCAL_BRANCH, production target branch is $DEPLOY_BRANCH"
+fi
 
-if ! git fetch origin "$GIT_BRANCH" >> "$LOG_FILE" 2>&1; then
-  rollback_update "Failed to fetch from remote branch origin/$GIT_BRANCH. Network or git remote failure."
+FAILED_COMMAND="git fetch origin $DEPLOY_BRANCH"
+fetch_exit=0
+run_timed 60 git fetch origin "$DEPLOY_BRANCH" >> "$LOG_FILE" 2>&1 || fetch_exit=$?
+if [ $fetch_exit -ne 0 ]; then
+  if is_timeout $fetch_exit; then
+    log "ERROR" "[STAGE: git_pull] [TIMEOUT] Git fetch origin $DEPLOY_BRANCH exceeded 60 seconds."
+    rollback_update "Git operation timed out (fetch origin/$DEPLOY_BRANCH exceeded 60s)."
+  else
+    log "ERROR" "[STAGE: git_pull] Git fetch origin $DEPLOY_BRANCH failed with exit code $fetch_exit."
+    rollback_update "Failed to fetch from remote branch origin/$DEPLOY_BRANCH. Network or git remote failure."
+  fi
   exit 1
 fi
 
-TARGET_COMMIT=$(git rev-parse "origin/$GIT_BRANCH" 2>/dev/null || echo "$PREVIOUS_COMMIT")
+TARGET_COMMIT=$(git rev-parse "origin/$DEPLOY_BRANCH" 2>/dev/null || echo "$PREVIOUS_COMMIT")
 log "INFO" "[STAGE: git_pull] Current commit: ${PREVIOUS_COMMIT:0:7} | Target commit: ${TARGET_COMMIT:0:7}"
 
 if [ "$PREVIOUS_COMMIT" = "$TARGET_COMMIT" ]; then
   log "INFO" "[STAGE: git_pull] Working copy is already at commit ${PREVIOUS_COMMIT:0:7}."
 else
-  FAILED_COMMAND="git pull --ff-only origin $GIT_BRANCH"
-  log "INFO" "[STAGE: git_pull] Executing fast-forward pull (git pull --ff-only origin $GIT_BRANCH)..."
-  if ! git pull --ff-only origin "$GIT_BRANCH" >> "$LOG_FILE" 2>&1; then
-    log "WARN" "[STAGE: git_pull] Fast-forward pull failed. Attempting git checkout/reset to target commit..."
-    if ! git checkout "$TARGET_COMMIT" >> "$LOG_FILE" 2>&1; then
-      rollback_update "Git checkout to target commit $TARGET_COMMIT failed!"
-      exit 1
+  FAILED_COMMAND="git reset --hard $TARGET_COMMIT"
+  log "INFO" "[STAGE: git_pull] Updating working copy to target commit $TARGET_COMMIT (git reset --hard $TARGET_COMMIT)..."
+  reset_exit=0
+  run_timed 60 git reset --hard "$TARGET_COMMIT" >> "$LOG_FILE" 2>&1 || reset_exit=$?
+  if [ $reset_exit -ne 0 ]; then
+    if is_timeout $reset_exit; then
+      log "ERROR" "[STAGE: git_pull] [TIMEOUT] Git reset to $TARGET_COMMIT exceeded 60 seconds."
+      rollback_update "Git reset to target commit $TARGET_COMMIT timed out."
+    else
+      log "ERROR" "[STAGE: git_pull] Git reset to $TARGET_COMMIT failed with exit code $reset_exit."
+      rollback_update "Git reset to target commit $TARGET_COMMIT failed!"
     fi
+    exit 1
   fi
-  NEW_COMMIT=$(git rev-parse HEAD)
+  NEW_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "$TARGET_COMMIT")
   log "INFO" "[STAGE: git_pull] Codebase successfully updated to commit: ${NEW_COMMIT:0:7}."
 fi
 
 # ------------------------------------------------------------------------------
-# STAGE 6: Install npm Dependencies (npm ci & Lockfile Sync)
+# STAGE 6: Install npm Dependencies (npm ci / npm install)
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="dependencies"
-PROGRESS=58
-log "INFO" "[STAGE: dependencies] [6/11] Installing npm dependencies..."
+PROGRESS=50
+log "INFO" "[STAGE: dependencies] [6/13] Installing npm dependencies..."
 
-# 1. Precheck lockfile synchronization
-FAILED_COMMAND="npm ci --dry-run"
-LOCK_SYNC_ERR=""
-if ! LOCK_SYNC_ERR=$(npm ci --dry-run 2>&1); then
-  log "WARN" "[STAGE: dependencies] ⚠️ Notice: npm ci dry-run indicates package.json and package-lock.json mismatch!"
-  log "WARN" "[STAGE: dependencies] Lockfile message: $(echo "$LOCK_SYNC_ERR" | grep "Missing:" | head -n 5 || echo "$LOCK_SYNC_ERR" | tail -n 3)"
-fi
-
-# 2. Attempt deterministic npm ci
-FAILED_COMMAND="npm ci"
-NPM_CI_OUT=""
-if ! NPM_CI_OUT=$(npm ci 2>&1); then
-  log "WARN" "[STAGE: dependencies] ⚠️ npm ci failed with exit code $?. Output:"
-  log "WARN" "$(echo "$NPM_CI_OUT" | tail -n 15)"
-  log "INFO" "[STAGE: dependencies] Attempting fallback package install (npm install --no-audit --no-fund)..."
-
+had_lockfile=0
+npm_tmp="/tmp/dodik_npm_$$.log"
+if [ -f "package-lock.json" ]; then
+  had_lockfile=1
+  log "INFO" "[STAGE: dependencies] package-lock.json found -> using npm ci"
+  FAILED_COMMAND="npm ci --no-audit --no-fund"
+  ci_exit=0
+  run_timed 300 npm ci --no-audit --no-fund > "$npm_tmp" 2>&1 || ci_exit=$?
+  cat "$npm_tmp" >> "$LOG_FILE"
+  if [ $ci_exit -ne 0 ]; then
+    san_ci_err=$(sanitize_secrets "$(tail -n 25 "$npm_tmp")")
+    rm -f "$npm_tmp"
+    if is_timeout $ci_exit; then
+      log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm ci exceeded 300 seconds (5 minutes)."
+      rollback_update "npm ci timed out after 300 seconds."
+      exit 1
+    else
+      log "WARN" "[STAGE: dependencies] ⚠️ npm ci failed with exit code $ci_exit. Output:\n$san_ci_err"
+      log "INFO" "[STAGE: dependencies] Attempting fallback package install (npm install --no-audit --no-fund)..."
+      FAILED_COMMAND="npm install --no-audit --no-fund"
+      fallback_exit=0
+      fallback_tmp="/tmp/dodik_npm_fb_$$.log"
+      run_timed 300 npm install --no-audit --no-fund > "$fallback_tmp" 2>&1 || fallback_exit=$?
+      cat "$fallback_tmp" >> "$LOG_FILE"
+      if [ $fallback_exit -ne 0 ]; then
+        san_fallback_err=$(sanitize_secrets "$(tail -n 25 "$fallback_tmp")")
+        rm -f "$fallback_tmp"
+        if is_timeout $fallback_exit; then
+          log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm install fallback exceeded 300 seconds."
+          rollback_update "npm install fallback timed out after 300 seconds."
+        else
+          rollback_update "npm dependencies installation failed! npm stderr:\n$san_fallback_err"
+        fi
+        exit 1
+      fi
+      rm -f "$fallback_tmp"
+      log "INFO" "[STAGE: dependencies] Fallback npm install completed successfully."
+    fi
+  else
+    rm -f "$npm_tmp"
+    log "INFO" "[STAGE: dependencies] Dependencies installed successfully via npm ci."
+  fi
+else
+  log "INFO" "[STAGE: dependencies] package-lock.json not found -> using npm install"
   FAILED_COMMAND="npm install --no-audit --no-fund"
-  if ! NPM_INSTALL_OUT=$(npm install --no-audit --no-fund 2>&1); then
-    SAN_NPM_ERR=$(sanitize_secrets "$NPM_INSTALL_OUT")
-    rollback_update "npm dependencies installation failed! npm stderr:\n$(echo "$SAN_NPM_ERR" | tail -n 20)"
+  install_exit=0
+  run_timed 300 npm install --no-audit --no-fund > "$npm_tmp" 2>&1 || install_exit=$?
+  cat "$npm_tmp" >> "$LOG_FILE"
+  if [ $install_exit -ne 0 ]; then
+    san_install_err=$(sanitize_secrets "$(tail -n 25 "$npm_tmp")")
+    rm -f "$npm_tmp"
+    if is_timeout $install_exit; then
+      log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm install exceeded 300 seconds (5 minutes)."
+      rollback_update "npm install timed out after 300 seconds."
+    else
+      rollback_update "npm dependencies installation failed! npm stderr:\n$san_install_err"
+    fi
     exit 1
   fi
-  log "INFO" "[STAGE: dependencies] Fallback npm install completed successfully."
-else
-  log "INFO" "[STAGE: dependencies] Dependencies installed successfully via npm ci."
+  rm -f "$npm_tmp"
+  log "INFO" "[STAGE: dependencies] Dependencies installed successfully via npm install."
+fi
+
+# Check git status for newly generated package-lock.json (do not treat as application update)
+if [ $had_lockfile -eq 0 ] && [ -f "package-lock.json" ]; then
+  log "INFO" "[STAGE: dependencies] Notice: untracked package-lock.json was generated during npm install; keeping intact without committing."
 fi
 
 # Verify essential CLI packages exist in node_modules
@@ -444,22 +666,33 @@ for pkg_bin in vite esbuild tsx; do
     exit 1
   fi
 done
+log "INFO" "[STAGE: dependencies] Verified required binaries (vite, esbuild, tsx) in node_modules/.bin."
 
 # ------------------------------------------------------------------------------
 # STAGE 7: Build Production Application
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="build"
-PROGRESS=80
-log "INFO" "[STAGE: build] [7/11] Building production application (npm run build)..."
+PROGRESS=62
+log "INFO" "[STAGE: build] [7/13] Building production application (npm run build)..."
 
 FAILED_COMMAND="npm run build"
-BUILD_OUTPUT=""
-if ! BUILD_OUTPUT=$(npm run build 2>&1); then
-  echo "$BUILD_OUTPUT" >> "$LOG_FILE"
-  SAN_BUILD_ERR=$(sanitize_secrets "$BUILD_OUTPUT")
-  rollback_update "Production build (npm run build) failed! Error output:\n$(echo "$SAN_BUILD_ERR" | tail -n 20)"
+build_exit=0
+build_tmp="/tmp/dodik_build_$$.log"
+run_timed 300 npm run build > "$build_tmp" 2>&1 || build_exit=$?
+cat "$build_tmp" >> "$LOG_FILE"
+
+if [ $build_exit -ne 0 ]; then
+  san_build_err=$(sanitize_secrets "$(tail -n 25 "$build_tmp")")
+  rm -f "$build_tmp"
+  if is_timeout $build_exit; then
+    log "ERROR" "[STAGE: build] [TIMEOUT] Production build exceeded 300 seconds."
+    rollback_update "Production build timed out."
+  else
+    rollback_update "Production build (npm run build) failed! Error output:\n$san_build_err"
+  fi
   exit 1
 fi
+rm -f "$build_tmp"
 
 if [ ! -f "$PROJECT_ROOT/dist/server.cjs" ] || [ ! -s "$PROJECT_ROOT/dist/server.cjs" ]; then
   rollback_update "Build artifact missing: dist/server.cjs not found or empty!"
@@ -471,25 +704,35 @@ log "INFO" "[STAGE: build] Production build verified: dist/server.cjs created su
 # STAGE 8: Database Migrations
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="migrations"
-PROGRESS=68
-log "INFO" "[STAGE: migrations] [8/11] Applying database migrations (npm run db:migrate)..."
+PROGRESS=74
+log "INFO" "[STAGE: migrations] [8/13] Applying database migrations (npm run db:migrate)..."
 
 FAILED_COMMAND="npm run db:migrate"
-MIGRATE_OUT=""
-if ! MIGRATE_OUT=$(npm run db:migrate 2>&1); then
-  echo "$MIGRATE_OUT" >> "$LOG_FILE"
-  SAN_MIGRATE_ERR=$(sanitize_secrets "$MIGRATE_OUT")
-  rollback_update "Database migration failed! Error output:\n$(echo "$SAN_MIGRATE_ERR" | tail -n 20)"
+migrate_exit=0
+migrate_tmp="/tmp/dodik_migrate_$$.log"
+run_timed 120 npm run db:migrate > "$migrate_tmp" 2>&1 || migrate_exit=$?
+cat "$migrate_tmp" >> "$LOG_FILE"
+
+if [ $migrate_exit -ne 0 ]; then
+  san_migrate_err=$(sanitize_secrets "$(tail -n 25 "$migrate_tmp")")
+  rm -f "$migrate_tmp"
+  if is_timeout $migrate_exit; then
+    log "ERROR" "[STAGE: migrations] [TIMEOUT] Database migrations exceeded 120 seconds."
+    rollback_update "Database migration timed out after 120 seconds."
+  else
+    rollback_update "Database migration failed! Error output:\n$san_migrate_err"
+  fi
   exit 1
 fi
+rm -f "$migrate_tmp"
 log "INFO" "[STAGE: migrations] Database migrations applied successfully."
 
 # ------------------------------------------------------------------------------
 # STAGE 9: PM2 Process Restart
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="restart"
-PROGRESS=88
-log "INFO" "[STAGE: restart] [9/11] Restarting application process..."
+PROGRESS=82
+log "INFO" "[STAGE: restart] [9/13] Restarting application process..."
 
 PM2_BIN="pm2"
 if ! command -v pm2 &>/dev/null && [ -x "/usr/local/bin/pm2" ]; then
@@ -497,9 +740,19 @@ if ! command -v pm2 &>/dev/null && [ -x "/usr/local/bin/pm2" ]; then
 fi
 
 FAILED_COMMAND="$PM2_BIN restart dodik-tracker"
-if command -v "$PM2_BIN" &>/dev/null; then
-  if ! "$PM2_BIN" restart dodik-tracker >> "$LOG_FILE" 2>&1; then
-    log "WARN" "[STAGE: restart] Notice: pm2 restart returned non-zero code. Verifying service via healthcheck..."
+if command -v "$PM2_BIN" &>/dev/null || [ -x "$PM2_BIN" ]; then
+  restart_exit=0
+  run_timed 60 "$PM2_BIN" restart dodik-tracker >> "$LOG_FILE" 2>&1 || restart_exit=$?
+  if [ $restart_exit -ne 0 ]; then
+    if is_timeout $restart_exit; then
+      log "ERROR" "[STAGE: restart] [TIMEOUT] PM2 restart exceeded 60 seconds."
+      rollback_update "PM2 restart failed or timed out."
+      exit 1
+    else
+      log "WARN" "[STAGE: restart] Notice: pm2 restart returned non-zero code ($restart_exit). Verifying service via healthcheck..."
+    fi
+  else
+    log "INFO" "[STAGE: restart] PM2 restart command executed successfully."
   fi
 else
   log "WARN" "[STAGE: restart] PM2 not found in system path; relying on server process supervisor."
@@ -509,25 +762,14 @@ fi
 # STAGE 10: Health Check Verification
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="healthcheck"
-PROGRESS=92
-log "INFO" "[STAGE: healthcheck] [10/11] Verifying server healthcheck endpoint (/api/health)..."
+PROGRESS=90
+log "INFO" "[STAGE: healthcheck] [10/13] Verifying server healthcheck endpoint (/api/health)..."
 sleep 2
 
 HEALTH_URL="http://localhost:3000/api/health"
-HEALTH_SUCCESS=0
-HEALTH_BODY=""
-
-for attempt in {1..10}; do
-  HEALTH_BODY=$(curl -fsS "$HEALTH_URL" 2>/dev/null || echo "")
-  if [[ "$HEALTH_BODY" =~ \"status\"[[:space:]]*:[[:space:]]*\"UP\" ]]; then
-    HEALTH_SUCCESS=1
-    break
-  fi
-  sleep 2
-done
-
-if [ $HEALTH_SUCCESS -ne 1 ]; then
-  rollback_update "Health check failed for $HEALTH_URL after restart! Response: ${HEALTH_BODY:-'No response / connection refused'}"
+if ! check_health "$HEALTH_URL" 10 2; then
+  LAST_BODY=$(curl --connect-timeout 3 --max-time 5 -fsS "$HEALTH_URL" 2>/dev/null || echo "No response / connection refused")
+  rollback_update "Health check failed for $HEALTH_URL after restart! Response: $LAST_BODY"
   exit 1
 fi
 log "INFO" "[STAGE: healthcheck] Health check OK: Application is UP."
@@ -536,8 +778,8 @@ log "INFO" "[STAGE: healthcheck] Health check OK: Application is UP."
 # STAGE 11: Uploads Integrity Check & Auto-Recovery Guard
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="uploads_integrity"
-PROGRESS=96
-log "INFO" "[STAGE: uploads_integrity] [11/11] Verifying post-update uploads integrity..."
+PROGRESS=95
+log "INFO" "[STAGE: uploads_integrity] [11/13] Verifying post-update uploads integrity..."
 
 POST_AUDIO_COUNT=$(find "$AUDIO_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
 POST_COVERS_COUNT=$(find "$COVERS_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
@@ -546,20 +788,40 @@ POST_TOTAL_FILES=$((POST_AUDIO_COUNT + POST_COVERS_COUNT))
 log "INFO" "[STAGE: uploads_integrity] Pre-update:  $PRE_TOTAL_FILES files (audio: $PRE_AUDIO_COUNT, covers: $PRE_COVERS_COUNT)"
 log "INFO" "[STAGE: uploads_integrity] Post-update: $POST_TOTAL_FILES files (audio: $POST_AUDIO_COUNT, covers: $POST_COVERS_COUNT)"
 
-INTEGRITY_FAILED=0
 if [ "$POST_TOTAL_FILES" -lt "$PRE_TOTAL_FILES" ]; then
-  INTEGRITY_FAILED=1
-fi
+  log "WARN" "[STAGE: uploads_integrity] ⚠️ Uploads integrity mismatch detected ($POST_TOTAL_FILES < $PRE_TOTAL_FILES)! Attempting automatic recovery from pre-update archive..."
 
-if [ $INTEGRITY_FAILED -eq 1 ]; then
-  log "ERROR" "[STAGE: uploads_integrity] ⚠️ Uploads integrity warning! Attempting automatic recovery from pre-update archive..."
-
+  recovered=0
   if [ -n "$LATEST_UPLOADS_ARCHIVE" ] && [ -f "$LATEST_UPLOADS_ARCHIVE" ]; then
-    if tar -xzf "$LATEST_UPLOADS_ARCHIVE" -C "$UPLOADS_DIR"; then
+    if tar -xzf "$LATEST_UPLOADS_ARCHIVE" -C "$UPLOADS_DIR" 2>> "$LOG_FILE"; then
       REC_AUDIO=$(find "$AUDIO_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
       REC_COVERS=$(find "$COVERS_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
-      log "INFO" "[STAGE: uploads_integrity] ✅ Automatic recovery succeeded! Restored uploads: $((REC_AUDIO + REC_COVERS)) files."
+      REC_TOTAL_FILES=$((REC_AUDIO + REC_COVERS))
+      log "INFO" "[STAGE: uploads_integrity] Re-checked counts after extraction: $REC_TOTAL_FILES (audio: $REC_AUDIO, covers: $REC_COVERS)"
+
+      if [ "$REC_TOTAL_FILES" -ge "$PRE_TOTAL_FILES" ]; then
+        recovered=1
+        POST_AUDIO_COUNT="$REC_AUDIO"
+        POST_COVERS_COUNT="$REC_COVERS"
+        POST_TOTAL_FILES="$REC_TOTAL_FILES"
+        log "INFO" "[STAGE: uploads_integrity] ✅ Automatic recovery succeeded! Restored uploads: $REC_TOTAL_FILES files."
+      else
+        log "ERROR" "[STAGE: uploads_integrity] ❌ Post-recovery count ($REC_TOTAL_FILES) is still less than pre-update count ($PRE_TOTAL_FILES)!"
+      fi
+    else
+      log "ERROR" "[STAGE: uploads_integrity] ❌ tar extraction failed during uploads recovery!"
     fi
+  else
+    log "ERROR" "[STAGE: uploads_integrity] ❌ No valid pre-update archive available for recovery!"
+  fi
+
+  if [ $recovered -ne 1 ]; then
+    CURRENT_STAGE="uploads_integrity_failed"
+    CURRENT_STATE="failed"
+    ERROR_DETAILS="Uploads integrity check failed: expected at least $PRE_TOTAL_FILES files, but only $POST_TOTAL_FILES available after recovery."
+    write_state_file
+    log "ERROR" "[STAGE: uploads_integrity_failed] ❌ $ERROR_DETAILS"
+    exit 1
   fi
 else
   log "INFO" "[STAGE: uploads_integrity] ✅ Uploads integrity verified: all $PRE_TOTAL_FILES user files intact."
@@ -570,11 +832,21 @@ fi
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="database_integrity"
 PROGRESS=98
-log "INFO" "[STAGE: database_integrity] Running DB ↔ Filesystem cross-verification diagnostic..."
+log "INFO" "[STAGE: database_integrity] [12/13] Running DB ↔ Filesystem cross-verification diagnostic..."
 
 if [ -f "src/scripts/verifyUploads.ts" ]; then
-  npx tsx src/scripts/verifyUploads.ts --http >> "$LOG_FILE" 2>&1 || true
-  log "INFO" "[STAGE: database_integrity] DB ↔ Filesystem cross-check completed."
+  diag_exit=0
+  run_timed 60 npx tsx src/scripts/verifyUploads.ts --http >> "$LOG_FILE" 2>&1 || diag_exit=$?
+  if [ $diag_exit -ne 0 ]; then
+    if is_timeout $diag_exit; then
+      log "WARN" "[STAGE: database_integrity] [TIMEOUT] DB/filesystem diagnostic timed out after 60 seconds."
+    else
+      log "WARN" "[STAGE: database_integrity] DB/filesystem diagnostic exited with code $diag_exit."
+    fi
+    log "WARN" "[STAGE: database_integrity] DB/filesystem diagnostic failed or timed out; update itself remains successful if healthcheck and upload integrity passed."
+  else
+    log "INFO" "[STAGE: database_integrity] DB ↔ Filesystem cross-check completed successfully."
+  fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -588,11 +860,12 @@ FINAL_COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 write_state_file
 
-log "INFO" "[STAGE: completed] =================================================="
+log "INFO" "[STAGE: completed] [13/13] =================================================="
 log "INFO" "[STAGE: completed]   ✅ SUCCESS: Dodik Tracker updated to v${APP_VERSION} ($FINAL_COMMIT_SHORT)"
-log "INFO" "[STAGE: completed]   • Database:  PostgreSQL backup saved"
-log "INFO" "[STAGE: completed]   • Uploads:   Audio: $POST_AUDIO_COUNT, Covers: $POST_COVERS_COUNT verified"
-log "INFO" "[STAGE: completed]   • Service:   PM2 restarted & Healthcheck OK"
+log "INFO" "[STAGE: completed]   • Deployment: Branch: $DEPLOY_BRANCH"
+log "INFO" "[STAGE: completed]   • Database:   PostgreSQL backup saved & migrations applied"
+log "INFO" "[STAGE: completed]   • Uploads:    Audio: $POST_AUDIO_COUNT, Covers: $POST_COVERS_COUNT verified"
+log "INFO" "[STAGE: completed]   • Service:    PM2 restarted & Healthcheck OK"
 log "INFO" "[STAGE: completed] =================================================="
 log "INFO" "[STAGE: completed] Final status: SUCCESS"
 
