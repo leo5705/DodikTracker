@@ -9,10 +9,23 @@
 
 set -euo pipefail
 
+# Ignore SIGPIPE globally so that dead parent pipes (e.g. Node process restarting)
+# never terminate the update engine.
+trap '' PIPE
+
 # 1. Determine project root directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
+
+# Ensure update engine is detached from parent process group / session to prevent
+# termination when parent service (dodik-tracker) is restarted by PM2
+if [ -z "${DODIK_UPDATE_DETACHED:-}" ]; then
+  export DODIK_UPDATE_DETACHED=1
+  if command -v setsid >/dev/null 2>&1; then
+    exec setsid bash "$0" "$@"
+  fi
+fi
 
 # Ensure PATH includes common binary directories
 NODE_CUR_VER=$(node -v 2>/dev/null || echo "")
@@ -109,6 +122,7 @@ DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 
 # State variables
 JOB_ID="update_$(date +%s)"
+JOB_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 CURRENT_STAGE="init"
 CURRENT_STATE="running"
 PROGRESS=5
@@ -122,6 +136,23 @@ EXIT_CODE=0
 ERROR_DETAILS=""
 LOG_SUMMARY=()
 
+# Helper to clear error state upon successful transitions
+clear_stage_error() {
+  FAILED_COMMAND=""
+  EXIT_CODE=0
+  ERROR_DETAILS=""
+}
+
+# Helper to advance stage cleanly and persist state
+advance_stage() {
+  local new_stage="$1"
+  local new_progress="$2"
+  CURRENT_STAGE="$new_stage"
+  PROGRESS="$new_progress"
+  clear_stage_error
+  write_state_file
+}
+
 log() {
   local level="$1"
   shift
@@ -133,10 +164,11 @@ log() {
 
   echo "[$ts] [$level] $msg" >> "$LOG_FILE"
 
+  # Safely print to stdout/stderr without dying if parent pipe was severed
   if [ "$level" = "ERROR" ]; then
-    echo "$msg" >&2
+    echo "$msg" >&2 2>/dev/null || true
   else
-    echo "$msg"
+    echo "$msg" 2>/dev/null || true
   fi
 
   LOG_SUMMARY+=("[$ts] [$level] $msg")
@@ -148,9 +180,6 @@ log() {
 }
 
 write_state_file() {
-  local start_iso
-  start_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
   # Construct JSON array of log summary lines safely
   local logs_json="["
   local first_entry=1
@@ -172,6 +201,8 @@ write_state_file() {
   escaped_rollback_reason=$(echo "$ROLLBACK_REASON" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\r\n')
   local escaped_failed_stage
   escaped_failed_stage=$(echo "$FAILED_STAGE" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\r\n')
+  local escaped_failed_cmd
+  escaped_failed_cmd=$(echo "$FAILED_COMMAND" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\r\n')
 
   cat <<EOF > "$STATE_FILE.tmp"
 {
@@ -179,7 +210,7 @@ write_state_file() {
   "state": "$CURRENT_STATE",
   "stage": "$CURRENT_STAGE",
   "progress": $PROGRESS,
-  "startTime": "$start_iso",
+  "startTime": "$JOB_START_TIME",
   "endTime": $(if [ "$CURRENT_STATE" = "running" ]; then echo "null"; else echo "\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\""; fi),
   "deployBranch": "$DEPLOY_BRANCH",
   "previousCommit": "$PREVIOUS_COMMIT",
@@ -189,7 +220,7 @@ write_state_file() {
   "failedStage": "$escaped_failed_stage",
   "nodeVersion": "$(node -v 2>/dev/null || echo 'unknown')",
   "npmVersion": "$(npm -v 2>/dev/null || echo 'unknown')",
-  "failedCommand": "$(echo "$FAILED_COMMAND" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')",
+  "failedCommand": "$escaped_failed_cmd",
   "exitCode": $EXIT_CODE,
   "errorDetails": "$escaped_error",
   "logSummary": $logs_json
@@ -266,7 +297,7 @@ rollback_update() {
     fi
   fi
 
-  # PM2 restart rollback
+  # PM2 restart rollback with session isolation
   local pm2_bin="pm2"
   if ! command -v pm2 &>/dev/null && [ -x "/usr/local/bin/pm2" ]; then
     pm2_bin="/usr/local/bin/pm2"
@@ -274,7 +305,11 @@ rollback_update() {
   if command -v "$pm2_bin" &>/dev/null || [ -x "$pm2_bin" ]; then
     log "INFO" "[STAGE: rollback] Restarting PM2 process 'dodik-tracker' for rollback..."
     local rb_pm2_exit=0
-    run_timed 60 "$pm2_bin" restart dodik-tracker >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
+    if command -v setsid >/dev/null 2>&1; then
+      run_timed 60 setsid "$pm2_bin" restart dodik-tracker </dev/null >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
+    else
+      run_timed 60 "$pm2_bin" restart dodik-tracker </dev/null >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
+    fi
     if [ $rb_pm2_exit -ne 0 ]; then
       if is_timeout $rb_pm2_exit; then
         log "ERROR" "[STAGE: rollback] [TIMEOUT] PM2 restart during rollback exceeded 60 seconds."
@@ -315,15 +350,39 @@ rollback_update() {
   log "ERROR" "=================================================="
 }
 
+# Signal handler to shield update engine from parent shutdown during service restarts
+handle_signal() {
+  local sig="$1"
+  # If already completed successfully, do not alter status
+  if [ "$CURRENT_STATE" = "success" ]; then
+    return
+  fi
+
+  # Shield critical restart and rollback stages from termination signals
+  if [ "$CURRENT_STAGE" = "restart" ] || [ "$CURRENT_STAGE" = "rolling_back" ]; then
+    log "WARN" "[STAGE: $CURRENT_STAGE] Signal $sig received during $CURRENT_STAGE; shielded to protect update lifecycle."
+    return
+  fi
+
+  ERROR_DETAILS="Process received signal $sig at stage '$CURRENT_STAGE'."
+  CURRENT_STATE="failed"
+  write_state_file
+  log "ERROR" "[STAGE: $CURRENT_STAGE] ❌ Update aborted by signal $sig."
+  exit 143
+}
+trap 'handle_signal SIGTERM' SIGTERM
+trap 'handle_signal SIGINT' SIGINT
+trap 'handle_signal SIGHUP' SIGHUP
+
 # Trap unexpected process exits
 catch_error() {
   local exit_code="$1"
   local line_no="$2"
   EXIT_CODE="$exit_code"
 
-  # Avoid re-triggering rollback if already rolling back or failed
-  if [ "$CURRENT_STAGE" = "rolling_back" ] || [ "$ROLLBACK_STATUS" = "in_progress" ]; then
-    log "ERROR" "[STAGE: rollback] Unexpected process exit during rollback at line $line_no with exit code $exit_code."
+  # Avoid re-triggering rollback if already rolling back, failed, or successful
+  if [ "$CURRENT_STAGE" = "rolling_back" ] || [ "$ROLLBACK_STATUS" = "in_progress" ] || [ "$CURRENT_STATE" = "success" ]; then
+    log "ERROR" "[STAGE: rollback] Unexpected process exit at line $line_no with exit code $exit_code."
     exit "$exit_code"
   fi
 
@@ -339,11 +398,31 @@ catch_error() {
 }
 trap 'catch_error $? $LINENO' ERR
 
+# Safe EXIT trap: Never overwrites success, never triggers rollback on normal completion
+handle_exit() {
+  local exit_code=$?
+  # If already marked success, failed, or rollback_failed, leave state pristine
+  if [ "$CURRENT_STATE" = "success" ] || [ "$CURRENT_STATE" = "failed" ] || [ "$CURRENT_STATE" = "rollback_failed" ]; then
+    return
+  fi
+
+  # If shell abruptly exited while still marked running
+  if [ "$CURRENT_STATE" = "running" ] || [ "$CURRENT_STAGE" = "rolling_back" ]; then
+    EXIT_CODE="$exit_code"
+    CURRENT_STATE="failed"
+    if [ -z "$ERROR_DETAILS" ]; then
+      ERROR_DETAILS="Process terminated unexpectedly at stage '$CURRENT_STAGE' with exit code $exit_code."
+    fi
+    write_state_file
+    log "ERROR" "[STAGE: $CURRENT_STAGE] ❌ Unexpected termination with exit code $exit_code."
+  fi
+}
+trap handle_exit EXIT
+
 # ------------------------------------------------------------------------------
 # STAGE 1: Preflight & Environment Compatibility Check
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="preflight"
-PROGRESS=8
+advance_stage "preflight" 8
 log "INFO" "[STAGE: preflight] [1/13] Running comprehensive preflight environment checks..."
 
 # 1. Load .env configuration
@@ -412,13 +491,14 @@ AUDIO_DIR="$UPLOADS_DIR/audio"
 COVERS_DIR="$UPLOADS_DIR/covers"
 mkdir -p "$AUDIO_DIR" "$COVERS_DIR" "$PROJECT_ROOT/backups/db" "$PROJECT_ROOT/backups/uploads" "$PROJECT_ROOT/backups/snapshots"
 
+clear_stage_error
+write_state_file
 log "INFO" "[STAGE: preflight] All preflight checks passed: Node v${NODE_VER_NUM}, npm v$(npm -v), Disk ${FREE_MB} MB free, npm registry online."
 
 # ------------------------------------------------------------------------------
 # STAGE 2: Git Safety Guard (assert_uploads_safe)
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="git_safety"
-PROGRESS=15
+advance_stage "git_safety" 15
 log "INFO" "[STAGE: git_safety] [2/13] Enforcing Git safety guard for persistent uploads..."
 
 if [ ! -d ".git" ]; then
@@ -445,13 +525,14 @@ if [ -n "$uncommitted" ]; then
   log "WARN" "[STAGE: git_safety] Notice: Uncommitted working tree items detected (stashing or ignoring)..."
 fi
 
+clear_stage_error
+write_state_file
 log "INFO" "[STAGE: git_safety] Git safety assertions passed: persistent user uploads protected."
 
 # ------------------------------------------------------------------------------
 # STAGE 3: Database Backup (PostgreSQL SQL Dump)
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="database_backup"
-PROGRESS=23
+advance_stage "database_backup" 23
 log "INFO" "[STAGE: database_backup] [3/13] Performing PostgreSQL database backup..."
 
 if [ ! -f "scripts/backup.sh" ]; then
@@ -488,13 +569,14 @@ if [ -z "$LATEST_DB_BACKUP" ] || [ ! -s "$LATEST_DB_BACKUP" ]; then
   exit 1
 fi
 
+clear_stage_error
+write_state_file
 log "INFO" "[STAGE: database_backup] Database backup verified: $(basename "$LATEST_DB_BACKUP")"
 
 # ------------------------------------------------------------------------------
 # STAGE 4: Uploads Snapshot & Archive
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="uploads_snapshot"
-PROGRESS=31
+advance_stage "uploads_snapshot" 31
 log "INFO" "[STAGE: uploads_snapshot] [4/13] Generating pre-update snapshot of user uploads..."
 
 SNAPSHOT_TS=$(date +"%Y%m%d_%H%M%S")
@@ -532,13 +614,14 @@ else
   log "INFO" "[STAGE: uploads_snapshot] Zero uploaded files found; absence of archive is acceptable."
 fi
 
+clear_stage_error
+write_state_file
 log "INFO" "[STAGE: uploads_snapshot] Uploads snapshot complete: audio: $PRE_AUDIO_COUNT, covers: $PRE_COVERS_COUNT."
 
 # ------------------------------------------------------------------------------
 # STAGE 5: Git Fetch & Target Branch Reset
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="git_pull"
-PROGRESS=40
+advance_stage "git_pull" 40
 log "INFO" "[STAGE: git_pull] [5/13] Production deployment branch: $DEPLOY_BRANCH"
 
 CURRENT_LOCAL_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
@@ -584,11 +667,13 @@ else
   log "INFO" "[STAGE: git_pull] Codebase successfully updated to commit: ${NEW_COMMIT:0:7}."
 fi
 
+clear_stage_error
+write_state_file
+
 # ------------------------------------------------------------------------------
 # STAGE 6: Install npm Dependencies (npm ci / npm install)
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="dependencies"
-PROGRESS=50
+advance_stage "dependencies" 50
 log "INFO" "[STAGE: dependencies] [6/13] Installing npm dependencies..."
 
 had_lockfile=0
@@ -666,13 +751,14 @@ for pkg_bin in vite esbuild tsx; do
     exit 1
   fi
 done
+clear_stage_error
+write_state_file
 log "INFO" "[STAGE: dependencies] Verified required binaries (vite, esbuild, tsx) in node_modules/.bin."
 
 # ------------------------------------------------------------------------------
 # STAGE 7: Build Production Application
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="build"
-PROGRESS=62
+advance_stage "build" 62
 log "INFO" "[STAGE: build] [7/13] Building production application (npm run build)..."
 
 FAILED_COMMAND="npm run build"
@@ -698,13 +784,15 @@ if [ ! -f "$PROJECT_ROOT/dist/server.cjs" ] || [ ! -s "$PROJECT_ROOT/dist/server
   rollback_update "Build artifact missing: dist/server.cjs not found or empty!"
   exit 1
 fi
+
+clear_stage_error
+write_state_file
 log "INFO" "[STAGE: build] Production build verified: dist/server.cjs created successfully."
 
 # ------------------------------------------------------------------------------
 # STAGE 8: Database Migrations
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="migrations"
-PROGRESS=74
+advance_stage "migrations" 74
 log "INFO" "[STAGE: migrations] [8/13] Applying database migrations (npm run db:migrate)..."
 
 FAILED_COMMAND="npm run db:migrate"
@@ -725,13 +813,15 @@ if [ $migrate_exit -ne 0 ]; then
   exit 1
 fi
 rm -f "$migrate_tmp"
+
+clear_stage_error
+write_state_file
 log "INFO" "[STAGE: migrations] Database migrations applied successfully."
 
 # ------------------------------------------------------------------------------
-# STAGE 9: PM2 Process Restart
+# STAGE 9: PM2 Process Restart (Isolated Lifecycle)
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="restart"
-PROGRESS=82
+advance_stage "restart" 82
 log "INFO" "[STAGE: restart] [9/13] Restarting application process..."
 
 PM2_BIN="pm2"
@@ -740,45 +830,78 @@ if ! command -v pm2 &>/dev/null && [ -x "/usr/local/bin/pm2" ]; then
 fi
 
 FAILED_COMMAND="$PM2_BIN restart dodik-tracker"
+restart_exit=0
+pm2_available=0
+
 if command -v "$PM2_BIN" &>/dev/null || [ -x "$PM2_BIN" ]; then
-  restart_exit=0
-  run_timed 60 "$PM2_BIN" restart dodik-tracker >> "$LOG_FILE" 2>&1 || restart_exit=$?
-  if [ $restart_exit -ne 0 ]; then
-    if is_timeout $restart_exit; then
-      log "ERROR" "[STAGE: restart] [TIMEOUT] PM2 restart exceeded 60 seconds."
-      rollback_update "PM2 restart failed or timed out."
-      exit 1
-    else
-      log "WARN" "[STAGE: restart] Notice: pm2 restart returned non-zero code ($restart_exit). Verifying service via healthcheck..."
-    fi
+  pm2_available=1
+fi
+
+# Execute restart safely isolated in a separate session
+if [ -n "${DODIK_TEST_RESTART_CMD:-}" ]; then
+  # Test override hook for verified local testing
+  log "INFO" "[STAGE: restart] Test restart override active: $DODIK_TEST_RESTART_CMD"
+  run_timed 60 bash -c "$DODIK_TEST_RESTART_CMD" >> "$LOG_FILE" 2>&1 || restart_exit=$?
+elif [ $pm2_available -eq 1 ]; then
+  if command -v setsid >/dev/null 2>&1; then
+    run_timed 60 setsid "$PM2_BIN" restart dodik-tracker </dev/null >> "$LOG_FILE" 2>&1 || restart_exit=$?
   else
-    log "INFO" "[STAGE: restart] PM2 restart command executed successfully."
+    run_timed 60 "$PM2_BIN" restart dodik-tracker </dev/null >> "$LOG_FILE" 2>&1 || restart_exit=$?
   fi
 else
   log "WARN" "[STAGE: restart] PM2 not found in system path; relying on server process supervisor."
 fi
 
+# Differentiate PM2 CLI exit code from actual application status
+if [ $restart_exit -eq 0 ]; then
+  log "INFO" "[STAGE: restart] PM2 restart command executed successfully."
+  clear_stage_error
+  write_state_file
+else
+  if is_timeout $restart_exit; then
+    log "WARN" "[STAGE: restart] [TIMEOUT] PM2 restart command exceeded 60 seconds."
+  else
+    log "WARN" "[STAGE: restart] Notice: pm2 restart returned non-zero code ($restart_exit)."
+  fi
+
+  log "INFO" "[STAGE: restart] Checking application health before making rollback decision..."
+  sleep 2
+  if check_health "http://localhost:3000/api/health" 5 2; then
+    log "WARN" "[STAGE: restart] Application is verified UP despite PM2 warning ($restart_exit). Continuing deployment."
+    clear_stage_error
+    write_state_file
+  else
+    log "ERROR" "[STAGE: restart] Application healthcheck failed after PM2 error ($restart_exit)."
+    rollback_update "PM2 restart failed with exit code $restart_exit and application healthcheck failed."
+    exit 1
+  fi
+fi
+
 # ------------------------------------------------------------------------------
 # STAGE 10: Health Check Verification
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="healthcheck"
-PROGRESS=90
+advance_stage "healthcheck" 90
 log "INFO" "[STAGE: healthcheck] [10/13] Verifying server healthcheck endpoint (/api/health)..."
 sleep 2
 
 HEALTH_URL="http://localhost:3000/api/health"
+FAILED_COMMAND="check_health $HEALTH_URL"
 if ! check_health "$HEALTH_URL" 10 2; then
   LAST_BODY=$(curl --connect-timeout 3 --max-time 5 -fsS "$HEALTH_URL" 2>/dev/null || echo "No response / connection refused")
+  CURRENT_STATE="failed"
+  FAILED_STAGE="healthcheck"
   rollback_update "Health check failed for $HEALTH_URL after restart! Response: $LAST_BODY"
   exit 1
 fi
+
+clear_stage_error
+write_state_file
 log "INFO" "[STAGE: healthcheck] Health check OK: Application is UP."
 
 # ------------------------------------------------------------------------------
 # STAGE 11: Uploads Integrity Check & Auto-Recovery Guard
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="uploads_integrity"
-PROGRESS=95
+advance_stage "uploads_integrity" 95
 log "INFO" "[STAGE: uploads_integrity] [11/13] Verifying post-update uploads integrity..."
 
 POST_AUDIO_COUNT=$(find "$AUDIO_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
@@ -827,11 +950,13 @@ else
   log "INFO" "[STAGE: uploads_integrity] ✅ Uploads integrity verified: all $PRE_TOTAL_FILES user files intact."
 fi
 
+clear_stage_error
+write_state_file
+
 # ------------------------------------------------------------------------------
 # STAGE 12: Database ↔ Filesystem Diagnostic Cross-Check
 # ------------------------------------------------------------------------------
-CURRENT_STAGE="database_integrity"
-PROGRESS=98
+advance_stage "database_integrity" 98
 log "INFO" "[STAGE: database_integrity] [12/13] Running DB ↔ Filesystem cross-verification diagnostic..."
 
 if [ -f "src/scripts/verifyUploads.ts" ]; then
@@ -849,12 +974,20 @@ if [ -f "src/scripts/verifyUploads.ts" ]; then
   fi
 fi
 
+clear_stage_error
+write_state_file
+
 # ------------------------------------------------------------------------------
 # STAGE 13: Update Successfully Completed
 # ------------------------------------------------------------------------------
 CURRENT_STAGE="completed"
 CURRENT_STATE="success"
 PROGRESS=100
+ROLLBACK_STATUS="not_needed"
+FAILED_STAGE=""
+FAILED_COMMAND=""
+EXIT_CODE=0
+ERROR_DETAILS=""
 APP_VERSION=$(node -p "try{require('./package.json').version}catch{process.env.npm_package_version||'1.0.0'}" 2>/dev/null || echo "1.0.0")
 FINAL_COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
