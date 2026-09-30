@@ -85,6 +85,27 @@
       "when": 1790511000000,
       "tag": "0011_music_crossfade_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790776374187,
+      "tag": "0012_external_artist_user_nullable",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790776374188,
+      "tag": "0013_independent_rbac_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790776374189,
+      "tag": "0014_sync_music_history_and_transitions",
+      "breakpoints": true
     }
   ]
 }
