@@ -520,6 +520,41 @@ watchPartyRouter.post('/rooms/:code/cancel-torrent', requireAuth, async (req: Au
  * Secure, authenticated streaming proxy that forwards requests to internal TorrServer without credentials leakage.
  */
 /**
+ * Helper to infer media MIME type from file name / extension
+ */
+function inferMediaMimeType(fileName?: string, defaultType: string = 'video/mp4'): string {
+  if (!fileName) return defaultType;
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'mp4':
+    case 'm4v':
+      return 'video/mp4';
+    case 'webm':
+      return 'video/webm';
+    case 'mkv':
+      return 'video/x-matroska';
+    case 'avi':
+      return 'video/x-msvideo';
+    case 'mov':
+      return 'video/quicktime';
+    case 'ts':
+      return 'video/mp2t';
+    case 'flv':
+      return 'video/x-flv';
+    case 'mp3':
+      return 'audio/mpeg';
+    case 'aac':
+      return 'audio/aac';
+    case 'flac':
+      return 'audio/flac';
+    case 'ogg':
+      return 'audio/ogg';
+    default:
+      return defaultType;
+  }
+}
+
+/**
  * Helper function to safely stream TorrServer video content with readiness polling and Range support
  */
 async function proxyTorrServerStream(
@@ -531,6 +566,7 @@ async function proxyTorrServerStream(
   const torrServerUrl = torrServerClient.baseUrl;
   let targetIndex = requestedFileIndex;
   let targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${targetIndex}&play=1`;
+  let resolvedFileName: string | undefined;
 
   const controller = new AbortController();
   req.on('close', () => {
@@ -585,6 +621,8 @@ async function proxyTorrServerStream(
         if (!hasRequested && typeof readyResult.bestFileIndex === 'number') {
           targetIndex = readyResult.bestFileIndex;
         }
+        const matched = readyResult.files.find((f) => f.index === targetIndex);
+        resolvedFileName = matched?.name || matched?.path || readyResult.bestFileName;
       }
 
       targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${targetIndex}&play=1`;
@@ -620,8 +658,8 @@ async function proxyTorrServerStream(
     return;
   }
 
-  const finalContentType = torrRes.headers.get('content-type') || '';
-  if (finalContentType.includes('text/html') || finalContentType.includes('application/json')) {
+  const rawContentType = torrRes.headers.get('content-type') || '';
+  if (rawContentType.includes('text/html') || rawContentType.includes('application/json')) {
     if (!res.headersSent) {
       res.status(503).setHeader('Retry-After', '2').json({
         error: 'Торрент подготавливается к воспроизведению. Пожалуйста, подождите...',
@@ -634,13 +672,25 @@ async function proxyTorrServerStream(
 
   res.status(torrRes.status);
 
-  const forwardHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
-  forwardHeaders.forEach((h) => {
-    const val = torrRes!.headers.get(h);
-    if (val) {
-      res.setHeader(h, val);
-    }
-  });
+  // Content-Type normalization for audio/video browser pipelines
+  let finalContentType = rawContentType;
+  if (!finalContentType || finalContentType === 'application/octet-stream' || finalContentType === 'binary/octet-stream') {
+    finalContentType = inferMediaMimeType(resolvedFileName, 'video/mp4');
+  }
+  res.setHeader('Content-Type', finalContentType);
+
+  const contentLength = torrRes.headers.get('content-length');
+  if (contentLength) {
+    res.setHeader('Content-Length', contentLength);
+  }
+
+  const contentRange = torrRes.headers.get('content-range');
+  if (contentRange) {
+    res.setHeader('Content-Range', contentRange);
+  }
+
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
   if (!torrRes.body) {
     res.end();

@@ -63,12 +63,20 @@ export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
     this.currentConfig = config;
     const currentGen = ++this.loadGeneration;
 
-    // 1. Resolve HTTP stream URL from config.url or derive from infoHash
+    // 1. Resolve HTTP stream URL from config.url, infoHash, or parsed magnet URI
     let streamUrl = config.url;
     if ((!streamUrl || streamUrl.startsWith('magnet:?')) && config.infoHash) {
       const fileIndex = typeof config.torrentFileIndex === 'number' ? config.torrentFileIndex : 0;
       streamUrl = `/api/watch-party/torrents/stream?hash=${config.infoHash}&index=${fileIndex}`;
       this.currentConfig = { ...config, url: streamUrl };
+    } else if ((!streamUrl || streamUrl.startsWith('magnet:?')) && (config.magnetUri || config.url)) {
+      const rawMagnet = config.magnetUri || config.url || '';
+      const parsed = validateAndParseMagnet(rawMagnet);
+      if (parsed.isValid && parsed.infoHash) {
+        const fileIndex = typeof config.torrentFileIndex === 'number' ? config.torrentFileIndex : 0;
+        streamUrl = `/api/watch-party/torrents/stream?hash=${parsed.infoHash}&index=${fileIndex}`;
+        this.currentConfig = { ...config, url: streamUrl, infoHash: parsed.infoHash };
+      }
     }
 
     const isHttpStream = streamUrl && (streamUrl.startsWith('http://') || streamUrl.startsWith('https://') || streamUrl.startsWith('/'));
@@ -80,7 +88,7 @@ export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
 
       this.setState('READY');
       if (this.attachedVideo) {
-        if (this.attachedVideo.src !== streamUrl) {
+        if (!this.attachedVideo.src.endsWith(streamUrl) && this.attachedVideo.src !== streamUrl) {
           this.attachedVideo.src = streamUrl;
           this.attachedVideo.load();
         }
