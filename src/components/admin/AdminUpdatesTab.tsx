@@ -330,7 +330,7 @@ export function AdminUpdatesTab() {
   }, [refreshAll]);
 
   useEffect(() => {
-    const isRunning = statusData?.updateInProgress || statusData?.job?.state === 'running';
+    const isRunning = Boolean(statusData?.updateInProgress && statusData?.job?.state === 'running');
 
     if (isRunning) {
       if (!pollTimerRef.current) {
@@ -532,7 +532,7 @@ export function AdminUpdatesTab() {
   };
 
   const job = statusData?.job;
-  const isJobRunning = job && job.state === 'running';
+  const isJobRunning = Boolean(statusData?.updateInProgress && job && job.state === 'running');
   const isJobSuccess = job && job.state === 'success';
   const isJobFailed = job && job.state === 'failed';
 

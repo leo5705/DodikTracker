@@ -313,12 +313,12 @@ async function getDiskSpaceMB(): Promise<{ freeMB: number; totalMB: number }> {
 }
 
 function isProcessAlive(pid?: number | null): boolean {
-  if (!pid || pid <= 0) return false;
+  if (!pid || typeof pid !== 'number' || pid <= 0 || isNaN(pid)) return false;
   try {
     process.kill(pid, 0);
     return true;
-  } catch (e: any) {
-    return e.code === 'EPERM';
+  } catch (error: any) {
+    return error?.code === 'EPERM';
   }
 }
 
@@ -334,7 +334,7 @@ function getPersistedUpdateJob(): UpdateJob | null {
           rawState === 'rollback_failed' ? 'failed' : (rawState as UpdateState);
         return {
           id: stateObj.id,
-          pid: stateObj.pid || null,
+          pid: stateObj.pid ? Number(stateObj.pid) : null,
           state: normalizedState,
           stage: stateObj.stage || 'idle',
           progress: stateObj.progress || 0,
@@ -356,37 +356,100 @@ function getPersistedUpdateJob(): UpdateJob | null {
   return null;
 }
 
-function isUpdateJobActive(): boolean {
+function persistTerminalFailure(job: UpdateJob, reason: string): void {
+  job.state = 'failed';
+  job.error = reason;
+  job.endTime = new Date().toISOString();
+  const statePath = path.resolve('logs/update_state.json');
+  try {
+    let existing: any = {};
+    if (fs.existsSync(statePath)) {
+      try {
+        existing = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      } catch {}
+    }
+    const updated = {
+      ...existing,
+      id: job.id,
+      pid: job.pid || existing.pid || null,
+      state: 'failed',
+      stage: job.stage || existing.stage || 'failed',
+      progress: job.progress || existing.progress || 0,
+      startTime: job.startTime || existing.startTime,
+      lastHeartbeatAt: job.lastHeartbeatAt || existing.lastHeartbeatAt,
+      endTime: job.endTime,
+      errorDetails: reason,
+      logSummary: Array.isArray(existing.logSummary) ? existing.logSummary : job.logSummary,
+    };
+    fs.writeFileSync(statePath, JSON.stringify(updated, null, 2), 'utf8');
+  } catch (e) {
+    console.error('[AdminSystem] Error persisting failed state to disk:', e);
+  }
+}
+
+function reconcileUpdateJob(): UpdateJob | null {
   const persisted = getPersistedUpdateJob();
-  if (persisted && persisted.state === 'running') {
-    // If PID is stored and not alive, and heartbeat is stale (> 45s),
-    // mark persisted job as failed to prevent stuck 'running' UI state
-    if (persisted.pid && !isProcessAlive(persisted.pid)) {
-      const lastHb = persisted.lastHeartbeatAt ? new Date(persisted.lastHeartbeatAt).getTime() : 0;
-      if (!lastHb || Date.now() - lastHb > 45000) {
-        persisted.state = 'failed';
-        persisted.error = 'Процесс обновления аварийно завершился (PID процесса отсутствует в системе)';
-        persisted.endTime = new Date().toISOString();
-        const statePath = path.resolve('logs/update_state.json');
-        try {
-          const raw = fs.readFileSync(statePath, 'utf8');
-          const obj = JSON.parse(raw);
-          fs.writeFileSync(statePath, JSON.stringify({
-            ...obj,
-            state: 'failed',
-            errorDetails: persisted.error,
-            endTime: persisted.endTime,
-          }, null, 2));
-        } catch {}
-        return false;
+  const job = persisted || activeUpdateJob;
+  if (!job) return null;
+
+  if (job.state === 'running') {
+    const now = Date.now();
+    const lastHbTime = job.lastHeartbeatAt ? new Date(job.lastHeartbeatAt).getTime() : 0;
+    const startTime = job.startTime ? new Date(job.startTime).getTime() : 0;
+    const refTime = lastHbTime || startTime || now;
+    const elapsedSinceHeartbeat = now - refTime;
+
+    const pidAlive = isProcessAlive(job.pid);
+
+    // 1. If PID is present and definitely dead in OS process table:
+    // Grace period of 15 seconds to allow normal file completion
+    if (job.pid && !pidAlive) {
+      if (elapsedSinceHeartbeat > 15000 || !lastHbTime) {
+        const failureReason = `Процесс обновления аварийно завершился: worker PID (${job.pid}) отсутствует в системе`;
+        persistTerminalFailure(job, failureReason);
+        activeUpdateJob = null;
+        lastUpdateResult = {
+          status: 'FAILURE',
+          error: failureReason,
+          timestamp: job.endTime,
+        };
+        return job;
       }
     }
-    return true;
+
+    // 2. If PID is missing entirely from a running state and job started > 25 seconds ago:
+    if (!job.pid && elapsedSinceHeartbeat > 25000) {
+      const failureReason = 'Процесс обновления аварийно завершился: worker PID отсутствует в системе';
+      persistTerminalFailure(job, failureReason);
+      activeUpdateJob = null;
+      lastUpdateResult = {
+        status: 'FAILURE',
+        error: failureReason,
+        timestamp: job.endTime,
+      };
+      return job;
+    }
+
+    // 3. Fallback: If heartbeat is stale for > 90 seconds and process is not alive
+    if (elapsedSinceHeartbeat > 90000 && !pidAlive) {
+      const failureReason = 'Процесс обновления аварийно завершился: heartbeat устарел (превышен таймаут отклика)';
+      persistTerminalFailure(job, failureReason);
+      activeUpdateJob = null;
+      lastUpdateResult = {
+        status: 'FAILURE',
+        error: failureReason,
+        timestamp: job.endTime,
+      };
+      return job;
+    }
   }
-  if (activeUpdateJob && (activeUpdateJob.state === 'running' || activeUpdateJob.state === 'queued')) {
-    return true;
-  }
-  return false;
+
+  return job;
+}
+
+function isUpdateJobActive(): boolean {
+  const current = reconcileUpdateJob();
+  return Boolean(current && current.state === 'running');
 }
 
 // =============================================================================
@@ -404,10 +467,8 @@ systemRouter.get('/system/update/status', async (_req: AuthRequest, res: Respons
 
     const lastBackup = getLastBackupMetadata();
     const lastUploadsBackup = getLastUploadsBackupMetadata();
-    const updateInProgress = isUpdateJobActive();
-
-    const persisted = getPersistedUpdateJob();
-    const currentJob = persisted || activeUpdateJob;
+    const currentJob = reconcileUpdateJob();
+    const updateInProgress = Boolean(currentJob && currentJob.state === 'running');
 
     const resolvedLastResult = currentJob
       ? {

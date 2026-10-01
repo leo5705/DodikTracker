@@ -1,17 +1,29 @@
 import { Pool } from 'pg';
+import { findCloudSqlSocket } from './index.ts';
 
 export async function runAutoMigrations(pool: Pool) {
   let adminPool: Pool | null = null;
   try {
     if (process.env.SQL_ADMIN_USER && process.env.SQL_ADMIN_PASSWORD) {
-      adminPool = new Pool({
-        host: process.env.SQL_HOST || 'localhost',
-        port: parseInt(process.env.SQL_PORT || '5432', 10),
+      const socketPath = findCloudSqlSocket();
+      const explicitHost = process.env.SQL_HOST;
+      const resolvedHost = (socketPath && (!explicitHost || explicitHost === 'localhost' || explicitHost.startsWith('/')))
+        ? socketPath
+        : (explicitHost || 'localhost');
+
+      const adminConfig: any = {
+        host: resolvedHost,
         user: process.env.SQL_ADMIN_USER,
         password: String(process.env.SQL_ADMIN_PASSWORD),
-        database: process.env.SQL_DB_NAME,
+        database: process.env.SQL_DB_NAME || 'cloud_sql_development_database',
         max: 1,
-      });
+      };
+
+      if (!resolvedHost.startsWith('/')) {
+        adminConfig.port = parseInt(process.env.SQL_PORT || '5432', 10);
+      }
+
+      adminPool = new Pool(adminConfig);
     }
 
     const targetPool = adminPool || pool;

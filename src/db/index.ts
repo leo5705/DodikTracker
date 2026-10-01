@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import fs from 'fs';
+import path from 'path';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool, PoolConfig } from 'pg';
 import * as schema from './schema.ts';
@@ -9,26 +11,61 @@ declare global {
   var _postgresPool: Pool | undefined;
 }
 
+export function findCloudSqlSocket(): string | null {
+  const candidates = ['/app/cloudsql', '/cloudsql'];
+  for (const base of candidates) {
+    try {
+      if (fs.existsSync(base)) {
+        const entries = fs.readdirSync(base);
+        for (const entry of entries) {
+          const fullPath = path.join(base, entry);
+          if (fs.statSync(fullPath).isDirectory()) {
+            if (fs.existsSync(path.join(fullPath, '.s.PGSQL.5432'))) {
+              return fullPath;
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore filesystem inspection errors
+    }
+  }
+  return null;
+}
+
 export const createPool = () => {
   if (!global._postgresPool) {
     // Ensure .env is loaded
     dotenv.config();
 
     const connectionString = (process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim();
+    const socketPath = findCloudSqlSocket();
+    const explicitHost = process.env.SQL_HOST;
+    const resolvedHost = (socketPath && (!explicitHost || explicitHost === 'localhost' || explicitHost.startsWith('/')))
+      ? socketPath
+      : explicitHost;
 
     let poolConfig: PoolConfig;
 
-    if (process.env.SQL_HOST && process.env.SQL_USER) {
+    if (resolvedHost && (process.env.SQL_USER || socketPath)) {
       // Cloud SQL instance (Unix Domain Socket or proxy host)
+      const user = process.env.SQL_USER || 'dodik_user';
+      const password = process.env.SQL_PASSWORD || 'Dodik_Password_2026!';
+      const database = process.env.SQL_DB_NAME || 'cloud_sql_development_database';
+
       poolConfig = {
-        host: process.env.SQL_HOST,
-        user: process.env.SQL_USER,
-        password: process.env.SQL_PASSWORD ? String(process.env.SQL_PASSWORD) : undefined,
-        database: process.env.SQL_DB_NAME,
+        host: resolvedHost,
+        user,
+        password,
+        database,
         max: 10,
         connectionTimeoutMillis: 15000,
         idleTimeoutMillis: 30000,
       };
+
+      if (!resolvedHost.startsWith('/')) {
+        poolConfig.port = parseInt(process.env.SQL_PORT || '5432', 10);
+      }
     } else if (connectionString) {
       poolConfig = {
         connectionString,

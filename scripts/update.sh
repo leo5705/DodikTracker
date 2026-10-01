@@ -19,17 +19,30 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # 2. Daemonization & Process Isolation
-# If not already running as the isolated daemon worker, launch worker in background with setsid
-# and exit immediately (or follow logs if interactive terminal).
-# Because the launcher exits immediately, the worker is orphaned and re-parented to PID 1 (init/systemd).
-# This guarantees that when PM2 restarts dodik-tracker in Stage 9, PM2's recursive tree-kill
-# on dodik-tracker CANNOT find or kill this worker process!
+# Two-stage detached architecture:
+# Node.js / PM2 -> launcher update.sh -> setsid update.sh worker -> independent process (PPID 1)
+#
+# If not already running as the isolated worker daemon (DODIK_UPDATE_WORKER=1):
+# 1) Probe lockfile non-blockingly so launcher exits immediately if an update is already active
+# 2) Spawn worker via setsid in background with stdin </dev/null and stdout/stderr redirected to update.log
+# 3) Capture worker PID accurately
+# 4) Launcher exits cleanly with code 0 (or streams logs if interactive SSH session)
+# 5) Worker is immediately orphaned and reparented to PID 1, completely isolated from Node.js & PM2
+LOCK_FILE="/tmp/dodik-tracker-update.lock"
+
 if [ -z "${DODIK_UPDATE_WORKER:-}" ]; then
-  export DODIK_UPDATE_WORKER=1
   mkdir -p "$PROJECT_ROOT/logs"
 
-  # Launch independent worker daemon in background with own session
-  ( setsid bash "$0" "$@" </dev/null >> "$PROJECT_ROOT/logs/update.log" 2>&1 & )
+  # Fast non-blocking lock check in launcher to reject concurrent updates immediately
+  if ! ( exec 200>"$LOCK_FILE" && flock -n 200 ); then
+    echo "Update already in progress" >&2
+    exit 1
+  fi
+
+  export DODIK_UPDATE_WORKER=1
+
+  # Launch independent worker daemon with setsid, detached stdin/stdout/stderr
+  setsid bash "$0" "$@" </dev/null >> "$PROJECT_ROOT/logs/update.log" 2>&1 &
   WORKER_PID=$!
 
   # If running in an interactive SSH terminal (and not spawned by server API):
@@ -37,29 +50,26 @@ if [ -z "${DODIK_UPDATE_WORKER:-}" ]; then
     echo "=================================================="
     echo "🚀 Dodik Tracker - Safe Production Update Engine"
     echo "=================================================="
-    echo "Worker process detached (PID: $WORKER_PID, reparenting to PID 1)."
+    echo "Worker process detached (PID: $WORKER_PID, session leader, reparenting to PID 1)."
     echo "Streaming logs from logs/update.log..."
     echo "(You may press Ctrl+C at any time to disconnect; update will safely continue in background)"
     echo "=================================================="
-    sleep 1
+    sleep 0.5
 
     # Stream logs until update reaches terminal state or worker exits
     tail -n 30 -f "$PROJECT_ROOT/logs/update.log" &
     TAIL_PID=$!
 
-    while true; do
+    while kill -0 "$WORKER_PID" 2>/dev/null; do
       if [ -f "$PROJECT_ROOT/logs/update_state.json" ]; then
         if grep -q -E '"state":[[:space:]]*"(success|failed|rollback_failed)"' "$PROJECT_ROOT/logs/update_state.json" 2>/dev/null; then
           break
         fi
       fi
-      if ! kill -0 "$WORKER_PID" 2>/dev/null; then
-        break
-      fi
-      sleep 2
+      sleep 1
     done
 
-    sleep 2
+    sleep 1
     kill "$TAIL_PID" 2>/dev/null || true
     wait "$TAIL_PID" 2>/dev/null || true
     echo ""
@@ -70,6 +80,7 @@ if [ -z "${DODIK_UPDATE_WORKER:-}" ]; then
       echo "⚠️ Update process finished. Check logs/update.log for details."
     fi
     echo "=================================================="
+    exit 0
   fi
 
   # Exit launcher process immediately with code 0 so worker is orphaned to PID 1
@@ -84,7 +95,10 @@ export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/lib/postgre
 LOG_DIR="$PROJECT_ROOT/logs"
 LOG_FILE="$LOG_DIR/update.log"
 STATE_FILE="$LOG_DIR/update_state.json"
-mkdir -p "$LOG_DIR" "$PROJECT_ROOT/backups/db" "$PROJECT_ROOT/backups/uploads" "$PROJECT_ROOT/backups/snapshots"
+UPLOADS_DIR="${UPLOADS_DIR:-$PROJECT_ROOT/public/uploads}"
+AUDIO_DIR="$UPLOADS_DIR/audio"
+COVERS_DIR="$UPLOADS_DIR/covers"
+mkdir -p "$LOG_DIR" "$AUDIO_DIR" "$COVERS_DIR" "$PROJECT_ROOT/backups/db" "$PROJECT_ROOT/backups/uploads" "$PROJECT_ROOT/backups/snapshots"
 
 # Truncate log if it exceeds 2MB
 if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)" -gt 2097152 ]; then
@@ -186,6 +200,22 @@ FAILED_COMMAND=""
 EXIT_CODE=0
 ERROR_DETAILS=""
 LOG_SUMMARY=()
+PRE_AUDIO_COUNT=0
+PRE_COVERS_COUNT=0
+PRE_TOTAL_FILES=0
+LATEST_UPLOADS_ARCHIVE=""
+
+# Test lifecycle stage filter
+should_run_stage() {
+  local stage_num="$1"
+  local start_stage="${DODIK_TEST_START_STAGE:-1}"
+  if [ "$start_stage" = "migrations" ] || [ "$start_stage" = "8" ]; then
+    start_stage=8
+  elif [ "$start_stage" = "preflight" ]; then
+    start_stage=1
+  fi
+  [ "$stage_num" -ge "$start_stage" ]
+}
 
 # Helper to clear error state upon successful transitions
 clear_stage_error() {
@@ -399,7 +429,7 @@ rollback_update() {
   if command -v "$pm2_bin" &>/dev/null || [ -x "$pm2_bin" ]; then
     log "INFO" "[STAGE: rollback] Restarting PM2 process 'dodik-tracker' for rollback..."
     local rb_pm2_exit=0
-    run_timed 60 "$pm2_bin" restart dodik-tracker --update-env </dev/null >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
+    run_timed 60 setsid "$pm2_bin" restart dodik-tracker --update-env </dev/null >> "$LOG_FILE" 2>&1 || rb_pm2_exit=$?
     if [ $rb_pm2_exit -ne 0 ]; then
       if is_timeout $rb_pm2_exit; then
         log "ERROR" "[STAGE: rollback] [TIMEOUT] PM2 restart during rollback exceeded 60 seconds."
@@ -518,375 +548,389 @@ trap handle_exit EXIT
 # ------------------------------------------------------------------------------
 # STAGE 1: Preflight & Environment Compatibility Check
 # ------------------------------------------------------------------------------
-advance_stage "preflight" 8
-log "INFO" "[STAGE: preflight] [1/13] Running comprehensive preflight environment checks..."
+if should_run_stage 1; then
+  advance_stage "preflight" 8
+  log "INFO" "[STAGE: preflight] [1/13] Running comprehensive preflight environment checks..."
 
-# 1. Load .env configuration
-if [ -f .env ]; then
-  set -a
-  source .env
-  set +a
-  log "INFO" "[STAGE: preflight] Loaded .env environment variables."
-else
-  log "WARN" "[STAGE: preflight] Notice: .env file not found. System environment variables will be used."
-fi
+  # 1. Load .env configuration
+  if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+    log "INFO" "[STAGE: preflight] Loaded .env environment variables."
+  else
+    log "WARN" "[STAGE: preflight] Notice: .env file not found. System environment variables will be used."
+  fi
 
-# 2. Check required CLI tools
-for tool in git npm node curl tar df; do
-  if ! command -v "$tool" &>/dev/null; then
-    ERROR_DETAILS="Required system utility '$tool' is not installed or not in PATH."
+  # 2. Check required CLI tools
+  for tool in git npm node curl tar df; do
+    if ! command -v "$tool" &>/dev/null; then
+      ERROR_DETAILS="Required system utility '$tool' is not installed or not in PATH."
+      CURRENT_STATE="failed"
+      write_state_file
+      log "ERROR" "[STAGE: preflight] ❌ Required tool '$tool' is missing."
+      exit 1
+    fi
+  done
+
+  # 3. Check Node.js version compatibility (Min Node 20.0.0)
+  NODE_VER_NUM=$(node -v | tr -d 'v')
+  NODE_MAJOR=$(echo "$NODE_VER_NUM" | cut -d'.' -f1)
+  log "INFO" "[STAGE: preflight] Node.js version detected: v${NODE_VER_NUM} (npm v$(npm -v))"
+
+  if [ "$NODE_MAJOR" -lt 20 ]; then
+    ERROR_DETAILS="Incompatible Node.js version v${NODE_VER_NUM}. Dodik Tracker requires Node.js >= 20.0.0. Please upgrade Node.js on the server."
     CURRENT_STATE="failed"
     write_state_file
-    log "ERROR" "[STAGE: preflight] ❌ Required tool '$tool' is missing."
+    log "ERROR" "[STAGE: preflight] ❌ Node.js version v${NODE_VER_NUM} is incompatible. Minimum required version is >= 20.0.0."
     exit 1
   fi
-done
 
-# 3. Check Node.js version compatibility (Min Node 20.0.0)
-NODE_VER_NUM=$(node -v | tr -d 'v')
-NODE_MAJOR=$(echo "$NODE_VER_NUM" | cut -d'.' -f1)
-log "INFO" "[STAGE: preflight] Node.js version detected: v${NODE_VER_NUM} (npm v$(npm -v))"
+  # 4. Check free disk space (require at least 500 MB / 512,000 KB)
+  FREE_KB=$(df -k "$PROJECT_ROOT" | tail -n 1 | awk '{print $4}')
+  FREE_MB=$((FREE_KB / 1024))
+  log "INFO" "[STAGE: preflight] Free disk space available: ${FREE_MB} MB"
 
-if [ "$NODE_MAJOR" -lt 20 ]; then
-  ERROR_DETAILS="Incompatible Node.js version v${NODE_VER_NUM}. Dodik Tracker requires Node.js >= 20.0.0. Please upgrade Node.js on the server."
-  CURRENT_STATE="failed"
-  write_state_file
-  log "ERROR" "[STAGE: preflight] ❌ Node.js version v${NODE_VER_NUM} is incompatible. Minimum required version is >= 20.0.0."
-  exit 1
-fi
-
-# 4. Check free disk space (require at least 500 MB / 512,000 KB)
-FREE_KB=$(df -k "$PROJECT_ROOT" | tail -n 1 | awk '{print $4}')
-FREE_MB=$((FREE_KB / 1024))
-log "INFO" "[STAGE: preflight] Free disk space available: ${FREE_MB} MB"
-
-if [ "$FREE_KB" -lt 512000 ]; then
-  ERROR_DETAILS="Insufficient disk space! Available: ${FREE_MB} MB, required at least 500 MB."
-  CURRENT_STATE="failed"
-  write_state_file
-  log "ERROR" "[STAGE: preflight] ❌ Insufficient disk space on server. Available: ${FREE_MB} MB, required >= 500 MB."
-  exit 1
-fi
-
-# 5. Check npm registry connectivity
-log "INFO" "[STAGE: preflight] Checking npm registry connectivity (registry.npmjs.org)..."
-if ! curl -s --head --max-time 5 https://registry.npmjs.org/ &>/dev/null; then
-  log "WARN" "[STAGE: preflight] ⚠️ Primary npm registry check timed out. Retrying npm ping..."
-  if ! npm ping &>/dev/null; then
-    ERROR_DETAILS="npm registry is unreachable from this server. Please check internet connection or proxy settings."
+  if [ "$FREE_KB" -lt 512000 ]; then
+    ERROR_DETAILS="Insufficient disk space! Available: ${FREE_MB} MB, required at least 500 MB."
     CURRENT_STATE="failed"
     write_state_file
-    log "ERROR" "[STAGE: preflight] ❌ npm registry is offline or unreachable."
+    log "ERROR" "[STAGE: preflight] ❌ Insufficient disk space on server. Available: ${FREE_MB} MB, required >= 500 MB."
     exit 1
   fi
+
+  # 5. Check npm registry connectivity
+  log "INFO" "[STAGE: preflight] Checking npm registry connectivity (registry.npmjs.org)..."
+  if ! curl -s --head --max-time 5 https://registry.npmjs.org/ &>/dev/null; then
+    log "WARN" "[STAGE: preflight] ⚠️ Primary npm registry check timed out. Retrying npm ping..."
+    if ! npm ping &>/dev/null; then
+      ERROR_DETAILS="npm registry is unreachable from this server. Please check internet connection or proxy settings."
+      CURRENT_STATE="failed"
+      write_state_file
+      log "ERROR" "[STAGE: preflight] ❌ npm registry is offline or unreachable."
+      exit 1
+    fi
+  fi
+
+  # 6. Check persistent Uploads directories
+  UPLOADS_DIR="${UPLOADS_DIR:-$PROJECT_ROOT/public/uploads}"
+  AUDIO_DIR="$UPLOADS_DIR/audio"
+  COVERS_DIR="$UPLOADS_DIR/covers"
+  mkdir -p "$AUDIO_DIR" "$COVERS_DIR" "$PROJECT_ROOT/backups/db" "$PROJECT_ROOT/backups/uploads" "$PROJECT_ROOT/backups/snapshots"
+
+  clear_stage_error
+  write_state_file
+  log "INFO" "[STAGE: preflight] All preflight checks passed: Node v${NODE_VER_NUM}, npm v$(npm -v), Disk ${FREE_MB} MB free, npm registry online."
 fi
-
-# 6. Check persistent Uploads directories
-UPLOADS_DIR="${UPLOADS_DIR:-$PROJECT_ROOT/public/uploads}"
-AUDIO_DIR="$UPLOADS_DIR/audio"
-COVERS_DIR="$UPLOADS_DIR/covers"
-mkdir -p "$AUDIO_DIR" "$COVERS_DIR" "$PROJECT_ROOT/backups/db" "$PROJECT_ROOT/backups/uploads" "$PROJECT_ROOT/backups/snapshots"
-
-clear_stage_error
-write_state_file
-log "INFO" "[STAGE: preflight] All preflight checks passed: Node v${NODE_VER_NUM}, npm v$(npm -v), Disk ${FREE_MB} MB free, npm registry online."
 
 # ------------------------------------------------------------------------------
 # STAGE 2: Git Safety Guard (assert_uploads_safe)
 # ------------------------------------------------------------------------------
-advance_stage "git_safety" 15
-log "INFO" "[STAGE: git_safety] [2/13] Enforcing Git safety guard for persistent uploads..."
+if should_run_stage 2; then
+  advance_stage "git_safety" 15
+  log "INFO" "[STAGE: git_safety] [2/13] Enforcing Git safety guard for persistent uploads..."
 
-if [ ! -d ".git" ]; then
-  ERROR_DETAILS="Git repository directory (.git) not found in $PROJECT_ROOT."
-  CURRENT_STATE="failed"
+  if [ ! -d ".git" ]; then
+    ERROR_DETAILS="Git repository directory (.git) not found in $PROJECT_ROOT."
+    CURRENT_STATE="failed"
+    write_state_file
+    log "ERROR" "[STAGE: git_safety] ❌ Git repository (.git) missing."
+    exit 1
+  fi
+
+  # Un-track cached uploads if any exist
+  tracked_audio=$(git ls-files public/uploads/audio | grep -v "\.gitkeep$" || true)
+  tracked_covers=$(git ls-files public/uploads/covers | grep -v "\.gitkeep$" || true)
+
+  if [ -n "$tracked_audio" ] || [ -n "$tracked_covers" ]; then
+    log "WARN" "[STAGE: git_safety] ⚠️ Notice: Found tracked upload files in Git index. Removing from index without deleting local files..."
+    [ -n "$tracked_audio" ] && echo "$tracked_audio" | xargs -r git rm --cached >> "$LOG_FILE" 2>&1 || true
+    [ -n "$tracked_covers" ] && echo "$tracked_covers" | xargs -r git rm --cached >> "$LOG_FILE" 2>&1 || true
+  fi
+
+  # Check for uncommitted code changes (ignore persistent directories)
+  uncommitted=$(git status --porcelain | grep -v "?? public/uploads" | grep -v "?? backups" | grep -v "?? logs" || true)
+  if [ -n "$uncommitted" ]; then
+    log "WARN" "[STAGE: git_safety] Notice: Uncommitted working tree items detected (stashing or ignoring)..."
+  fi
+
+  clear_stage_error
   write_state_file
-  log "ERROR" "[STAGE: git_safety] ❌ Git repository (.git) missing."
-  exit 1
+  log "INFO" "[STAGE: git_safety] Git safety assertions passed: persistent user uploads protected."
 fi
-
-# Un-track cached uploads if any exist
-tracked_audio=$(git ls-files public/uploads/audio | grep -v "\.gitkeep$" || true)
-tracked_covers=$(git ls-files public/uploads/covers | grep -v "\.gitkeep$" || true)
-
-if [ -n "$tracked_audio" ] || [ -n "$tracked_covers" ]; then
-  log "WARN" "[STAGE: git_safety] ⚠️ Notice: Found tracked upload files in Git index. Removing from index without deleting local files..."
-  [ -n "$tracked_audio" ] && echo "$tracked_audio" | xargs -r git rm --cached >> "$LOG_FILE" 2>&1 || true
-  [ -n "$tracked_covers" ] && echo "$tracked_covers" | xargs -r git rm --cached >> "$LOG_FILE" 2>&1 || true
-fi
-
-# Check for uncommitted code changes (ignore persistent directories)
-uncommitted=$(git status --porcelain | grep -v "?? public/uploads" | grep -v "?? backups" | grep -v "?? logs" || true)
-if [ -n "$uncommitted" ]; then
-  log "WARN" "[STAGE: git_safety] Notice: Uncommitted working tree items detected (stashing or ignoring)..."
-fi
-
-clear_stage_error
-write_state_file
-log "INFO" "[STAGE: git_safety] Git safety assertions passed: persistent user uploads protected."
 
 # ------------------------------------------------------------------------------
 # STAGE 3: Database Backup (PostgreSQL SQL Dump)
 # ------------------------------------------------------------------------------
-advance_stage "database_backup" 23
-log "INFO" "[STAGE: database_backup] [3/13] Performing PostgreSQL database backup..."
+if should_run_stage 3; then
+  advance_stage "database_backup" 23
+  log "INFO" "[STAGE: database_backup] [3/13] Performing PostgreSQL database backup..."
 
-if [ ! -f "scripts/backup.sh" ]; then
-  ERROR_DETAILS="scripts/backup.sh not found."
-  CURRENT_STATE="failed"
-  write_state_file
-  log "ERROR" "[STAGE: database_backup] ❌ scripts/backup.sh missing."
-  exit 1
-fi
-
-FAILED_COMMAND="bash scripts/backup.sh db"
-db_backup_exit=0
-run_timed 120 bash scripts/backup.sh db >> "$LOG_FILE" 2>&1 || db_backup_exit=$?
-if [ $db_backup_exit -ne 0 ]; then
-  if is_timeout $db_backup_exit; then
-    ERROR_DETAILS="Database backup execution timed out after 120 seconds! Update halted to protect existing database."
-    log "ERROR" "[STAGE: database_backup] [TIMEOUT] Database backup exceeded 120 seconds."
-  else
-    ERROR_DETAILS="Database backup execution failed (exit code $db_backup_exit)! Update halted to protect existing database."
-    log "ERROR" "[STAGE: database_backup] ❌ Database backup failed!"
+  if [ ! -f "scripts/backup.sh" ]; then
+    ERROR_DETAILS="scripts/backup.sh not found."
+    CURRENT_STATE="failed"
+    write_state_file
+    log "ERROR" "[STAGE: database_backup] ❌ scripts/backup.sh missing."
+    exit 1
   fi
-  stop_heartbeat
-  CURRENT_STATE="failed"
-  write_state_file
-  exit 1
-fi
 
-# Verify newest backup file exists and size > 100 bytes
-LATEST_DB_BACKUP=$(ls -1t "$PROJECT_ROOT/backups/db"/dodik_tracker_backup_*.sql "$PROJECT_ROOT/backups"/dodik_tracker_backup_*.sql 2>/dev/null | head -n 1 || echo "")
-if [ -z "$LATEST_DB_BACKUP" ] || [ ! -s "$LATEST_DB_BACKUP" ]; then
-  ERROR_DETAILS="Database backup output file is missing or empty!"
-  stop_heartbeat
-  CURRENT_STATE="failed"
-  write_state_file
-  log "ERROR" "[STAGE: database_backup] ❌ Database backup file verification failed!"
-  exit 1
-fi
+  FAILED_COMMAND="bash scripts/backup.sh db"
+  db_backup_exit=0
+  run_timed 120 bash scripts/backup.sh db >> "$LOG_FILE" 2>&1 || db_backup_exit=$?
+  if [ $db_backup_exit -ne 0 ]; then
+    if is_timeout $db_backup_exit; then
+      ERROR_DETAILS="Database backup execution timed out after 120 seconds! Update halted to protect existing database."
+      log "ERROR" "[STAGE: database_backup] [TIMEOUT] Database backup exceeded 120 seconds."
+    else
+      ERROR_DETAILS="Database backup execution failed (exit code $db_backup_exit)! Update halted to protect existing database."
+      log "ERROR" "[STAGE: database_backup] ❌ Database backup failed!"
+    fi
+    stop_heartbeat
+    CURRENT_STATE="failed"
+    write_state_file
+    exit 1
+  fi
 
-clear_stage_error
-write_state_file
-log "INFO" "[STAGE: database_backup] Database backup verified: $(basename "$LATEST_DB_BACKUP")"
+  # Verify newest backup file exists and size > 100 bytes
+  LATEST_DB_BACKUP=$(ls -1t "$PROJECT_ROOT/backups/db"/dodik_tracker_backup_*.sql "$PROJECT_ROOT/backups"/dodik_tracker_backup_*.sql 2>/dev/null | head -n 1 || echo "")
+  if [ -z "$LATEST_DB_BACKUP" ] || [ ! -s "$LATEST_DB_BACKUP" ]; then
+    ERROR_DETAILS="Database backup output file is missing or empty!"
+    stop_heartbeat
+    CURRENT_STATE="failed"
+    write_state_file
+    log "ERROR" "[STAGE: database_backup] ❌ Database backup file verification failed!"
+    exit 1
+  fi
+
+  clear_stage_error
+  write_state_file
+  log "INFO" "[STAGE: database_backup] Database backup verified: $(basename "$LATEST_DB_BACKUP")"
+fi
 
 # ------------------------------------------------------------------------------
 # STAGE 4: Uploads Snapshot & Archive
 # ------------------------------------------------------------------------------
-advance_stage "uploads_snapshot" 31
-log "INFO" "[STAGE: uploads_snapshot] [4/13] Generating pre-update snapshot of user uploads..."
+if should_run_stage 4; then
+  advance_stage "uploads_snapshot" 31
+  log "INFO" "[STAGE: uploads_snapshot] [4/13] Generating pre-update snapshot of user uploads..."
 
-SNAPSHOT_TS=$(date +"%Y%m%d_%H%M%S")
-SNAPSHOT_FILE="$PROJECT_ROOT/backups/snapshots/pre_update_manifest_${SNAPSHOT_TS}.json"
+  SNAPSHOT_TS=$(date +"%Y%m%d_%H%M%S")
+  SNAPSHOT_FILE="$PROJECT_ROOT/backups/snapshots/pre_update_manifest_${SNAPSHOT_TS}.json"
 
-PRE_AUDIO_COUNT=$(find "$AUDIO_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
-PRE_COVERS_COUNT=$(find "$COVERS_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
-PRE_TOTAL_FILES=$((PRE_AUDIO_COUNT + PRE_COVERS_COUNT))
+  PRE_AUDIO_COUNT=$(find "$AUDIO_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
+  PRE_COVERS_COUNT=$(find "$COVERS_DIR" -type f ! -name ".gitkeep" 2>/dev/null | wc -l || echo 0)
+  PRE_TOTAL_FILES=$((PRE_AUDIO_COUNT + PRE_COVERS_COUNT))
 
-log "INFO" "[STAGE: uploads_snapshot] Creating pre-update archive of $PRE_TOTAL_FILES uploaded files..."
-FAILED_COMMAND="bash scripts/backup.sh uploads"
-uploads_backup_exit=0
-run_timed 120 bash scripts/backup.sh uploads >> "$LOG_FILE" 2>&1 || uploads_backup_exit=$?
+  log "INFO" "[STAGE: uploads_snapshot] Creating pre-update archive of $PRE_TOTAL_FILES uploaded files..."
+  FAILED_COMMAND="bash scripts/backup.sh uploads"
+  uploads_backup_exit=0
+  run_timed 120 bash scripts/backup.sh uploads >> "$LOG_FILE" 2>&1 || uploads_backup_exit=$?
 
-LATEST_UPLOADS_ARCHIVE=$(ls -1t "$PROJECT_ROOT/backups/uploads"/dodik_tracker_uploads_*.tar.gz 2>/dev/null | head -n 1 || echo "")
+  LATEST_UPLOADS_ARCHIVE=$(ls -1t "$PROJECT_ROOT/backups/uploads"/dodik_tracker_uploads_*.tar.gz 2>/dev/null | head -n 1 || echo "")
 
-if [ $uploads_backup_exit -ne 0 ]; then
-  if is_timeout $uploads_backup_exit; then
-    log "ERROR" "[STAGE: uploads_snapshot] [TIMEOUT] Uploads archive backup exceeded 120 seconds."
+  if [ $uploads_backup_exit -ne 0 ]; then
+    if is_timeout $uploads_backup_exit; then
+      log "ERROR" "[STAGE: uploads_snapshot] [TIMEOUT] Uploads archive backup exceeded 120 seconds."
+    else
+      log "ERROR" "[STAGE: uploads_snapshot] ❌ Uploads archive backup script failed with exit code $uploads_backup_exit."
+    fi
+  fi
+
+  if [ "$PRE_TOTAL_FILES" -gt 0 ]; then
+    # If PRE_TOTAL_FILES > 0 and archive is missing or empty, stop update before Git stage
+    if [ -z "$LATEST_UPLOADS_ARCHIVE" ] || [ ! -s "$LATEST_UPLOADS_ARCHIVE" ] || [ $uploads_backup_exit -ne 0 ]; then
+      ERROR_DETAILS="Uploads backup failed or archive not created, but $PRE_TOTAL_FILES persistent files exist. Halting update to protect user uploads."
+      stop_heartbeat
+      CURRENT_STATE="failed"
+      write_state_file
+      log "ERROR" "[STAGE: uploads_snapshot] ❌ $ERROR_DETAILS"
+      exit 1
+    fi
   else
-    log "ERROR" "[STAGE: uploads_snapshot] ❌ Uploads archive backup script failed with exit code $uploads_backup_exit."
+    log "INFO" "[STAGE: uploads_snapshot] Zero uploaded files found; absence of archive is acceptable."
   fi
-fi
 
-if [ "$PRE_TOTAL_FILES" -gt 0 ]; then
-  # If PRE_TOTAL_FILES > 0 and archive is missing or empty, stop update before Git stage
-  if [ -z "$LATEST_UPLOADS_ARCHIVE" ] || [ ! -s "$LATEST_UPLOADS_ARCHIVE" ] || [ $uploads_backup_exit -ne 0 ]; then
-    ERROR_DETAILS="Uploads backup failed or archive not created, but $PRE_TOTAL_FILES persistent files exist. Halting update to protect user uploads."
-    stop_heartbeat
-    CURRENT_STATE="failed"
-    write_state_file
-    log "ERROR" "[STAGE: uploads_snapshot] ❌ $ERROR_DETAILS"
-    exit 1
-  fi
-else
-  log "INFO" "[STAGE: uploads_snapshot] Zero uploaded files found; absence of archive is acceptable."
+  clear_stage_error
+  write_state_file
+  log "INFO" "[STAGE: uploads_snapshot] Uploads snapshot complete: audio: $PRE_AUDIO_COUNT, covers: $PRE_COVERS_COUNT."
 fi
-
-clear_stage_error
-write_state_file
-log "INFO" "[STAGE: uploads_snapshot] Uploads snapshot complete: audio: $PRE_AUDIO_COUNT, covers: $PRE_COVERS_COUNT."
 
 # ------------------------------------------------------------------------------
 # STAGE 5: Git Fetch & Target Branch Reset
 # ------------------------------------------------------------------------------
-advance_stage "git_pull" 40
-log "INFO" "[STAGE: git_pull] [5/13] Production deployment branch: $DEPLOY_BRANCH"
+if should_run_stage 5; then
+  advance_stage "git_pull" 40
+  log "INFO" "[STAGE: git_pull] [5/13] Production deployment branch: $DEPLOY_BRANCH"
 
-CURRENT_LOCAL_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
-if [ "$CURRENT_LOCAL_BRANCH" != "$DEPLOY_BRANCH" ] && [ "$CURRENT_LOCAL_BRANCH" != "HEAD" ]; then
-  log "WARN" "[STAGE: git_pull] WARNING: current local branch is $CURRENT_LOCAL_BRANCH, production target branch is $DEPLOY_BRANCH"
-fi
-
-FAILED_COMMAND="git fetch origin $DEPLOY_BRANCH"
-fetch_exit=0
-run_timed 60 git fetch origin "$DEPLOY_BRANCH" >> "$LOG_FILE" 2>&1 || fetch_exit=$?
-if [ $fetch_exit -ne 0 ]; then
-  if is_timeout $fetch_exit; then
-    log "ERROR" "[STAGE: git_pull] [TIMEOUT] Git fetch origin $DEPLOY_BRANCH exceeded 60 seconds."
-    rollback_update "Git operation timed out (fetch origin/$DEPLOY_BRANCH exceeded 60s)."
-  else
-    log "ERROR" "[STAGE: git_pull] Git fetch origin $DEPLOY_BRANCH failed with exit code $fetch_exit."
-    rollback_update "Failed to fetch from remote branch origin/$DEPLOY_BRANCH. Network or git remote failure."
+  CURRENT_LOCAL_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
+  if [ "$CURRENT_LOCAL_BRANCH" != "$DEPLOY_BRANCH" ] && [ "$CURRENT_LOCAL_BRANCH" != "HEAD" ]; then
+    log "WARN" "[STAGE: git_pull] WARNING: current local branch is $CURRENT_LOCAL_BRANCH, production target branch is $DEPLOY_BRANCH"
   fi
-  exit 1
-fi
 
-TARGET_COMMIT=$(git rev-parse "origin/$DEPLOY_BRANCH" 2>/dev/null || echo "$PREVIOUS_COMMIT")
-log "INFO" "[STAGE: git_pull] Current commit: ${PREVIOUS_COMMIT:0:7} | Target commit: ${TARGET_COMMIT:0:7}"
-
-if [ "$PREVIOUS_COMMIT" = "$TARGET_COMMIT" ]; then
-  log "INFO" "[STAGE: git_pull] Working copy is already at commit ${PREVIOUS_COMMIT:0:7}."
-else
-  FAILED_COMMAND="git reset --hard $TARGET_COMMIT"
-  log "INFO" "[STAGE: git_pull] Updating working copy to target commit $TARGET_COMMIT (git reset --hard $TARGET_COMMIT)..."
-  reset_exit=0
-  run_timed 60 git reset --hard "$TARGET_COMMIT" >> "$LOG_FILE" 2>&1 || reset_exit=$?
-  if [ $reset_exit -ne 0 ]; then
-    if is_timeout $reset_exit; then
-      log "ERROR" "[STAGE: git_pull] [TIMEOUT] Git reset to $TARGET_COMMIT exceeded 60 seconds."
-      rollback_update "Git reset to target commit $TARGET_COMMIT timed out."
+  FAILED_COMMAND="git fetch origin $DEPLOY_BRANCH"
+  fetch_exit=0
+  run_timed 60 git fetch origin "$DEPLOY_BRANCH" >> "$LOG_FILE" 2>&1 || fetch_exit=$?
+  if [ $fetch_exit -ne 0 ]; then
+    if is_timeout $fetch_exit; then
+      log "ERROR" "[STAGE: git_pull] [TIMEOUT] Git fetch origin $DEPLOY_BRANCH exceeded 60 seconds."
+      rollback_update "Git operation timed out (fetch origin/$DEPLOY_BRANCH exceeded 60s)."
     else
-      log "ERROR" "[STAGE: git_pull] Git reset to $TARGET_COMMIT failed with exit code $reset_exit."
-      rollback_update "Git reset to target commit $TARGET_COMMIT failed!"
+      log "ERROR" "[STAGE: git_pull] Git fetch origin $DEPLOY_BRANCH failed with exit code $fetch_exit."
+      rollback_update "Failed to fetch from remote branch origin/$DEPLOY_BRANCH. Network or git remote failure."
     fi
     exit 1
   fi
-  NEW_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "$TARGET_COMMIT")
-  log "INFO" "[STAGE: git_pull] Codebase successfully updated to commit: ${NEW_COMMIT:0:7}."
-fi
 
-clear_stage_error
-write_state_file
+  TARGET_COMMIT=$(git rev-parse "origin/$DEPLOY_BRANCH" 2>/dev/null || echo "$PREVIOUS_COMMIT")
+  log "INFO" "[STAGE: git_pull] Current commit: ${PREVIOUS_COMMIT:0:7} | Target commit: ${TARGET_COMMIT:0:7}"
+
+  if [ "$PREVIOUS_COMMIT" = "$TARGET_COMMIT" ]; then
+    log "INFO" "[STAGE: git_pull] Working copy is already at commit ${PREVIOUS_COMMIT:0:7}."
+  else
+    FAILED_COMMAND="git reset --hard $TARGET_COMMIT"
+    log "INFO" "[STAGE: git_pull] Updating working copy to target commit $TARGET_COMMIT (git reset --hard $TARGET_COMMIT)..."
+    reset_exit=0
+    run_timed 60 git reset --hard "$TARGET_COMMIT" >> "$LOG_FILE" 2>&1 || reset_exit=$?
+    if [ $reset_exit -ne 0 ]; then
+      if is_timeout $reset_exit; then
+        log "ERROR" "[STAGE: git_pull] [TIMEOUT] Git reset to $TARGET_COMMIT exceeded 60 seconds."
+        rollback_update "Git reset to target commit $TARGET_COMMIT timed out."
+      else
+        log "ERROR" "[STAGE: git_pull] Git reset to $TARGET_COMMIT failed with exit code $reset_exit."
+        rollback_update "Git reset to target commit $TARGET_COMMIT failed!"
+      fi
+      exit 1
+    fi
+    NEW_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "$TARGET_COMMIT")
+    log "INFO" "[STAGE: git_pull] Codebase successfully updated to commit: ${NEW_COMMIT:0:7}."
+  fi
+
+  clear_stage_error
+  write_state_file
+fi
 
 # ------------------------------------------------------------------------------
 # STAGE 6: Install npm Dependencies (npm ci / npm install)
 # ------------------------------------------------------------------------------
-advance_stage "dependencies" 50
-log "INFO" "[STAGE: dependencies] [6/13] Installing npm dependencies..."
+if should_run_stage 6; then
+  advance_stage "dependencies" 50
+  log "INFO" "[STAGE: dependencies] [6/13] Installing npm dependencies..."
 
-had_lockfile=0
-npm_tmp="/tmp/dodik_npm_$$.log"
-if [ -f "package-lock.json" ]; then
-  had_lockfile=1
-  log "INFO" "[STAGE: dependencies] package-lock.json found -> using npm ci"
-  FAILED_COMMAND="npm ci --no-audit --no-fund"
-  ci_exit=0
-  run_timed 300 npm ci --no-audit --no-fund > "$npm_tmp" 2>&1 || ci_exit=$?
-  cat "$npm_tmp" >> "$LOG_FILE"
-  if [ $ci_exit -ne 0 ]; then
-    san_ci_err=$(sanitize_secrets "$(tail -n 25 "$npm_tmp")")
-    rm -f "$npm_tmp"
-    if is_timeout $ci_exit; then
-      log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm ci exceeded 300 seconds (5 minutes)."
-      rollback_update "npm ci timed out after 300 seconds."
-      exit 1
-    else
-      log "WARN" "[STAGE: dependencies] ⚠️ npm ci failed with exit code $ci_exit. Output:\n$san_ci_err"
-      log "INFO" "[STAGE: dependencies] Attempting fallback package install (npm install --no-audit --no-fund)..."
-      FAILED_COMMAND="npm install --no-audit --no-fund"
-      fallback_exit=0
-      fallback_tmp="/tmp/dodik_npm_fb_$$.log"
-      run_timed 300 npm install --no-audit --no-fund > "$fallback_tmp" 2>&1 || fallback_exit=$?
-      cat "$fallback_tmp" >> "$LOG_FILE"
-      if [ $fallback_exit -ne 0 ]; then
-        san_fallback_err=$(sanitize_secrets "$(tail -n 25 "$fallback_tmp")")
-        rm -f "$fallback_tmp"
-        if is_timeout $fallback_exit; then
-          log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm install fallback exceeded 300 seconds."
-          rollback_update "npm install fallback timed out after 300 seconds."
-        else
-          rollback_update "npm dependencies installation failed! npm stderr:\n$san_fallback_err"
-        fi
+  had_lockfile=0
+  npm_tmp="/tmp/dodik_npm_$$.log"
+  if [ -f "package-lock.json" ]; then
+    had_lockfile=1
+    log "INFO" "[STAGE: dependencies] package-lock.json found -> using npm ci"
+    FAILED_COMMAND="npm ci --no-audit --no-fund"
+    ci_exit=0
+    run_timed 300 npm ci --no-audit --no-fund > "$npm_tmp" 2>&1 || ci_exit=$?
+    cat "$npm_tmp" >> "$LOG_FILE"
+    if [ $ci_exit -ne 0 ]; then
+      san_ci_err=$(sanitize_secrets "$(tail -n 25 "$npm_tmp")")
+      rm -f "$npm_tmp"
+      if is_timeout $ci_exit; then
+        log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm ci exceeded 300 seconds (5 minutes)."
+        rollback_update "npm ci timed out after 300 seconds."
         exit 1
+      else
+        log "WARN" "[STAGE: dependencies] ⚠️ npm ci failed with exit code $ci_exit. Output:\n$san_ci_err"
+        log "INFO" "[STAGE: dependencies] Attempting fallback package install (npm install --no-audit --no-fund)..."
+        FAILED_COMMAND="npm install --no-audit --no-fund"
+        fallback_exit=0
+        fallback_tmp="/tmp/dodik_npm_fb_$$.log"
+        run_timed 300 npm install --no-audit --no-fund > "$fallback_tmp" 2>&1 || fallback_exit=$?
+        cat "$fallback_tmp" >> "$LOG_FILE"
+        if [ $fallback_exit -ne 0 ]; then
+          san_fallback_err=$(sanitize_secrets "$(tail -n 25 "$fallback_tmp")")
+          rm -f "$fallback_tmp"
+          if is_timeout $fallback_exit; then
+            log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm install fallback exceeded 300 seconds."
+            rollback_update "npm install fallback timed out after 300 seconds."
+          else
+            rollback_update "npm dependencies installation failed! npm stderr:\n$san_fallback_err"
+          fi
+          exit 1
+        fi
+        rm -f "$fallback_tmp"
+        log "INFO" "[STAGE: dependencies] Fallback npm install completed successfully."
       fi
-      rm -f "$fallback_tmp"
-      log "INFO" "[STAGE: dependencies] Fallback npm install completed successfully."
+    else
+      rm -f "$npm_tmp"
+      log "INFO" "[STAGE: dependencies] Dependencies installed successfully via npm ci."
     fi
   else
-    rm -f "$npm_tmp"
-    log "INFO" "[STAGE: dependencies] Dependencies installed successfully via npm ci."
-  fi
-else
-  log "INFO" "[STAGE: dependencies] package-lock.json not found -> using npm install"
-  FAILED_COMMAND="npm install --no-audit --no-fund"
-  install_exit=0
-  run_timed 300 npm install --no-audit --no-fund > "$npm_tmp" 2>&1 || install_exit=$?
-  cat "$npm_tmp" >> "$LOG_FILE"
-  if [ $install_exit -ne 0 ]; then
-    san_install_err=$(sanitize_secrets "$(tail -n 25 "$npm_tmp")")
-    rm -f "$npm_tmp"
-    if is_timeout $install_exit; then
-      log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm install exceeded 300 seconds (5 minutes)."
-      rollback_update "npm install timed out after 300 seconds."
-    else
-      rollback_update "npm dependencies installation failed! npm stderr:\n$san_install_err"
+    log "INFO" "[STAGE: dependencies] package-lock.json not found -> using npm install"
+    FAILED_COMMAND="npm install --no-audit --no-fund"
+    install_exit=0
+    run_timed 300 npm install --no-audit --no-fund > "$npm_tmp" 2>&1 || install_exit=$?
+    cat "$npm_tmp" >> "$LOG_FILE"
+    if [ $install_exit -ne 0 ]; then
+      san_install_err=$(sanitize_secrets "$(tail -n 25 "$npm_tmp")")
+      rm -f "$npm_tmp"
+      if is_timeout $install_exit; then
+        log "ERROR" "[STAGE: dependencies] [TIMEOUT] npm install exceeded 300 seconds (5 minutes)."
+        rollback_update "npm install timed out after 300 seconds."
+      else
+        rollback_update "npm dependencies installation failed! npm stderr:\n$san_install_err"
+      fi
+      exit 1
     fi
-    exit 1
+    rm -f "$npm_tmp"
+    log "INFO" "[STAGE: dependencies] Dependencies installed successfully via npm install."
   fi
-  rm -f "$npm_tmp"
-  log "INFO" "[STAGE: dependencies] Dependencies installed successfully via npm install."
-fi
 
-# Check git status for newly generated package-lock.json (do not treat as application update)
-if [ $had_lockfile -eq 0 ] && [ -f "package-lock.json" ]; then
-  log "INFO" "[STAGE: dependencies] Notice: untracked package-lock.json was generated during npm install; keeping intact without committing."
-fi
-
-# Verify essential CLI packages exist in node_modules
-for pkg_bin in vite esbuild tsx; do
-  if [ ! -f "node_modules/.bin/$pkg_bin" ]; then
-    rollback_update "Missing required binary in node_modules/.bin/$pkg_bin!"
-    exit 1
+  # Check git status for newly generated package-lock.json (do not treat as application update)
+  if [ $had_lockfile -eq 0 ] && [ -f "package-lock.json" ]; then
+    log "INFO" "[STAGE: dependencies] Notice: untracked package-lock.json was generated during npm install; keeping intact without committing."
   fi
-done
-clear_stage_error
-write_state_file
-log "INFO" "[STAGE: dependencies] Verified required binaries (vite, esbuild, tsx) in node_modules/.bin."
+
+  # Verify essential CLI packages exist in node_modules
+  for pkg_bin in vite esbuild tsx; do
+    if [ ! -f "node_modules/.bin/$pkg_bin" ]; then
+      rollback_update "Missing required binary in node_modules/.bin/$pkg_bin!"
+      exit 1
+    fi
+  done
+  clear_stage_error
+  write_state_file
+  log "INFO" "[STAGE: dependencies] Verified required binaries (vite, esbuild, tsx) in node_modules/.bin."
+fi
 
 # ------------------------------------------------------------------------------
 # STAGE 7: Build Production Application
 # ------------------------------------------------------------------------------
-advance_stage "build" 62
-log "INFO" "[STAGE: build] [7/13] Building production application (npm run build)..."
+if should_run_stage 7; then
+  advance_stage "build" 62
+  log "INFO" "[STAGE: build] [7/13] Building production application (npm run build)..."
 
-FAILED_COMMAND="npm run build"
-build_exit=0
-build_tmp="/tmp/dodik_build_$$.log"
-run_timed 300 npm run build > "$build_tmp" 2>&1 || build_exit=$?
-cat "$build_tmp" >> "$LOG_FILE"
+  FAILED_COMMAND="npm run build"
+  build_exit=0
+  build_tmp="/tmp/dodik_build_$$.log"
+  run_timed 300 npm run build > "$build_tmp" 2>&1 || build_exit=$?
+  cat "$build_tmp" >> "$LOG_FILE"
 
-if [ $build_exit -ne 0 ]; then
-  san_build_err=$(sanitize_secrets "$(tail -n 25 "$build_tmp")")
-  rm -f "$build_tmp"
-  if is_timeout $build_exit; then
-    log "ERROR" "[STAGE: build] [TIMEOUT] Production build exceeded 300 seconds."
-    rollback_update "Production build timed out."
-  else
-    rollback_update "Production build (npm run build) failed! Error output:\n$san_build_err"
+  if [ $build_exit -ne 0 ]; then
+    san_build_err=$(sanitize_secrets "$(tail -n 25 "$build_tmp")")
+    rm -f "$build_tmp"
+    if is_timeout $build_exit; then
+      log "ERROR" "[STAGE: build] [TIMEOUT] Production build exceeded 300 seconds."
+      rollback_update "Production build timed out."
+    else
+      rollback_update "Production build (npm run build) failed! Error output:\n$san_build_err"
+    fi
+    exit 1
   fi
-  exit 1
-fi
-rm -f "$build_tmp"
+  rm -f "$build_tmp"
 
-if [ ! -f "$PROJECT_ROOT/dist/server.cjs" ] || [ ! -s "$PROJECT_ROOT/dist/server.cjs" ]; then
-  rollback_update "Build artifact missing: dist/server.cjs not found or empty!"
-  exit 1
-fi
+  if [ ! -f "$PROJECT_ROOT/dist/server.cjs" ] || [ ! -s "$PROJECT_ROOT/dist/server.cjs" ]; then
+    rollback_update "Build artifact missing: dist/server.cjs not found or empty!"
+    exit 1
+  fi
 
-clear_stage_error
-write_state_file
-log "INFO" "[STAGE: build] Production build verified: dist/server.cjs created successfully."
+  clear_stage_error
+  write_state_file
+  log "INFO" "[STAGE: build] Production build verified: dist/server.cjs created successfully."
+fi
 
 # ------------------------------------------------------------------------------
 # STAGE 8: Database Migrations
@@ -897,7 +941,12 @@ log "INFO" "[STAGE: migrations] [8/13] Applying database migrations (npm run db:
 FAILED_COMMAND="npm run db:migrate"
 migrate_exit=0
 migrate_tmp="/tmp/dodik_migrate_$$.log"
-run_timed 120 npm run db:migrate > "$migrate_tmp" 2>&1 || migrate_exit=$?
+if [ -n "${DODIK_TEST_MIGRATE_CMD:-}" ]; then
+  log "INFO" "[STAGE: migrations] Test migrate override active: $DODIK_TEST_MIGRATE_CMD"
+  run_timed 120 bash -c "$DODIK_TEST_MIGRATE_CMD" > "$migrate_tmp" 2>&1 || migrate_exit=$?
+else
+  run_timed 120 npm run db:migrate > "$migrate_tmp" 2>&1 || migrate_exit=$?
+fi
 cat "$migrate_tmp" >> "$LOG_FILE"
 
 if [ $migrate_exit -ne 0 ]; then
@@ -942,7 +991,7 @@ if [ -n "${DODIK_TEST_RESTART_CMD:-}" ]; then
   log "INFO" "[STAGE: restart] Test restart override active: $DODIK_TEST_RESTART_CMD"
   run_timed 60 bash -c "$DODIK_TEST_RESTART_CMD" >> "$LOG_FILE" 2>&1 || restart_exit=$?
 elif [ $pm2_available -eq 1 ]; then
-  run_timed 60 "$PM2_BIN" restart dodik-tracker --update-env </dev/null >> "$LOG_FILE" 2>&1 || restart_exit=$?
+  run_timed 60 setsid "$PM2_BIN" restart dodik-tracker --update-env </dev/null >> "$LOG_FILE" 2>&1 || restart_exit=$?
 else
   log "WARN" "[STAGE: restart] PM2 not found in system path; relying on server process supervisor."
 fi
@@ -979,9 +1028,19 @@ advance_stage "healthcheck" 90
 log "INFO" "[STAGE: healthcheck] [10/13] Verifying server healthcheck endpoint (/api/health)..."
 sleep 2
 
-HEALTH_URL="http://localhost:3000/api/health"
+HEALTH_URL="${DODIK_TEST_HEALTH_URL:-http://localhost:3000/api/health}"
 FAILED_COMMAND="check_health $HEALTH_URL"
-if ! check_health "$HEALTH_URL" 10 2; then
+health_ok=0
+if [ -n "${DODIK_TEST_HEALTHCHECK_CMD:-}" ]; then
+  log "INFO" "[STAGE: healthcheck] Test healthcheck override active: $DODIK_TEST_HEALTHCHECK_CMD"
+  if bash -c "$DODIK_TEST_HEALTHCHECK_CMD"; then
+    health_ok=1
+  fi
+elif check_health "$HEALTH_URL" 10 2; then
+  health_ok=1
+fi
+
+if [ $health_ok -ne 1 ]; then
   LAST_BODY=$(curl --connect-timeout 3 --max-time 5 -fsS "$HEALTH_URL" 2>/dev/null || echo "No response / connection refused")
   CURRENT_STATE="failed"
   FAILED_STAGE="healthcheck"
