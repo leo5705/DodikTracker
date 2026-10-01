@@ -174,10 +174,16 @@ export const WatchSourcePicker: React.FC<WatchSourcePickerProps> = ({
   const handleProceed = async () => {
     if (!selectedCandidate) return;
 
+    const resolvedMagnet = selectedCandidate.magnetUri?.startsWith('magnet:?')
+      ? selectedCandidate.magnetUri
+      : selectedCandidate.infoHash && /^[0-9a-fA-F]{40}$/i.test(selectedCandidate.infoHash)
+      ? `magnet:?xt=urn:btih:${selectedCandidate.infoHash.toLowerCase()}&dn=${encodeURIComponent(selectedCandidate.name || mediaTitle)}`
+      : selectedCandidate.magnetUri;
+
     const sourceConfig: MediaSourceConfig = {
       type: 'TORRENT',
       url: `/api/watch-party/torrents/stream?hash=${selectedCandidate.infoHash || ''}`,
-      magnetUri: selectedCandidate.magnetUri,
+      magnetUri: resolvedMagnet,
       fileName: (selectedCandidate as any).selectedFile?.name,
       infoHash: selectedCandidate.infoHash,
       title: selectedCandidate.name,
@@ -202,7 +208,7 @@ export const WatchSourcePicker: React.FC<WatchSourcePickerProps> = ({
         title: isSolo
           ? `${mediaTitle}${isSeries && seasonNumber && episodeNumber ? ` — S${seasonNumber}E${episodeNumber}` : ''}`
           : roomTitle.trim() || mediaTitle,
-        privacy: isSolo ? 'PRIVATE' : privacy,
+        privacy: isSolo ? 'PUBLIC' : privacy,
         passcode: isSolo ? undefined : privacy === 'PRIVATE' ? passcode : undefined,
         maxMembers: isSolo ? 1 : maxMembers,
         mediaId,
@@ -211,8 +217,11 @@ export const WatchSourcePicker: React.FC<WatchSourcePickerProps> = ({
         episodeNumber: episodeNumber || undefined,
         source: {
           type: 'TORRENT',
-          magnetUri: selectedCandidate.magnetUri,
+          magnetUri: resolvedMagnet,
+          infoHash: selectedCandidate.infoHash,
+          downloadUrl: selectedCandidate.downloadUrl,
           fileName: (selectedCandidate as any).selectedFile?.name,
+          title: selectedCandidate.name,
         },
       };
 

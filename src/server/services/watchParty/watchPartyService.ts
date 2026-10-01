@@ -44,7 +44,18 @@ function sanitizeSourceConfig(
 
   if (type === 'TORRENT' || config?.type === 'TORRENT' || config?.magnetUri) {
     type = 'TORRENT';
-    const rawMagnet = config?.magnetUri || config?.url || url || '';
+    let rawMagnet = config?.magnetUri || config?.url || url || '';
+
+    // If rawMagnet is not a valid magnet string, but a valid infoHash exists in config, resolve into canonical magnet URI
+    const configHash = config?.infoHash || '';
+    if (
+      (!rawMagnet || rawMagnet.startsWith('http://') || rawMagnet.startsWith('https://')) &&
+      configHash &&
+      (/^[0-9a-fA-F]{40}$/i.test(configHash) || /^[2-7a-zA-Z]{32}$/i.test(configHash))
+    ) {
+      rawMagnet = `magnet:?xt=urn:btih:${configHash.toLowerCase()}${config?.title ? `&dn=${encodeURIComponent(config.title)}` : ''}`;
+    }
+
     const parsed = validateAndParseMagnet(rawMagnet);
 
     if (!parsed.isValid) {

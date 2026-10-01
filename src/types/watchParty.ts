@@ -55,6 +55,7 @@ export interface MediaSourceConfig {
   trackers?: string[];
   torrentMagnetOrUrl?: string;
   torrentFileIndex?: number;
+  downloadUrl?: string;
   subtitles?: MediaSubtitleTrack[];
   audioTracks?: MediaAudioTrack[];
   metadata?: Record<string, any>;

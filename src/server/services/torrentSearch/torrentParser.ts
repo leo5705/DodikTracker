@@ -113,23 +113,64 @@ export function parseProwlarrJsonItem(
   const seeders = typeof item.seeders === 'number' ? item.seeders : 0;
   const leechers = typeof item.leechers === 'number' ? item.leechers : 0;
 
-  // Magnet URI or Download URL
-  let magnetUri = item.magnetUrl || item.magnetUri || item.downloadUrl || '';
-  let infoHash = item.infoHash || item.guid || '';
+  // Magnet URI, InfoHash, and Download URL resolution
+  let infoHash: string | undefined = undefined;
+  let magnetUri: string | undefined = undefined;
+  const downloadUrl: string | undefined = item.downloadUrl ? String(item.downloadUrl).trim() : undefined;
 
-  // Validate magnet if magnet URL present
-  if (magnetUri) {
-    const parsed = validateAndParseMagnet(magnetUri);
+  // 1. Extract infoHash from item.infoHash if valid hex40 or base32
+  if (item.infoHash && typeof item.infoHash === 'string') {
+    const cleanHash = item.infoHash.trim();
+    if (/^[0-9a-fA-F]{40}$/i.test(cleanHash) || /^[2-7a-zA-Z]{32}$/i.test(cleanHash)) {
+      infoHash = cleanHash.toLowerCase();
+    }
+  }
+
+  // 2. Validate magnetUrl if provided directly
+  const rawMagnet = item.magnetUrl || item.magnetUri;
+  if (rawMagnet && typeof rawMagnet === 'string') {
+    const parsed = validateAndParseMagnet(rawMagnet);
     if (parsed.isValid) {
       magnetUri = parsed.magnetUri;
       if (parsed.infoHash) {
-        infoHash = parsed.infoHash;
+        infoHash = parsed.infoHash.toLowerCase();
       }
     }
   }
 
-  // Fallback: If infoHash present but magnetUri empty
-  if (!magnetUri && infoHash && /^[0-9a-fA-F]{40}$/i.test(infoHash)) {
+  // 3. If magnetUri is not yet resolved, inspect downloadUrl & guid for infoHash or magnet
+  if (!magnetUri && downloadUrl) {
+    if (downloadUrl.startsWith('magnet:?')) {
+      const parsed = validateAndParseMagnet(downloadUrl);
+      if (parsed.isValid) {
+        magnetUri = parsed.magnetUri;
+        if (parsed.infoHash) infoHash = parsed.infoHash.toLowerCase();
+      }
+    } else {
+      const hashMatch = downloadUrl.match(/(?:urn:btih:|info_hash=|hash=|\/)([0-9a-fA-F]{40})/i);
+      if (hashMatch && hashMatch[1] && !infoHash) {
+        infoHash = hashMatch[1].toLowerCase();
+      }
+    }
+  }
+
+  if (!infoHash && item.guid && typeof item.guid === 'string') {
+    if (item.guid.startsWith('magnet:?')) {
+      const parsed = validateAndParseMagnet(item.guid);
+      if (parsed.isValid) {
+        magnetUri = parsed.magnetUri;
+        if (parsed.infoHash) infoHash = parsed.infoHash.toLowerCase();
+      }
+    } else {
+      const guidMatch = item.guid.match(/(?:urn:btih:|hash=|\/)([0-9a-fA-F]{40})/i);
+      if (guidMatch && guidMatch[1]) {
+        infoHash = guidMatch[1].toLowerCase();
+      }
+    }
+  }
+
+  // 4. Synthesize valid magnetUri from infoHash if item had only infoHash/downloadUrl
+  if (!magnetUri && infoHash && (/^[0-9a-fA-F]{40}$/i.test(infoHash) || /^[2-7a-zA-Z]{32}$/i.test(infoHash))) {
     magnetUri = `magnet:?xt=urn:btih:${infoHash.toLowerCase()}&dn=${encodeURIComponent(rawTitle)}`;
   }
 
