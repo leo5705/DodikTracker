@@ -39,7 +39,8 @@
     "test:lyrics": "tsx src/server/tests/lyricsParserTests.ts && tsx src/server/tests/liveLyricsLogicTests.ts",
     "test:step22": "tsx src/server/tests/step22GeniusAndMusicLayoutTests.ts",
     "test:playlist-keys": "tsx src/server/tests/playlistIdentityKeysTests.ts",
-    "test:safety": "tsx src/scripts/testUpdateSafety.ts"
+    "test:safety": "tsx src/scripts/testUpdateSafety.ts",
+    "test:update": "tsx src/server/tests/productionUpdateEngineTests.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

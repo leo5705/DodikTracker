@@ -324,11 +324,22 @@ function isProcessAlive(pid?: number | null): boolean {
 
 function getPersistedUpdateJob(): UpdateJob | null {
   const statePath = path.resolve('logs/update_state.json');
+  const hbPath = path.resolve('logs/update_heartbeat');
   if (fs.existsSync(statePath)) {
     try {
       const raw = fs.readFileSync(statePath, 'utf8');
       const stateObj = JSON.parse(raw);
       if (stateObj && stateObj.id) {
+        let lastHb = stateObj.lastHeartbeatAt || null;
+        if (fs.existsSync(hbPath)) {
+          try {
+            const hbContent = fs.readFileSync(hbPath, 'utf8').trim();
+            if (hbContent && !isNaN(Date.parse(hbContent))) {
+              lastHb = hbContent;
+            }
+          } catch {}
+        }
+
         const rawState = stateObj.state || 'idle';
         const normalizedState: UpdateState =
           rawState === 'rollback_failed' ? 'failed' : (rawState as UpdateState);
@@ -339,7 +350,7 @@ function getPersistedUpdateJob(): UpdateJob | null {
           stage: stateObj.stage || 'idle',
           progress: stateObj.progress || 0,
           startTime: stateObj.startTime || null,
-          lastHeartbeatAt: stateObj.lastHeartbeatAt || null,
+          lastHeartbeatAt: lastHb,
           endTime: stateObj.endTime || null,
           logSummary: Array.isArray(stateObj.logSummary) ? stateObj.logSummary.map(sanitizeSecretsText) : [],
           error: stateObj.errorDetails ? sanitizeSecretsText(stateObj.errorDetails) : null,
@@ -387,9 +398,49 @@ function persistTerminalFailure(job: UpdateJob, reason: string): void {
   }
 }
 
+const LAUNCH_GRACE_PERIOD_MS = 25000;
+
 function reconcileUpdateJob(): UpdateJob | null {
   const persisted = getPersistedUpdateJob();
-  const job = persisted || activeUpdateJob;
+
+  // If in-memory job exists, evaluate with launch grace period and ID matching
+  if (activeUpdateJob && activeUpdateJob.state === 'running') {
+    if (persisted && persisted.id === activeUpdateJob.id) {
+      // Persisted state has caught up with current activeUpdateJob
+      activeUpdateJob = {
+        ...persisted,
+        triggeredBy: activeUpdateJob.triggeredBy,
+      };
+    } else {
+      // Persisted file either belongs to previous job or has not yet been written by new worker
+      const now = Date.now();
+      const startMs = activeUpdateJob.startTime ? new Date(activeUpdateJob.startTime).getTime() : now;
+      const elapsedSinceLaunch = now - startMs;
+
+      if (elapsedSinceLaunch <= LAUNCH_GRACE_PERIOD_MS) {
+        // Within launch grace period: worker daemon is initializing/starting
+        // Never fail due to missing PID during this starting window
+        return activeUpdateJob;
+      } else {
+        // Exceeded launch grace period without worker state writing the matching jobId
+        const failureReason = 'Процесс обновления не смог запуститься: превышено время ожидания инициализации worker';
+        activeUpdateJob.state = 'failed';
+        activeUpdateJob.error = failureReason;
+        activeUpdateJob.endTime = new Date().toISOString();
+        persistTerminalFailure(activeUpdateJob, failureReason);
+        lastUpdateResult = {
+          status: 'FAILURE',
+          error: failureReason,
+          timestamp: activeUpdateJob.endTime,
+        };
+        const failedJob = activeUpdateJob;
+        activeUpdateJob = null;
+        return failedJob;
+      }
+    }
+  }
+
+  const job = activeUpdateJob || persisted;
   if (!job) return null;
 
   if (job.state === 'running') {
@@ -417,8 +468,8 @@ function reconcileUpdateJob(): UpdateJob | null {
       }
     }
 
-    // 2. If PID is missing entirely from a running state and job started > 25 seconds ago:
-    if (!job.pid && elapsedSinceHeartbeat > 25000) {
+    // 2. If PID is missing entirely from a running state after launch grace period:
+    if (!job.pid && elapsedSinceHeartbeat > LAUNCH_GRACE_PERIOD_MS) {
       const failureReason = 'Процесс обновления аварийно завершился: worker PID отсутствует в системе';
       persistTerminalFailure(job, failureReason);
       activeUpdateJob = null;
@@ -664,7 +715,11 @@ systemRouter.post('/system/update', async (req: AuthRequest, res: Response) => {
     // Spawn detached child process running scripts/update.sh
     const child = spawn('bash', [scriptPath], {
       cwd: process.cwd(),
-      env: { ...process.env, DODIK_UPDATE_SERVER_SPAWNED: '1' },
+      env: {
+        ...process.env,
+        DODIK_UPDATE_SERVER_SPAWNED: '1',
+        DODIK_UPDATE_JOB_ID: jobId,
+      },
       detached: true,
       stdio: 'ignore',
     });

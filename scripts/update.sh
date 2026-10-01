@@ -95,6 +95,7 @@ export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/lib/postgre
 LOG_DIR="$PROJECT_ROOT/logs"
 LOG_FILE="$LOG_DIR/update.log"
 STATE_FILE="$LOG_DIR/update_state.json"
+HEARTBEAT_FILE="$LOG_DIR/update_heartbeat"
 UPLOADS_DIR="${UPLOADS_DIR:-$PROJECT_ROOT/public/uploads}"
 AUDIO_DIR="$UPLOADS_DIR/audio"
 COVERS_DIR="$UPLOADS_DIR/covers"
@@ -184,7 +185,7 @@ check_health() {
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 
 # State variables
-JOB_ID="update_$(date +%s)"
+JOB_ID="${DODIK_UPDATE_JOB_ID:-update_$(date +%s)}"
 JOB_PID="$$"
 JOB_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 LAST_HEARTBEAT_AT="$JOB_START_TIME"
@@ -236,6 +237,7 @@ advance_stage() {
 
 write_state_file() {
   LAST_HEARTBEAT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "$LAST_HEARTBEAT_AT" > "$HEARTBEAT_FILE.tmp" 2>/dev/null && mv -f "$HEARTBEAT_FILE.tmp" "$HEARTBEAT_FILE" 2>/dev/null || true
 
   # Construct JSON array of log summary lines safely
   local logs_json="["
@@ -285,7 +287,7 @@ write_state_file() {
   "logSummary": $logs_json
 }
 EOF
-  mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
+  mv -f "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
 }
 
 log() {
@@ -322,21 +324,14 @@ start_heartbeat() {
   local parent_pid="$$"
   (
     while true; do
-      sleep 10
+      sleep 5
       # If parent process has died, stop heartbeat worker immediately
       if ! kill -0 "$parent_pid" 2>/dev/null; then
         break
       fi
-      if [ ! -f "$STATE_FILE" ]; then
-        continue
-      fi
-      if grep -q '"state": "running"' "$STATE_FILE" 2>/dev/null; then
-        local now_iso
-        now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-        sed -i -E "s/\"lastHeartbeatAt\": \"[^\"]+\"/\"lastHeartbeatAt\": \"$now_iso\"/" "$STATE_FILE" 2>/dev/null || true
-      else
-        break
-      fi
+      local now_iso
+      now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      echo "$now_iso" > "$HEARTBEAT_FILE.tmp" 2>/dev/null && mv -f "$HEARTBEAT_FILE.tmp" "$HEARTBEAT_FILE" 2>/dev/null || true
     done
   ) &
   HEARTBEAT_PID=$!
@@ -348,6 +343,7 @@ stop_heartbeat() {
     wait "$HEARTBEAT_PID" 2>/dev/null || true
     HEARTBEAT_PID=""
   fi
+  rm -f "$HEARTBEAT_FILE" "$HEARTBEAT_FILE.tmp" 2>/dev/null || true
 }
 
 log "INFO" "[STAGE: init] =================================================="
