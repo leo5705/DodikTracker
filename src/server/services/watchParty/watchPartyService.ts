@@ -62,15 +62,25 @@ function sanitizeSourceConfig(
       throw new Error(`Некорректный источник торрента: ${parsed.error || 'Неверная magnet-ссылка'}`);
     }
 
+    const fileIndex = typeof config?.torrentFileIndex === 'number' ? config.torrentFileIndex : 0;
+    let streamUrl: string | undefined = undefined;
+    if (config?.url && (config.url.startsWith('/') || config.url.startsWith('http://') || config.url.startsWith('https://')) && !config.url.startsWith('magnet:?')) {
+      streamUrl = config.url;
+    } else if (parsed.infoHash) {
+      streamUrl = `/api/watch-party/torrents/stream?hash=${parsed.infoHash}&index=${fileIndex}`;
+    }
+
     config = {
       type: 'TORRENT',
+      url: streamUrl,
       magnetUri: parsed.magnetUri,
       fileName: config?.fileName ? String(config.fileName).slice(0, 500) : undefined,
       infoHash: parsed.infoHash,
       trackers: parsed.trackers,
+      torrentFileIndex: fileIndex,
       title: config?.title ? String(config.title).slice(0, 300) : parsed.displayName,
     };
-    url = parsed.magnetUri;
+    url = streamUrl || parsed.magnetUri;
   } else if (config) {
     // Strip sensitive fields
     const safeConfig: MediaSourceConfig = {
@@ -302,6 +312,20 @@ export class WatchPartyService {
         avatar: hostUser.avatar,
         role: 'HOST',
       });
+    }
+
+    // If the room is created with TORRENT source with explicit magnet/infoHash, preload into TorrServer
+    if (sanitizedType === 'TORRENT' && sanitizedConfig?.infoHash) {
+      const magnet = sanitizedConfig.magnetUri || `magnet:?xt=urn:btih:${sanitizedConfig.infoHash}`;
+      import('../torrentSearch/torrServerClient.ts').then(({ torrServerClient }) => {
+        torrServerClient.addTorrent(magnet, sanitizedConfig?.title).catch((err) => {
+          console.warn('[TORRENT-PRELOAD] Non-fatal TorrServer preload error:', err.message);
+        });
+      }).catch(() => {});
+
+      import('../torrentSearch/torrentSessionManager.ts').then(({ torrentSessionManager }) => {
+        torrentSessionManager.addReference(sanitizedConfig.infoHash!, code);
+      }).catch(() => {});
     }
 
     // If the room is created with TORRENT source and has media but no magnetUri/url, trigger auto-torrent discovery!
@@ -915,6 +939,16 @@ export class WatchPartyService {
     try {
       const { torrentSessionManager } = await import('../torrentSearch/torrentSessionManager.ts');
       await torrentSessionManager.cancelSession(roomDto.code);
+
+      if (sanitizedType === 'TORRENT' && sanitizedConfig?.infoHash) {
+        const magnet = sanitizedConfig.magnetUri || `magnet:?xt=urn:btih:${sanitizedConfig.infoHash}`;
+        import('../torrentSearch/torrServerClient.ts').then(({ torrServerClient }) => {
+          torrServerClient.addTorrent(magnet, sanitizedConfig?.title).catch((err) => {
+            console.warn('[TORRENT-PRELOAD] Non-fatal TorrServer preload error:', err.message);
+          });
+        }).catch(() => {});
+        torrentSessionManager.addReference(sanitizedConfig.infoHash, roomDto.code);
+      }
 
       // If the new source is TORRENT and either it has no magnet/url, or the episode/media changed:
       if (sanitizedType === 'TORRENT' && (

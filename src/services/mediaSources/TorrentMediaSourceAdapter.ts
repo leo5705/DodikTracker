@@ -4,9 +4,9 @@
  * stream attachment, buffering detection, and peer statistics.
  */
 
-import WebTorrent, {
-  type Torrent,
-  type TorrentFile,
+import type {
+  Torrent,
+  TorrentFile,
 } from 'webtorrent';
 import { BaseMediaSourceAdapter, MediaSourceAdapterCallbacks } from './MediaSourceAdapter.ts';
 import {
@@ -34,7 +34,7 @@ const METADATA_TIMEOUT_MS = 60000; // 60s timeout
 export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
   readonly type: WatchPartySourceType = 'TORRENT';
 
-  private client: WebTorrent | null = null;
+  private client: any = null;
   private torrent: Torrent | null = null;
   private activeFile: TorrentFile | null = null;
   private discoveredFiles: TorrentMediaFile[] = [];
@@ -62,44 +62,65 @@ export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
   async load(config: MediaSourceConfig): Promise<void> {
     this.currentConfig = config;
     const currentGen = ++this.loadGeneration;
+
+    // 1. Resolve HTTP stream URL from config.url or derive from infoHash
+    let streamUrl = config.url;
+    if ((!streamUrl || streamUrl.startsWith('magnet:?')) && config.infoHash) {
+      const fileIndex = typeof config.torrentFileIndex === 'number' ? config.torrentFileIndex : 0;
+      streamUrl = `/api/watch-party/torrents/stream?hash=${config.infoHash}&index=${fileIndex}`;
+      this.currentConfig = { ...config, url: streamUrl };
+    }
+
+    const isHttpStream = streamUrl && (streamUrl.startsWith('http://') || streamUrl.startsWith('https://') || streamUrl.startsWith('/'));
+    if (isHttpStream) {
+      // Direct TorrServer HTTP Streaming mode:
+      // Clean up any lingering WebTorrent client
+      await this.cleanupTorrent();
+      if (currentGen !== this.loadGeneration || this.isDestroyed) return;
+
+      this.setState('READY');
+      if (this.attachedVideo) {
+        if (this.attachedVideo.src !== streamUrl) {
+          this.attachedVideo.src = streamUrl;
+          this.attachedVideo.load();
+        }
+        this.callbacks.onReady?.(this.attachedVideo);
+      }
+      return;
+    }
+
     const magnet = config.magnetUri || config.url || '';
 
-    const isHttpStream = config.url && (config.url.startsWith('http://') || config.url.startsWith('https://') || config.url.startsWith('/'));
-    if (isHttpStream) {
-      this.setState('READY');
-      this.callbacks.onReady?.(this.attachedVideo || undefined);
-      return;
-    }
-
     // 1. Check browser WebRTC support
-    if (typeof window !== 'undefined') {
-      const webrtcSupported = (WebTorrent as any).WEBRTC_SUPPORT;
-      if (webrtcSupported === false) {
-        this.notifyError(
-          'Ваш браузер не поддерживает P2P-воспроизведение WebTorrent / WebRTC.',
-          'WEBRTC_UNSUPPORTED'
-        );
+    try {
+      const { default: WebTorrent } = await import('webtorrent');
+      if (typeof window !== 'undefined') {
+        const webrtcSupported = (WebTorrent as any).WEBRTC_SUPPORT;
+        if (webrtcSupported === false) {
+          this.notifyError(
+            'Ваш браузер не поддерживает P2P-воспроизведение WebTorrent / WebRTC.',
+            'WEBRTC_UNSUPPORTED'
+          );
+          return;
+        }
+      }
+
+      // 2. Validate Magnet URI
+      const parsed = validateAndParseMagnet(magnet);
+      if (!parsed.isValid) {
+        this.notifyError(parsed.error || 'Неверная magnet-ссылка', 'INVALID_MAGNET');
         return;
       }
-    }
 
-    // 2. Validate Magnet URI
-    const parsed = validateAndParseMagnet(magnet);
-    if (!parsed.isValid) {
-      this.notifyError(parsed.error || 'Неверная magnet-ссылка', 'INVALID_MAGNET');
-      return;
-    }
+      this.setState('PARSING');
 
-    this.setState('PARSING');
+      // 3. Clean up previous client/torrent before new load
+      await this.cleanupTorrent();
 
-    // 3. Clean up previous client/torrent before new load
-    await this.cleanupTorrent();
+      // Check if new load call or destroy happened while cleaning up
+      if (currentGen !== this.loadGeneration || this.isDestroyed) return;
 
-    // Check if new load call or destroy happened while cleaning up
-    if (currentGen !== this.loadGeneration || this.isDestroyed) return;
-
-    // 4. Instantiate WebTorrent single client
-    try {
+      // 4. Instantiate WebTorrent single client
       this.client = new WebTorrent({
         tracker: {
           rtcConfig: {

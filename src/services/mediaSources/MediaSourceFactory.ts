@@ -9,7 +9,7 @@ import { DirectMediaSourceAdapter } from './DirectMediaSourceAdapter.ts';
 import { YouTubeMediaSourceAdapter } from './YouTubeMediaSourceAdapter.ts';
 import { TorrentMediaSourceAdapter } from './TorrentMediaSourceAdapter.ts';
 import { validateAndParseMagnet, formatByteSize, isVideoFile } from '../../utils/magnetValidator.ts';
-import WebTorrent from 'webtorrent';
+import type WebTorrent from 'webtorrent';
 
 export class MediaSourceFactory {
   private static activeAdapter: IMediaSourceAdapter | null = null;
@@ -82,12 +82,8 @@ export class MediaSourceFactory {
       throw new Error(parsed.error || 'Неверная magnet-ссылка');
     }
 
-    if (typeof window !== 'undefined' && (WebTorrent as any).WEBRTC_SUPPORT === false) {
-      throw new Error('Ваш браузер не поддерживает WebRTC/WebTorrent P2P');
-    }
-
-    return new Promise((resolve, reject) => {
-      let client: WebTorrent | null = null;
+    return new Promise(async (resolve, reject) => {
+      let client: any = null;
       let timeoutTimer: any = null;
       let finished = false;
 
@@ -109,6 +105,13 @@ export class MediaSourceFactory {
       }, timeoutMs);
 
       try {
+        const { default: WebTorrent } = await import('webtorrent');
+        if (typeof window !== 'undefined' && (WebTorrent as any).WEBRTC_SUPPORT === false) {
+          cleanup();
+          reject(new Error('Ваш браузер не поддерживает WebRTC/WebTorrent P2P'));
+          return;
+        }
+
         client = new WebTorrent({
           tracker: {
             rtcConfig: {

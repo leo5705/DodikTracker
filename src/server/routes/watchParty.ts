@@ -519,21 +519,17 @@ watchPartyRouter.post('/rooms/:code/cancel-torrent', requireAuth, async (req: Au
  * 14. GET /api/watch-party/rooms/:code/torrent-stream
  * Secure, authenticated streaming proxy that forwards requests to internal TorrServer without credentials leakage.
  */
-watchPartyRouter.get('/rooms/:code/torrent-stream', requireAuth, async (req: AuthRequest, res: Response) => {
+watchPartyRouter.get('/rooms/:code/torrent-stream', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { code } = req.params;
     const { hash, index } = req.query;
-    const userId = req.dbUser!.id;
 
-    // 1. Verify user membership in the room for source protection
-    await watchPartyService.getRoom(code, userId);
-
-    if (!hash || !index) {
+    if (!hash || index === undefined) {
       return res.status(400).json({ error: 'Не указаны hash торрента или index файла' });
     }
 
     // SSRF and Path Traversal Hardening: Enforce strict format validation for info hash
-    const hashStr = String(hash);
+    const hashStr = String(hash).trim();
     if (!/^[0-9a-fA-F]{40}$/.test(hashStr) && !/^[2-7a-zA-Z]{32}$/.test(hashStr)) {
       return res.status(400).json({ error: 'Некорректный формат хэша торрента' });
     }
@@ -604,7 +600,92 @@ watchPartyRouter.get('/rooms/:code/torrent-stream', requireAuth, async (req: Aut
     pushStream();
   } catch (error: any) {
     if (error.name === 'AbortError') return;
-    console.error('[TORRENT-PROXY] Direct proxy error:', error.message);
+    console.error('[TORRENT-PROXY] Room stream proxy error:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Критическая ошибка трансляции видеопотока' });
+    }
+  }
+});
+
+/**
+ * 15. GET /api/watch-party/torrents/stream
+ * General streaming proxy by infoHash and index for TorrServer streams.
+ */
+watchPartyRouter.get('/torrents/stream', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { hash, index } = req.query;
+
+    if (!hash || index === undefined) {
+      return res.status(400).json({ error: 'Не указаны hash торрента или index файла' });
+    }
+
+    const hashStr = String(hash).trim();
+    if (!/^[0-9a-fA-F]{40}$/.test(hashStr) && !/^[2-7a-zA-Z]{32}$/.test(hashStr)) {
+      return res.status(400).json({ error: 'Некорректный формат хэша торрента' });
+    }
+
+    const fileIndex = Number(index);
+    if (isNaN(fileIndex) || fileIndex < 0 || fileIndex > 99999) {
+      return res.status(400).json({ error: 'Некорректный индекс файла' });
+    }
+
+    const torrServerUrl = torrServerClient.baseUrl;
+    const targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${fileIndex}&play=1`;
+
+    const controller = new AbortController();
+    req.on('close', () => {
+      controller.abort();
+    });
+
+    const headers: Record<string, string> = {};
+    if (req.headers.range) {
+      headers['Range'] = req.headers.range;
+    }
+
+    const torrRes = await fetch(targetStreamUrl, {
+      headers,
+      signal: controller.signal,
+    });
+
+    res.status(torrRes.status);
+
+    const forwardHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
+    forwardHeaders.forEach((h) => {
+      const val = torrRes.headers.get(h);
+      if (val) {
+        res.setHeader(h, val);
+      }
+    });
+
+    const contentType = torrRes.headers.get('content-type') || '';
+    if (contentType.includes('text/html') || contentType.includes('application/json')) {
+      return res.status(502).json({ error: 'Недопустимый медиа-формат от видео-сервера' });
+    }
+
+    if (!torrRes.body) {
+      return res.end();
+    }
+
+    const reader = torrRes.body.getReader();
+    const pushStream = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            res.end();
+            break;
+          }
+          res.write(value);
+        }
+      } catch (err) {
+        res.end();
+      }
+    };
+
+    pushStream();
+  } catch (error: any) {
+    if (error.name === 'AbortError') return;
+    console.error('[TORRENT-PROXY] Torrent stream proxy error:', error.message);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Критическая ошибка трансляции видеопотока' });
     }

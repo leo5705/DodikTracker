@@ -180,12 +180,20 @@ export const WatchSourcePicker: React.FC<WatchSourcePickerProps> = ({
       ? `magnet:?xt=urn:btih:${selectedCandidate.infoHash.toLowerCase()}&dn=${encodeURIComponent(selectedCandidate.name || mediaTitle)}`
       : selectedCandidate.magnetUri;
 
+    const fileIndex = typeof (selectedCandidate as any).selectedFile?.index === 'number'
+      ? (selectedCandidate as any).selectedFile.index
+      : 0;
+    const streamUrl = selectedCandidate.infoHash
+      ? `/api/watch-party/torrents/stream?hash=${selectedCandidate.infoHash}&index=${fileIndex}`
+      : undefined;
+
     const sourceConfig: MediaSourceConfig = {
       type: 'TORRENT',
-      url: `/api/watch-party/torrents/stream?hash=${selectedCandidate.infoHash || ''}`,
+      url: streamUrl,
       magnetUri: resolvedMagnet,
       fileName: (selectedCandidate as any).selectedFile?.name,
       infoHash: selectedCandidate.infoHash,
+      torrentFileIndex: fileIndex,
       title: selectedCandidate.name,
     };
 
@@ -217,9 +225,11 @@ export const WatchSourcePicker: React.FC<WatchSourcePickerProps> = ({
         episodeNumber: episodeNumber || undefined,
         source: {
           type: 'TORRENT',
+          url: streamUrl,
           magnetUri: resolvedMagnet,
           infoHash: selectedCandidate.infoHash,
           downloadUrl: selectedCandidate.downloadUrl,
+          torrentFileIndex: fileIndex,
           fileName: (selectedCandidate as any).selectedFile?.name,
           title: selectedCandidate.name,
         },
