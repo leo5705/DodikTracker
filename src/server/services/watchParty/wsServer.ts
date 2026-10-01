@@ -201,6 +201,10 @@ export class WatchPartyWebSocketServer {
         await this.handleHostSeek(ws, event.position);
         break;
 
+      case 'HOST_FORCE_SYNC':
+        await this.handleHostForceSync(ws, event.position, event.playbackState);
+        break;
+
       case 'HOST_CHANGE_SOURCE':
         await this.handleHostChangeSource(ws, event.source, event.mediaId, event.seasonNumber, event.episodeNumber);
         break;
@@ -440,6 +444,48 @@ export class WatchPartyWebSocketServer {
       });
     } catch (err: any) {
       this.sendError(ws, 'FORBIDDEN', err.message || 'Ошибка перемотки');
+    }
+  }
+
+  /**
+   * 5.5. HOST FORCE SYNC
+   * Forces all members in room to instantly align to host's position and playback state.
+   */
+  private async handleHostForceSync(
+    ws: AuthenticatedWebSocket,
+    position: number,
+    desiredState?: WatchPartyPlaybackState
+  ): Promise<void> {
+    const roomCode = ws.currentRoomCode;
+    if (!roomCode) {
+      this.sendError(ws, 'NOT_MEMBER', 'Вы не находитесь в комнате');
+      return;
+    }
+
+    const targetPosition = typeof position === 'number' && !isNaN(position) ? Math.max(0, position) : 0;
+
+    try {
+      const active = roomManager.getActiveRoom(roomCode);
+      const targetState: WatchPartyPlaybackState = desiredState || active?.playbackState || 'PLAYING';
+
+      const snapshot = await watchPartyService.setPlaybackState(
+        roomCode,
+        ws.userId!,
+        targetState,
+        targetPosition
+      );
+
+      this.broadcastToRoom(roomCode, {
+        type: 'PLAYBACK_UPDATE',
+        playbackState: snapshot.state,
+        authoritativePosition: snapshot.position,
+        duration: snapshot.duration,
+        serverTimestamp: snapshot.serverTimestamp,
+        triggeredByUserId: ws.userId!,
+        isForceSync: true,
+      });
+    } catch (err: any) {
+      this.sendError(ws, 'FORBIDDEN', err.message || 'Ошибка принудительной синхронизации');
     }
   }
 

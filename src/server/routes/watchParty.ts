@@ -519,16 +519,171 @@ watchPartyRouter.post('/rooms/:code/cancel-torrent', requireAuth, async (req: Au
  * 14. GET /api/watch-party/rooms/:code/torrent-stream
  * Secure, authenticated streaming proxy that forwards requests to internal TorrServer without credentials leakage.
  */
+/**
+ * Helper function to safely stream TorrServer video content with readiness polling and Range support
+ */
+async function proxyTorrServerStream(
+  req: AuthRequest,
+  res: Response,
+  hashStr: string,
+  requestedFileIndex: number
+): Promise<void> {
+  const torrServerUrl = torrServerClient.baseUrl;
+  let targetIndex = requestedFileIndex;
+  let targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${targetIndex}&play=1`;
+
+  const controller = new AbortController();
+  req.on('close', () => {
+    controller.abort();
+  });
+
+  const headers: Record<string, string> = {};
+  if (req.headers.range) {
+    headers['Range'] = req.headers.range;
+  }
+
+  let torrRes: globalThis.Response | null = null;
+  try {
+    torrRes = await fetch(targetStreamUrl, {
+      headers,
+      signal: controller.signal,
+    });
+  } catch (_e) {
+    torrRes = null;
+  }
+
+  const contentType = torrRes ? torrRes.headers.get('content-type') || '' : '';
+  const isMediaStream =
+    torrRes &&
+    (torrRes.status === 200 || torrRes.status === 206) &&
+    !contentType.includes('text/html') &&
+    !contentType.includes('application/json');
+
+  if (!isMediaStream) {
+    // Check if TorrServer is alive
+    const health = await torrServerClient.healthCheck();
+    if (!health.isAvailable) {
+      if (!res.headersSent) {
+        res.status(503).json({
+          error: 'Видео-сервер временно недоступен',
+          code: 'TORRSERVER_UNAVAILABLE',
+        });
+      }
+      return;
+    }
+
+    // Torrent may still be registering or fetching metadata from swarm
+    const readyResult = await torrServerClient.waitForTorrentReady(hashStr, undefined, {
+      timeoutMs: 10000,
+      pollIntervalMs: 350,
+    });
+
+    if (readyResult.ready) {
+      // If requested file index is not valid or was generic fallback 0, resolve to best video file index
+      if (readyResult.files && readyResult.files.length > 0) {
+        const hasRequested = readyResult.files.some((f) => f.index === requestedFileIndex && f.sizeBytes > 10 * 1024 * 1024);
+        if (!hasRequested && typeof readyResult.bestFileIndex === 'number') {
+          targetIndex = readyResult.bestFileIndex;
+        }
+      }
+
+      targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${targetIndex}&play=1`;
+
+      try {
+        torrRes = await fetch(targetStreamUrl, {
+          headers,
+          signal: controller.signal,
+        });
+      } catch (_e) {
+        torrRes = null;
+      }
+    } else {
+      if (!res.headersSent) {
+        res.status(503).setHeader('Retry-After', '2').json({
+          error: 'Торрент подготавливается к воспроизведению. Пожалуйста, подождите...',
+          code: 'TORRENT_NOT_READY',
+          retryAfter: 2,
+        });
+      }
+      return;
+    }
+  }
+
+  if (!torrRes || (!torrRes.ok && torrRes.status !== 206)) {
+    if (!res.headersSent) {
+      res.status(503).setHeader('Retry-After', '2').json({
+        error: 'Торрент подготавливается к воспроизведению. Пожалуйста, подождите...',
+        code: 'TORRENT_NOT_READY',
+        retryAfter: 2,
+      });
+    }
+    return;
+  }
+
+  const finalContentType = torrRes.headers.get('content-type') || '';
+  if (finalContentType.includes('text/html') || finalContentType.includes('application/json')) {
+    if (!res.headersSent) {
+      res.status(503).setHeader('Retry-After', '2').json({
+        error: 'Торрент подготавливается к воспроизведению. Пожалуйста, подождите...',
+        code: 'TORRENT_NOT_READY',
+        retryAfter: 2,
+      });
+    }
+    return;
+  }
+
+  res.status(torrRes.status);
+
+  const forwardHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
+  forwardHeaders.forEach((h) => {
+    const val = torrRes!.headers.get(h);
+    if (val) {
+      res.setHeader(h, val);
+    }
+  });
+
+  if (!torrRes.body) {
+    res.end();
+    return;
+  }
+
+  const reader = torrRes.body.getReader();
+  const pushStream = async () => {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (!res.writableEnded) res.end();
+          break;
+        }
+        const canWrite = res.write(value);
+        if (!canWrite) {
+          await new Promise((resolve) => res.once('drain', resolve));
+        }
+      }
+    } catch (_err) {
+      try {
+        await reader.cancel();
+      } catch (_c) {}
+      if (!res.writableEnded) res.end();
+    }
+  };
+
+  pushStream();
+}
+
+/**
+ * 14. GET /api/watch-party/rooms/:code/torrent-stream
+ * Secure, authenticated streaming proxy that forwards requests to internal TorrServer without credentials leakage.
+ */
 watchPartyRouter.get('/rooms/:code/torrent-stream', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { code } = req.params;
     const { hash, index } = req.query;
 
     if (!hash || index === undefined) {
       return res.status(400).json({ error: 'Не указаны hash торрента или index файла' });
     }
 
-    // SSRF and Path Traversal Hardening: Enforce strict format validation for info hash
     const hashStr = String(hash).trim();
     if (!/^[0-9a-fA-F]{40}$/.test(hashStr) && !/^[2-7a-zA-Z]{32}$/.test(hashStr)) {
       return res.status(400).json({ error: 'Некорректный формат хэша торрента' });
@@ -539,65 +694,7 @@ watchPartyRouter.get('/rooms/:code/torrent-stream', optionalAuth, async (req: Au
       return res.status(400).json({ error: 'Некорректный индекс файла' });
     }
 
-    // SSRF and Arbitrary Host Protection: Verify against configured internal TorrServer endpoint
-    const torrServerUrl = torrServerClient.baseUrl;
-    const targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${fileIndex}&play=1`;
-
-    const controller = new AbortController();
-    req.on('close', () => {
-      controller.abort();
-    });
-
-    const headers: Record<string, string> = {};
-    if (req.headers.range) {
-      headers['Range'] = req.headers.range;
-    }
-
-    const torrRes = await fetch(targetStreamUrl, {
-      headers,
-      signal: controller.signal,
-    });
-
-    // Copy exact content response status and header mappings
-    res.status(torrRes.status);
-
-    const forwardHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
-    forwardHeaders.forEach((h) => {
-      const val = torrRes.headers.get(h);
-      if (val) {
-        res.setHeader(h, val);
-      }
-    });
-
-    // SSRF Block: Ensure we don't return HTML/JSON or configuration secrets in place of video stream
-    const contentType = torrRes.headers.get('content-type') || '';
-    if (contentType.includes('text/html') || contentType.includes('application/json')) {
-      return res.status(502).json({ error: 'Недопустимый медиа-формат от видео-сервера' });
-    }
-
-    if (!torrRes.body) {
-      return res.end();
-    }
-
-    // Pipe response chunks safely
-    const reader = torrRes.body.getReader();
-    const pushStream = async () => {
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            res.end();
-            break;
-          }
-          res.write(value);
-        }
-      } catch (err) {
-        // Handle stream connection abort safely
-        res.end();
-      }
-    };
-
-    pushStream();
+    await proxyTorrServerStream(req, res, hashStr, fileIndex);
   } catch (error: any) {
     if (error.name === 'AbortError') return;
     console.error('[TORRENT-PROXY] Room stream proxy error:', error.message);
@@ -629,60 +726,7 @@ watchPartyRouter.get('/torrents/stream', optionalAuth, async (req: AuthRequest, 
       return res.status(400).json({ error: 'Некорректный индекс файла' });
     }
 
-    const torrServerUrl = torrServerClient.baseUrl;
-    const targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${fileIndex}&play=1`;
-
-    const controller = new AbortController();
-    req.on('close', () => {
-      controller.abort();
-    });
-
-    const headers: Record<string, string> = {};
-    if (req.headers.range) {
-      headers['Range'] = req.headers.range;
-    }
-
-    const torrRes = await fetch(targetStreamUrl, {
-      headers,
-      signal: controller.signal,
-    });
-
-    res.status(torrRes.status);
-
-    const forwardHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
-    forwardHeaders.forEach((h) => {
-      const val = torrRes.headers.get(h);
-      if (val) {
-        res.setHeader(h, val);
-      }
-    });
-
-    const contentType = torrRes.headers.get('content-type') || '';
-    if (contentType.includes('text/html') || contentType.includes('application/json')) {
-      return res.status(502).json({ error: 'Недопустимый медиа-формат от видео-сервера' });
-    }
-
-    if (!torrRes.body) {
-      return res.end();
-    }
-
-    const reader = torrRes.body.getReader();
-    const pushStream = async () => {
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            res.end();
-            break;
-          }
-          res.write(value);
-        }
-      } catch (err) {
-        res.end();
-      }
-    };
-
-    pushStream();
+    await proxyTorrServerStream(req, res, hashStr, fileIndex);
   } catch (error: any) {
     if (error.name === 'AbortError') return;
     console.error('[TORRENT-PROXY] Torrent stream proxy error:', error.message);

@@ -3,7 +3,7 @@ import { useWatchParty } from '../../context/WatchPartyContext.tsx';
 import { WatchPartyControls } from './WatchPartyControls.tsx';
 import { TorrentStatsOverlay } from './TorrentStatsOverlay.tsx';
 import { TorrentFilePickerModal } from '../modals/TorrentFilePickerModal.tsx';
-import { Loader2, AlertCircle, Film, Sparkles } from 'lucide-react';
+import { Loader2, AlertCircle, Film, Sparkles, RefreshCw } from 'lucide-react';
 import { MediaSourceFactory } from '../../services/mediaSources/MediaSourceFactory.ts';
 import { IMediaSourceAdapter } from '../../services/mediaSources/MediaSourceAdapter.ts';
 import {
@@ -24,6 +24,7 @@ export const WatchPartyPlayer: React.FC = () => {
     hostPlay,
     hostPause,
     hostSeek,
+    forceSyncAll,
     hostChangeSource,
     syncNotification,
   } = useWatchParty();
@@ -31,6 +32,12 @@ export const WatchPartyPlayer: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const adapterRef = useRef<IMediaSourceAdapter | null>(null);
+
+  // Synchronization and seek locking refs
+  const isSeekingRef = useRef<boolean>(false);
+  const isApplyingRemoteSyncRef = useRef<boolean>(false);
+  const wasPlayingBeforeSeekRef = useRef<boolean>(false);
+  const stallTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
@@ -57,6 +64,22 @@ export const WatchPartyPlayer: React.FC = () => {
   const isYouTube = parsedVideo?.site === 'YouTube' || sourceType === 'YOUTUBE';
   const isTorrent = sourceType === 'TORRENT';
 
+  // Compute stable video stream URL for HTML5 video element
+  const streamSrc = React.useMemo(() => {
+    if (isYouTube) return undefined;
+    if (isTorrent) {
+      if (sourceConfig.url && !sourceConfig.url.startsWith('magnet:?')) {
+        return sourceConfig.url;
+      }
+      if (sourceConfig.infoHash) {
+        const fileIdx = typeof sourceConfig.torrentFileIndex === 'number' ? sourceConfig.torrentFileIndex : 0;
+        return `/api/watch-party/torrents/stream?hash=${sourceConfig.infoHash}&index=${fileIdx}`;
+      }
+      return undefined;
+    }
+    return sourceUrl || undefined;
+  }, [isYouTube, isTorrent, sourceConfig.url, sourceConfig.infoHash, sourceConfig.torrentFileIndex, sourceUrl]);
+
   // 1. Calculate Authoritative Target Position in seconds
   const calculateTargetPosition = useCallback((): number => {
     if (!authoritativePlayback) return 0;
@@ -71,10 +94,10 @@ export const WatchPartyPlayer: React.FC = () => {
     return target;
   }, [authoritativePlayback, duration]);
 
-  // 2. Play / Pause Synchronization
+  // 2. Authoritative Play / Pause Synchronization
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || isYouTube) return;
+    if (!video || isYouTube || isSeekingRef.current) return;
 
     if (authoritativePlayback.state === 'PLAYING') {
       if (video.paused && !isBuffering && torrentState !== 'FETCHING_METADATA' && torrentState !== 'CONNECTING_PEERS') {
@@ -89,38 +112,44 @@ export const WatchPartyPlayer: React.FC = () => {
     }
   }, [authoritativePlayback.state, isYouTube, isBuffering, torrentState]);
 
-  // 3. Soft Drift Correction & Controlled Seek
+  // 3. Drift Correction & Controlled Seek
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || isYouTube || torrentState === 'FETCHING_METADATA') return;
+    if (!video || isYouTube || isSeekingRef.current || torrentState === 'FETCHING_METADATA') return;
 
     const targetPos = calculateTargetPosition();
     const currentLocal = video.currentTime;
     const drift = currentLocal - targetPos; // negative = lag, positive = ahead
 
-    // A. Severe Lag or State Reset (Controlled Seek)
-    if (Math.abs(drift) >= 4.0) {
+    // Severe Lag (> 2.5s) -> Hard Seek
+    if (Math.abs(drift) >= 2.5) {
+      isApplyingRemoteSyncRef.current = true;
       video.currentTime = Math.max(0, targetPos);
       video.playbackRate = 1.0;
+      setTimeout(() => {
+        isApplyingRemoteSyncRef.current = false;
+      }, 400);
     }
-    // B. Moderate Lag (Soft Acceleration)
-    else if (drift < -1.5 && drift >= -4.0) {
-      video.playbackRate = 1.06;
+    // Moderate Lag (0.8s - 2.5s) -> Soft acceleration
+    else if (drift < -0.8 && drift >= -2.5) {
+      video.playbackRate = 1.05;
     }
-    // C. Ahead of Host (Soft Deceleration)
-    else if (drift > 1.5) {
-      video.playbackRate = 0.94;
+    // Ahead of Host (0.8s - 2.5s) -> Soft deceleration
+    else if (drift > 0.8 && drift <= 2.5) {
+      video.playbackRate = 0.95;
     }
-    // D. In Sync
+    // In Sync (< 0.8s)
     else {
       video.playbackRate = 1.0;
     }
   }, [authoritativePlayback.position, authoritativePlayback.serverTimestamp, isYouTube, torrentState, calculateTargetPosition]);
 
-  // 4. MediaSourceAdapter Loader & Lifecycle
+  // 4. Stable MediaSourceAdapter Loader & Lifecycle
+  const stableSourceKey = `${sourceType}:${sourceConfig.infoHash || sourceConfig.url || sourceUrl}:${sourceConfig.torrentFileIndex ?? 0}`;
+
   const initMediaAdapter = useCallback(async () => {
     setVideoError(null);
-    if (!sourceUrl && !sourceConfig.magnetUri) {
+    if (!sourceUrl && !sourceConfig.magnetUri && !sourceConfig.infoHash) {
       setTorrentState('IDLE');
       return;
     }
@@ -132,9 +161,13 @@ export const WatchPartyPlayer: React.FC = () => {
         onFilesDiscovered: (files) => setDiscoveredFiles(files),
         onBuffering: (buffering) => {
           setIsBuffering(buffering);
-          sendProgress(currentTime, duration, buffering);
         },
-        onError: (err) => setVideoError(err),
+        onError: (err) => {
+          // If we have an active HTTP stream URL, don't immediately treat minor buffering/network hiccups as fatal
+          if (!streamSrc) {
+            setVideoError(err);
+          }
+        },
         onDurationChange: (dur) => setDuration(dur),
         onReady: (elem) => {
           if (elem) {
@@ -148,37 +181,35 @@ export const WatchPartyPlayer: React.FC = () => {
       });
 
       adapterRef.current = adapter;
-      await adapter.load(sourceConfig);
+      await adapter.load({
+        ...sourceConfig,
+        url: streamSrc || sourceConfig.url,
+      });
 
       if (videoRef.current && !isYouTube) {
         await adapter.attach(videoRef.current);
       }
     } catch (err: any) {
-      setVideoError(err?.message || 'Не удалось инициализировать источник медиа');
+      console.warn('[WatchPartyPlayer] Media adapter init error:', err);
+      if (!streamSrc) {
+        setVideoError(err?.message || 'Не удалось инициализировать источник медиа');
+      }
     }
-  }, [sourceType, sourceUrl, sourceConfig, isYouTube, calculateTargetPosition, authoritativePlayback.state, currentTime, duration, sendProgress]);
+  }, [sourceType, stableSourceKey, streamSrc, isYouTube, calculateTargetPosition, authoritativePlayback.state]);
 
   useEffect(() => {
     initMediaAdapter();
 
     return () => {
-      // Clean up adapter on source transition or component unmount
       MediaSourceFactory.destroyActiveAdapter();
       adapterRef.current = null;
     };
-  }, [
-    sourceType,
-    sourceConfig.url,
-    sourceConfig.magnetUri,
-    sourceConfig.fileName,
-    room?.seasonNumber,
-    room?.episodeNumber,
-  ]);
+  }, [stableSourceKey]);
 
   // 5. Local HTML5 Video Event Listeners
   const handleTimeUpdate = () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || isSeekingRef.current) return;
 
     const cur = video.currentTime;
     const dur = video.duration || duration || 0;
@@ -205,24 +236,79 @@ export const WatchPartyPlayer: React.FC = () => {
   const handleWaiting = () => {
     setIsBuffering(true);
     sendProgress(currentTime, duration, true);
+
+    // Set 12-second stall timer before reporting fatal error
+    if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
+    stallTimerRef.current = setTimeout(() => {
+      const video = videoRef.current;
+      if (video && video.readyState < 2) {
+        console.warn('[WatchPartyPlayer] Playback stalled prolonged');
+      }
+    }, 12000);
   };
 
   const handlePlaying = () => {
     setIsBuffering(false);
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+  };
+
+  const handleCanPlay = () => {
+    setIsBuffering(false);
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+  };
+
+  const handleSeeked = () => {
+    setIsBuffering(false);
+    isSeekingRef.current = false;
+    const video = videoRef.current;
+    if (video) {
+      setCurrentTime(video.currentTime);
+      if (wasPlayingBeforeSeekRef.current && video.paused && authoritativePlayback.state === 'PLAYING') {
+        video.play().catch(() => {});
+      }
+    }
   };
 
   const handleTogglePlay = () => {
     if (!isHost) return;
+    const video = videoRef.current;
+    const curPos = video?.currentTime ?? currentTime;
+
     if (authoritativePlayback.state === 'PLAYING') {
-      hostPause(currentTime);
+      hostPause(curPos);
     } else {
-      hostPlay(currentTime);
+      hostPlay(curPos);
     }
   };
 
+  // Dedicated Seek Handler
   const handleSeek = (seconds: number) => {
     if (!isHost) return;
+    const video = videoRef.current;
+    if (video) {
+      wasPlayingBeforeSeekRef.current = !video.paused;
+      isSeekingRef.current = true;
+      setIsBuffering(true);
+      video.currentTime = seconds;
+      setCurrentTime(seconds);
+    }
+
+    // Send single authoritative seek to room
     hostSeek(seconds);
+  };
+
+  // Dedicated Force Sync All Handler
+  const handleForceSyncAll = () => {
+    const video = videoRef.current;
+    const pos = video ? video.currentTime : currentTime;
+    const isPlaying = video ? !video.paused : authoritativePlayback.state === 'PLAYING';
+    forceSyncAll(pos, isPlaying ? 'PLAYING' : 'PAUSED');
   };
 
   const handleVolumeChange = (vol: number) => {
@@ -269,7 +355,7 @@ export const WatchPartyPlayer: React.FC = () => {
     );
   };
 
-  // Keyboard shortcut listener (Space for Play/Pause)
+  // Keyboard shortcut listener (Space, ArrowLeft, ArrowRight, M, F)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
@@ -277,12 +363,24 @@ export const WatchPartyPlayer: React.FC = () => {
       if (e.code === 'Space') {
         e.preventDefault();
         if (isHost) handleTogglePlay();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        if (isHost) handleSeek(Math.max(0, currentTime - 5));
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        if (isHost) handleSeek(Math.min(duration, currentTime + 5));
+      } else if (e.key === 'm' || e.key === 'M' || e.key === 'ь' || e.key === 'Ь') {
+        e.preventDefault();
+        handleToggleMute();
+      } else if (e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А') {
+        e.preventDefault();
+        handleToggleFullscreen();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isHost, authoritativePlayback.state, currentTime]);
+  }, [isHost, authoritativePlayback.state, currentTime, duration, isMuted]);
 
   return (
     <div ref={containerRef} className="flex flex-col space-y-3 relative group">
@@ -297,18 +395,21 @@ export const WatchPartyPlayer: React.FC = () => {
             allowFullScreen
             className="w-full h-full border-0"
           />
-        ) : sourceUrl || isTorrent ? (
+        ) : streamSrc || isTorrent ? (
           <video
             ref={videoRef}
-            src={isTorrent ? undefined : sourceUrl}
+            src={streamSrc}
             poster={room?.mediaMetadata?.posterUrl || undefined}
             playsInline
             onTimeUpdate={handleTimeUpdate}
             onLoadedMetadata={handleLoadedMetadata}
             onWaiting={handleWaiting}
             onPlaying={handlePlaying}
+            onCanPlay={handleCanPlay}
+            onSeeked={handleSeeked}
             onError={() => {
-              if (!isTorrent) setVideoError('Не удалось загрузить видеопоток');
+              // Non-blocking: only show error if no stream src or fatal
+              if (!streamSrc) setVideoError('Не удалось загрузить видеопоток');
             }}
             className="w-full h-full object-contain cursor-pointer"
             onClick={isHost ? handleTogglePlay : undefined}
@@ -326,7 +427,17 @@ export const WatchPartyPlayer: React.FC = () => {
           </div>
         )}
 
-        {/* Torrent Live Overlay / Loading Banner */}
+        {/* Generic Buffering Spinner Overlay during seek / buffering */}
+        {isBuffering && (
+          <div className="absolute inset-0 bg-[#080A18]/50 backdrop-blur-xs flex items-center justify-center pointer-events-none z-20 animate-fade-in">
+            <div className="p-4 rounded-2xl bg-[#0B0D20]/90 border border-[#1E2442] flex items-center gap-3 shadow-xl">
+              <Loader2 className="w-5 h-5 animate-spin text-[#8B5CF6]" />
+              <span className="text-xs font-semibold text-[#F8FAFC]">Буферизация...</span>
+            </div>
+          </div>
+        )}
+
+        {/* Torrent Live Overlay / File Picker banner */}
         {isTorrent && (
           <TorrentStatsOverlay
             state={torrentState}
@@ -339,40 +450,9 @@ export const WatchPartyPlayer: React.FC = () => {
             availableFilesCount={discoveredFiles.filter((f) => f.isVideo).length}
           />
         )}
-
-        {/* Generic Buffering Spinner Overlay for Direct streams */}
-        {!isTorrent && isBuffering && (
-          <div className="absolute inset-0 bg-[#080A18]/60 backdrop-blur-xs flex items-center justify-center pointer-events-none z-20 animate-fade-in">
-            <div className="p-4 rounded-2xl bg-[#0B0D20]/90 border border-[#1E2442] flex items-center gap-3 shadow-xl">
-              <Loader2 className="w-5 h-5 animate-spin text-[#8B5CF6]" />
-              <span className="text-xs font-semibold text-[#F8FAFC]">Буферизация...</span>
-            </div>
-          </div>
-        )}
-
-        {/* Sync Toast Notification Overlay */}
-        {syncNotification && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 animate-fade-in pointer-events-none">
-            <div className="px-4 py-2 rounded-xl bg-[#8B5CF6] text-white text-xs font-bold shadow-2xl flex items-center gap-2">
-              <Sparkles className="w-4 h-4" />
-              <span>{syncNotification}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Generic Video Error Overlay for Non-Torrent */}
-        {!isTorrent && videoError && (
-          <div className="absolute inset-0 bg-[#080A18]/85 flex items-center justify-center p-6 text-center z-20">
-            <div className="max-w-md p-6 rounded-3xl bg-[#11152A] border border-rose-500/40 text-rose-300 space-y-2">
-              <AlertCircle className="w-8 h-8 text-rose-400 mx-auto" />
-              <h3 className="text-sm font-bold text-white">Ошибка воспроизведения</h3>
-              <p className="text-xs text-[#94A3B8]">{videoError}</p>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Synchronized Player Controls */}
+      {/* Media Player Controls */}
       <WatchPartyControls
         currentTime={currentTime}
         duration={duration}
@@ -384,9 +464,10 @@ export const WatchPartyPlayer: React.FC = () => {
         onVolumeChange={handleVolumeChange}
         onToggleMute={handleToggleMute}
         onToggleFullscreen={handleToggleFullscreen}
+        onForceSyncAll={handleForceSyncAll}
       />
 
-      {/* Torrent File Picker Modal */}
+      {/* Multi-file selector modal */}
       {showFilePicker && (
         <TorrentFilePickerModal
           isOpen={showFilePicker}

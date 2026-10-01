@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Play,
   Pause,
@@ -10,8 +10,8 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
-  Sparkles,
   Check,
+  Users,
 } from 'lucide-react';
 import { useWatchParty } from '../../context/WatchPartyContext.tsx';
 
@@ -26,9 +26,10 @@ interface WatchPartyControlsProps {
   onVolumeChange: (vol: number) => void;
   onToggleMute: () => void;
   onToggleFullscreen: () => void;
+  onForceSyncAll?: () => void;
 }
 
-function formatSecondsToTime(seconds: number): string {
+export function formatSecondsToTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '00:00';
   const totalSec = Math.floor(seconds);
   const hrs = Math.floor(totalSec / 3600);
@@ -52,19 +53,90 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
   onVolumeChange,
   onToggleMute,
   onToggleFullscreen,
+  onForceSyncAll,
 }) => {
-  const { isHost, authoritativePlayback, requestSync } = useWatchParty();
+  const { isHost, authoritativePlayback, requestSync, forceSyncAll } = useWatchParty();
   const [syncFeedback, setSyncFeedback] = useState(false);
+  const [forceSyncFeedback, setForceSyncFeedback] = useState(false);
+
+  // Timeline dragging & hover state
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragTime, setDragTime] = useState(0);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const [hoverX, setHoverX] = useState<number>(0);
+
+  const trackRef = useRef<HTMLDivElement | null>(null);
 
   const isPlaying = authoritativePlayback.state === 'PLAYING';
-  const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const displayTime = isDragging ? dragTime : currentTime;
+  const progressPercent = duration > 0 ? Math.min(100, Math.max(0, (displayTime / duration) * 100)) : 0;
+  const hoverPercent = duration > 0 && hoverTime !== null ? Math.min(100, Math.max(0, (hoverTime / duration) * 100)) : null;
 
-  const handleTimelineChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isHost) return;
-    const val = parseFloat(e.target.value);
-    onSeek(val);
+  // Calculate time from pointer event
+  const getTimeFromPointer = useCallback(
+    (e: React.PointerEvent | PointerEvent): number => {
+      const track = trackRef.current;
+      if (!track || duration <= 0) return 0;
+      const rect = track.getBoundingClientRect();
+      const clientX = e.clientX;
+      const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+      const fraction = offsetX / rect.width;
+      return Math.max(0, Math.min(duration, fraction * duration));
+    },
+    [duration]
+  );
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isHost && !onForceSyncAll) return;
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+
+    const targetTime = getTimeFromPointer(e);
+    setIsDragging(true);
+    setDragTime(targetTime);
   };
 
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const track = trackRef.current;
+    if (track && duration > 0) {
+      const rect = track.getBoundingClientRect();
+      const offsetX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      setHoverX(offsetX);
+      setHoverTime((offsetX / rect.width) * duration);
+    }
+
+    if (isDragging) {
+      const targetTime = getTimeFromPointer(e);
+      setDragTime(targetTime);
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDragging) {
+      const targetTime = getTimeFromPointer(e);
+      setIsDragging(false);
+      onSeek(targetTime);
+    }
+  };
+
+  const handlePointerLeave = () => {
+    if (!isDragging) {
+      setHoverTime(null);
+    }
+  };
+
+  // Force Sync All handler (HOST)
+  const handleForceSyncAll = () => {
+    if (onForceSyncAll) {
+      onForceSyncAll();
+    } else {
+      forceSyncAll(currentTime, isPlaying ? 'PLAYING' : 'PAUSED');
+    }
+    setForceSyncFeedback(true);
+    setTimeout(() => setForceSyncFeedback(false), 2000);
+  };
+
+  // Member Sync handler
   const handleManualSync = () => {
     requestSync();
     setSyncFeedback(true);
@@ -72,44 +144,67 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
   };
 
   return (
-    <div className="p-4 rounded-2xl bg-[#080A18]/90 border border-[#1E2442] space-y-3 shadow-lg">
-      {/* 1. Timeline Progress Bar */}
-      <div className="space-y-1">
-        <div className="relative flex items-center group">
-          {/* Custom Track Background */}
-          <div className="w-full h-1.5 rounded-full bg-[#151932] overflow-hidden relative">
+    <div className="p-4 rounded-2xl bg-[#080A18]/90 border border-[#1E2442] space-y-3 shadow-lg select-none">
+      {/* 1. Interactive Timeline Progress Bar */}
+      <div className="space-y-1.5">
+        <div
+          ref={trackRef}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerLeave={handlePointerLeave}
+          className={`relative h-6 flex items-center group touch-none ${
+            isHost ? 'cursor-pointer' : 'cursor-default'
+          }`}
+        >
+          {/* Track Bar Background */}
+          <div className="w-full h-1.5 group-hover:h-2.5 rounded-full bg-[#151932] overflow-hidden relative transition-all duration-150">
+            {/* Hover preview marker */}
+            {hoverPercent !== null && isHost && (
+              <div
+                className="absolute inset-y-0 left-0 bg-white/20 rounded-full"
+                style={{ width: `${hoverPercent}%` }}
+              />
+            )}
+
+            {/* Active playback progress */}
             <div
               className="h-full bg-gradient-to-r from-[#7C3AED] to-[#6366F1] rounded-full transition-all duration-75"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
 
-          {/* Interactive Range Input (Interactive for HOST only) */}
-          <input
-            type="range"
-            min={0}
-            max={duration > 0 ? duration : 100}
-            step={0.5}
-            value={currentTime}
-            onChange={handleTimelineChange}
-            disabled={!isHost}
-            className={`absolute inset-0 w-full h-full opacity-0 ${
-              isHost ? 'cursor-pointer' : 'cursor-default'
-            }`}
-            title={isHost ? 'Перемотка (HOST)' : 'Таймлайн синхронизируется с хостом'}
-          />
+          {/* Scrubber Thumb (HOST only) */}
+          {isHost && (
+            <div
+              className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white shadow-md border border-[#8B5CF6] transition-transform pointer-events-none ${
+                isDragging ? 'scale-125' : 'group-hover:scale-110 opacity-0 group-hover:opacity-100'
+              }`}
+              style={{ left: `${progressPercent}%` }}
+            />
+          )}
+
+          {/* Hover Time Tooltip */}
+          {hoverTime !== null && isHost && (
+            <div
+              className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 rounded-lg bg-[#0F132A] border border-[#1E2442] text-[10px] font-mono text-white shadow-lg pointer-events-none z-30"
+              style={{ left: `${hoverX}px` }}
+            >
+              {formatSecondsToTime(hoverTime)}
+            </div>
+          )}
         </div>
 
-        {/* Time display: 00:15:30 / 01:45:00 */}
+        {/* Time Labels: 00:15:30 / 01:45:00 */}
         <div className="flex items-center justify-between text-[11px] font-mono text-[#94A3B8] px-0.5">
-          <span>{formatSecondsToTime(currentTime)}</span>
+          <span>{formatSecondsToTime(displayTime)}</span>
           <span>{formatSecondsToTime(duration)}</span>
         </div>
       </div>
 
       {/* 2. Controls Toolbar */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        {/* Left: Play/Pause, Skips, or Sync Button */}
+        {/* Left: Play/Pause, Skips, Sync Buttons */}
         <div className="flex items-center gap-2">
           {isHost ? (
             <>
@@ -118,7 +213,7 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
                 type="button"
                 onClick={() => onSeek(Math.max(0, currentTime - 10))}
                 className="p-2 rounded-xl bg-[#11152A] hover:bg-[#151932] text-[#CBD5E1] hover:text-white transition-colors cursor-pointer"
-                title="Назад на 10 секунд"
+                title="Назад на 10 секунд (←)"
                 aria-label="Назад на 10 секунд"
               >
                 <RotateCcw className="w-4 h-4" />
@@ -140,14 +235,38 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
                 type="button"
                 onClick={() => onSeek(Math.min(duration, currentTime + 10))}
                 className="p-2 rounded-xl bg-[#11152A] hover:bg-[#151932] text-[#CBD5E1] hover:text-white transition-colors cursor-pointer"
-                title="Вперёд на 10 секунд"
+                title="Вперёд на 10 секунд (→)"
                 aria-label="Вперёд на 10 секунд"
               >
                 <RotateCw className="w-4 h-4" />
               </button>
+
+              {/* HOST: Sync All Button */}
+              <button
+                type="button"
+                onClick={handleForceSyncAll}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ml-1 ${
+                  forceSyncFeedback
+                    ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-400'
+                    : 'bg-[#11152A] hover:bg-[#1A203E] border border-[#1E2442] hover:border-[#8B5CF6]/50 text-[#CBD5E1] hover:text-white'
+                }`}
+                title="Принудительно синхронизировать всех участников на текущую позицию"
+              >
+                {forceSyncFeedback ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="hidden sm:inline">Синхронизировано у всех!</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-[#A78BFA]" />
+                    <span className="hidden sm:inline">Синхронизировать всех</span>
+                  </>
+                )}
+              </button>
             </>
           ) : (
-            /* MEMBER View: Sync button & host control notice */
+            /* MEMBER View: Sync button */
             <div className="flex items-center gap-2.5">
               <button
                 type="button"
@@ -172,7 +291,7 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
                   </>
                 )}
               </button>
-              
+
               <span className="hidden sm:inline text-xs text-[#94A3B8] font-medium">
                 👥 Воспроизведением управляет ведущий
               </span>
@@ -180,7 +299,7 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
           )}
         </div>
 
-        {/* Right: Volume, Fullscreen, Settings */}
+        {/* Right: Volume & Fullscreen */}
         <div className="flex items-center gap-3">
           {/* Volume Control */}
           <div className="flex items-center gap-2">
@@ -188,7 +307,7 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
               type="button"
               onClick={onToggleMute}
               className="p-2 rounded-xl bg-[#11152A] hover:bg-[#151932] text-[#CBD5E1] hover:text-white transition-colors cursor-pointer"
-              title={isMuted ? 'Включить звук' : 'Выключить звук'}
+              title={isMuted ? 'Включить звук (M)' : 'Выключить звук (M)'}
               aria-label="Громкость"
             >
               {isMuted || volume === 0 ? (
@@ -217,7 +336,7 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
             type="button"
             onClick={onToggleFullscreen}
             className="p-2 rounded-xl bg-[#11152A] hover:bg-[#151932] text-[#CBD5E1] hover:text-white transition-colors cursor-pointer"
-            title={isFullscreen ? 'Выйти из полноэкранного режима (Esc)' : 'На весь экран'}
+            title={isFullscreen ? 'Выйти из полноэкранного режима (F)' : 'На весь экран (F)'}
             aria-label="Полноэкранный режим"
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}

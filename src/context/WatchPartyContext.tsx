@@ -53,6 +53,7 @@ interface WatchPartyContextType {
   hostPlay: (position?: number) => void;
   hostPause: (position?: number) => void;
   hostSeek: (position: number) => void;
+  forceSyncAll: (position?: number, state?: WatchPartyPlaybackState) => void;
   hostChangeSource: (source: MediaSourceConfig, mediaId?: number, seasonNumber?: number, episodeNumber?: number) => void;
   hostTriggerAutoTorrent: () => Promise<void>;
   hostCancelAutoTorrent: () => Promise<void>;
@@ -409,6 +410,15 @@ export const WatchPartyProvider: React.FC<{ children: ReactNode }> = ({ children
     [sendWsEvent]
   );
 
+  const forceSyncAll = useCallback(
+    (position?: number, state?: WatchPartyPlaybackState) => {
+      const pos = typeof position === 'number' && !isNaN(position) ? position : authoritativePlayback.position;
+      const st = state || authoritativePlayback.state;
+      sendWsEvent({ type: 'HOST_FORCE_SYNC', position: pos, playbackState: st });
+    },
+    [sendWsEvent, authoritativePlayback.position, authoritativePlayback.state]
+  );
+
   const hostChangeSource = useCallback(
     (source: MediaSourceConfig, mediaId?: number, seasonNumber?: number, episodeNumber?: number) => {
       sendWsEvent({ type: 'HOST_CHANGE_SOURCE', source, mediaId, seasonNumber, episodeNumber });
@@ -541,6 +551,7 @@ export const WatchPartyProvider: React.FC<{ children: ReactNode }> = ({ children
         hostPlay,
         hostPause,
         hostSeek,
+        forceSyncAll,
         hostChangeSource,
         hostTriggerAutoTorrent,
         hostCancelAutoTorrent,

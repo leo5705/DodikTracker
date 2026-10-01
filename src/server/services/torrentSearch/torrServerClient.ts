@@ -1,10 +1,19 @@
 /**
  * TorrServerClient: Interacts with TorrServer Matrix REST API.
- * Provides health checks, torrent adding, status polling, and stream URL generation.
+ * Provides health checks, torrent adding, status polling, stream URL generation, and metadata readiness polling.
  */
 
 import { TorrServerStatus, TorrServerStreamInfo } from './torrentSearchTypes.ts';
 import { selectBestVideoFile, FileSelectionOptions, TorrentFileItem } from './torrentFileSelector.ts';
+
+export interface TorrServerReadyResult {
+  ready: boolean;
+  status: 'READY' | 'METADATA_LOADING' | 'PENDING' | 'NOT_FOUND' | 'ERROR';
+  files?: TorrentFileItem[];
+  bestFileIndex?: number;
+  bestFileName?: string;
+  error?: string;
+}
 
 export class TorrServerClient {
   private cachedResolvedUrl: string | null = null;
@@ -92,6 +101,71 @@ export class TorrServerClient {
     } catch (err: any) {
       return { success: false, error: err?.message || 'Ошибка добавления торрента в TorrServer' };
     }
+  }
+
+  /**
+   * Waits for a torrent to finish loading metadata and have streamable video files.
+   * Polls with short intervals (300-400ms) up to timeoutMs without blocking room creation.
+   */
+  public async waitForTorrentReady(
+    infoHash: string,
+    magnetUri?: string,
+    options: { timeoutMs?: number; pollIntervalMs?: number; fileSelectionOptions?: FileSelectionOptions } = {}
+  ): Promise<TorrServerReadyResult> {
+    const timeoutMs = options.timeoutMs ?? 12000;
+    const pollIntervalMs = options.pollIntervalMs ?? 350;
+    const startTime = Date.now();
+    const hashStr = infoHash.toLowerCase().trim();
+
+    let registrationAttempted = false;
+
+    while (Date.now() - startTime < timeoutMs) {
+      try {
+        const payload = { action: 'get', hash: hashStr };
+        const res = await fetch(`${this.baseUrl}/torrents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const rawFiles = data.file_stats || data.files || [];
+
+          if (Array.isArray(rawFiles) && rawFiles.length > 0) {
+            const mappedFiles: TorrentFileItem[] = rawFiles.map((f: any, idx: number) => ({
+              index: typeof f.id === 'number' ? f.id : idx,
+              name: f.path || f.name || `file_${idx}`,
+              path: f.path || f.name || `file_${idx}`,
+              sizeBytes: f.length || f.size || 0,
+            }));
+
+            const selection = selectBestVideoFile(mappedFiles, options.fileSelectionOptions);
+            return {
+              ready: true,
+              status: 'READY',
+              files: mappedFiles,
+              bestFileIndex: selection.selectedIndex,
+              bestFileName: selection.selectedFile?.name,
+            };
+          }
+          // If in db but files not yet populated, keep polling
+        } else if (res.status === 404 && !registrationAttempted && magnetUri) {
+          registrationAttempted = true;
+          await this.addTorrent(magnetUri).catch(() => {});
+        }
+      } catch (_err) {
+        // Continue polling
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    return {
+      ready: false,
+      status: 'METADATA_LOADING',
+      error: 'Торрент подготавливается к воспроизведению. Пожалуйста, подождите...',
+    };
   }
 
   /**

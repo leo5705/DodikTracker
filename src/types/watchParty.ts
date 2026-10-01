@@ -210,6 +210,12 @@ export interface C2S_HostSeekEvent {
   position: number;
 }
 
+export interface C2S_HostForceSyncEvent {
+  type: 'HOST_FORCE_SYNC';
+  position: number;
+  playbackState?: WatchPartyPlaybackState;
+}
+
 export interface C2S_HostChangeSourceEvent {
   type: 'HOST_CHANGE_SOURCE';
   source: MediaSourceConfig;
@@ -257,6 +263,7 @@ export type ClientToServerEvent =
   | C2S_HostPlayEvent
   | C2S_HostPauseEvent
   | C2S_HostSeekEvent
+  | C2S_HostForceSyncEvent
   | C2S_HostChangeSourceEvent
   | C2S_HostTransferEvent
   | C2S_HostKickEvent
@@ -281,6 +288,7 @@ export interface S2C_PlaybackUpdateEvent {
   duration: number;
   serverTimestamp: number;
   triggeredByUserId: number;
+  isForceSync?: boolean;
 }
 
 export interface S2C_MemberJoinedEvent {
