@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
+import { useToast } from '../../context/NotificationContext.tsx';
 import { WatchPartyPrivacy, WatchPartySourceType, TorrentMediaFile } from '../../types/watchParty.ts';
 import { validateAndParseMagnet } from '../../utils/magnetValidator.ts';
 import { MediaSourceFactory } from '../../services/mediaSources/MediaSourceFactory.ts';
@@ -48,13 +49,16 @@ export const CreateWatchPartyModal: React.FC<CreateWatchPartyModalProps> = ({
 }) => {
   const { authFetch } = useAuth();
   const { navigate } = useRouter();
+  const { showToast } = useToast();
 
   const [title, setTitle] = useState(
     mediaTitle ? `Просмотр «${mediaTitle}»` : 'Комната совместного просмотра'
   );
   const [privacy, setPrivacy] = useState<WatchPartyPrivacy>('PUBLIC');
   const [passcode, setPasscode] = useState('');
-  const [sourceType, setSourceType] = useState<WatchPartySourceType>('DIRECT');
+  const [sourceType, setSourceType] = useState<WatchPartySourceType>(
+    mediaId ? 'TORRENT' : 'DIRECT'
+  );
   const [sourceUrl, setSourceUrl] = useState('');
   const [magnetUri, setMagnetUri] = useState('');
   const [selectedFileName, setSelectedFileName] = useState<string>('');
@@ -84,8 +88,11 @@ export const CreateWatchPartyModal: React.FC<CreateWatchPartyModalProps> = ({
     try {
       await navigator.clipboard.writeText(createdRoomCode);
       setCopiedCode(true);
+      showToast(`Код комнаты ${createdRoomCode} скопирован!`, 'success');
       setTimeout(() => setCopiedCode(false), 2000);
-    } catch (_e) {}
+    } catch (_e) {
+      showToast('Не удалось скопировать код', 'error');
+    }
   };
 
   const handleCopyLink = async () => {
@@ -94,8 +101,11 @@ export const CreateWatchPartyModal: React.FC<CreateWatchPartyModalProps> = ({
       const shareUrl = `${window.location.protocol}//${window.location.host}/watch/${createdRoomCode}`;
       await navigator.clipboard.writeText(shareUrl);
       setCopiedLink(true);
+      showToast('Ссылка приглашения скопирована в буфер обмена!', 'success');
       setTimeout(() => setCopiedLink(false), 2000);
-    } catch (_e) {}
+    } catch (_e) {
+      showToast('Не удалось скопировать ссылку', 'error');
+    }
   };
 
   const handleOpenCreatedRoom = () => {
@@ -154,13 +164,16 @@ export const CreateWatchPartyModal: React.FC<CreateWatchPartyModalProps> = ({
 
     if (sourceType === 'TORRENT') {
       if (!magnetUri.trim()) {
-        setError('Укажите magnet-ссылку торрента');
-        return;
-      }
-      const val = validateAndParseMagnet(magnetUri.trim());
-      if (!val.isValid) {
-        setError(val.error || 'Некорректная magnet-ссылка');
-        return;
+        if (!mediaId) {
+          setError('Укажите magnet-ссылку торрента');
+          return;
+        }
+      } else {
+        const val = validateAndParseMagnet(magnetUri.trim());
+        if (!val.isValid) {
+          setError(val.error || 'Некорректная magnet-ссылка');
+          return;
+        }
       }
     }
 
@@ -460,21 +473,50 @@ export const CreateWatchPartyModal: React.FC<CreateWatchPartyModalProps> = ({
             ) : (
               /* Torrent Magnet Input & Inspection */
               <div className="space-y-2.5 animate-fadeIn">
-                <div className="space-y-1">
-                  <input
-                    type="text"
-                    value={magnetUri}
-                    onChange={(e) => {
-                      setMagnetUri(e.target.value);
-                      setInspectError(null);
-                    }}
-                    placeholder="magnet:?xt=urn:btih:..."
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#080A18] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] font-mono transition-colors"
-                  />
-                  <p className="text-[11px] text-[#64748B]">
-                    Вставьте magnet-ссылку с WebRTC трекерами для P2P-стриминга в браузере.
-                  </p>
-                </div>
+                {mediaId ? (
+                  <div className="space-y-2">
+                    <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center gap-2.5">
+                      <Sparkles className="w-4 h-4 shrink-0 text-emerald-400" />
+                      <span>
+                        Dodik Tracker автоматически подберёт лучший проверенный источник с высокой скоростью загрузки.
+                      </span>
+                    </div>
+
+                    <details className="group text-left">
+                      <summary className="text-[11px] font-semibold text-[#8B5CF6] hover:text-[#A78BFA] cursor-pointer select-none">
+                        Указать свой источник вручную (необязательно)
+                      </summary>
+                      <div className="mt-2 space-y-2 pt-1">
+                        <input
+                          type="text"
+                          value={magnetUri}
+                          onChange={(e) => {
+                            setMagnetUri(e.target.value);
+                            setInspectError(null);
+                          }}
+                          placeholder="magnet:?xt=urn:btih:..."
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#080A18] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] font-mono transition-colors"
+                        />
+                      </div>
+                    </details>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <input
+                      type="text"
+                      value={magnetUri}
+                      onChange={(e) => {
+                        setMagnetUri(e.target.value);
+                        setInspectError(null);
+                      }}
+                      placeholder="magnet:?xt=urn:btih:..."
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#080A18] border border-[#1E2442] text-xs text-[#F8FAFC] placeholder-[#64748B] focus:outline-none focus:border-[#8B5CF6] font-mono transition-colors"
+                    />
+                    <p className="text-[11px] text-[#64748B]">
+                      Вставьте magnet-ссылку для P2P-стриминга в браузере.
+                    </p>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-2">
                   <button

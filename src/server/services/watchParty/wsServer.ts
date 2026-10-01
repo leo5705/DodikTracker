@@ -10,6 +10,7 @@ import { JWT_SECRET } from '../../../middleware/auth.ts';
 import { db } from '../../../db/index.ts';
 import { users } from '../../../db/schema.ts';
 import { eq } from 'drizzle-orm';
+import { adminAuth } from '../../../lib/firebase-admin.ts';
 import {
   ClientToServerEvent,
   ServerToClientEvent,
@@ -85,18 +86,43 @@ export class WatchPartyWebSocketServer {
 
       if (!token) return null;
 
-      const payload = jwt.verify(token, JWT_SECRET) as any;
-      if (!payload || !payload.userId) return null;
+      // 1. Try Custom JWT Token first
+      try {
+        const payload = jwt.verify(token, JWT_SECRET) as any;
+        if (payload && payload.userId) {
+          const [user] = await db
+            .select({ id: users.id, username: users.username, avatar: users.avatar, isBlocked: users.isBlocked })
+            .from(users)
+            .where(eq(users.id, payload.userId))
+            .limit(1);
 
-      const [user] = await db
-        .select({ id: users.id, username: users.username, avatar: users.avatar, isBlocked: users.isBlocked })
-        .from(users)
-        .where(eq(users.id, payload.userId))
-        .limit(1);
+          if (user && !user.isBlocked) {
+            return { id: user.id, username: user.username, avatar: user.avatar };
+          }
+        }
+      } catch (_jwtErr) {
+        // Fall back to Firebase verification
+      }
 
-      if (!user || user.isBlocked) return null;
+      // 2. Try Firebase ID token verification
+      try {
+        const decodedToken = await adminAuth.verifyIdToken(token);
+        if (decodedToken && decodedToken.uid) {
+          const [user] = await db
+            .select({ id: users.id, username: users.username, avatar: users.avatar, isBlocked: users.isBlocked })
+            .from(users)
+            .where(eq(users.uid, decodedToken.uid))
+            .limit(1);
 
-      return { id: user.id, username: user.username, avatar: user.avatar };
+          if (user && !user.isBlocked) {
+            return { id: user.id, username: user.username, avatar: user.avatar };
+          }
+        }
+      } catch (_fbErr) {
+        // Both verification attempts failed
+      }
+
+      return null;
     } catch (_err) {
       return null;
     }
@@ -576,6 +602,20 @@ export class WatchPartyWebSocketServer {
       buffering: Boolean(event.buffering),
       clientTimestamp: event.clientTimestamp || now,
     });
+
+    // Update live torrent session playback/buffering state if the host reports progress in a TORRENT room
+    const active = roomManager.getActiveRoom(roomCode);
+    const isHost = active && active.hostUserId === ws.userId;
+    if (isHost && active.source?.type === 'TORRENT') {
+      import('../torrentSearch/torrentSessionManager.ts').then(({ torrentSessionManager }) => {
+        const targetState = event.buffering
+          ? 'BUFFERING'
+          : active.playbackState === 'PLAYING'
+          ? 'PLAYING'
+          : 'READY';
+        torrentSessionManager.updatePlaybackState(roomCode, targetState);
+      }).catch(() => {});
+    }
   }
 
   /**

@@ -337,6 +337,36 @@ export interface S2C_ErrorEvent {
   message: string;
 }
 
+export type TorrentSourceState =
+  | 'DISCOVERING'
+  | 'FOUND'
+  | 'LOADING'
+  | 'READY'
+  | 'PLAYING'
+  | 'BUFFERING'
+  | 'FAILED'
+  | 'STOPPING'
+  | 'STOPPED';
+
+export interface S2C_TorrentStateUpdateEvent {
+  type: 'TORRENT_STATE_UPDATE';
+  roomCode: string;
+  state: TorrentSourceState;
+  infoHash?: string;
+  selectedFile?: { index: number; name: string; path: string; sizeBytes?: number };
+  errorCode?: string;
+  errorMessage?: string;
+  fallbackCount?: number;
+  retryCount?: number;
+}
+
+export interface S2C_TorrentSourceReadyEvent {
+  type: 'TORRENT_SOURCE_READY';
+  roomCode: string;
+  sourceType: 'TORRENT';
+  state: 'READY';
+}
+
 export type ServerToClientEvent =
   | S2C_RoomStateEvent
   | S2C_PlaybackUpdateEvent
@@ -348,4 +378,34 @@ export type ServerToClientEvent =
   | S2C_ChatMessageEvent
   | S2C_KickedEvent
   | S2C_RoomClosedEvent
-  | S2C_ErrorEvent;
+  | S2C_ErrorEvent
+  | S2C_TorrentStateUpdateEvent
+  | S2C_TorrentSourceReadyEvent;
+
+export interface TorrentQualityInfo {
+  resolution: '2160p' | '1080p' | '720p' | '480p' | 'unknown';
+  source?: string;
+  codec?: string;
+  audioCodec?: string;
+  isHDR?: boolean;
+  is10Bit?: boolean;
+}
+
+export interface TorrentCandidate {
+  id: string;
+  name: string;
+  infoHash?: string;
+  magnetUri?: string;
+  sizeBytes?: number;
+  formattedSize?: string;
+  seeders: number;
+  leechers: number;
+  indexer?: string;
+  publishDate?: string;
+  category?: string;
+  downloadUrl?: string;
+  quality: TorrentQualityInfo;
+  languages?: string[];
+  score: number;
+}
+

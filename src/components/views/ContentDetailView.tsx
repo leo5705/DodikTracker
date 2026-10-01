@@ -40,10 +40,11 @@ import { ContentReviewsSection } from '../content/ContentReviewsSection.tsx';
 import { ContentSimilar } from '../content/ContentSimilar.tsx';
 import { ContentRatingModal } from '../content/ContentRatingModal.tsx';
 import { ContentReviewModal } from '../content/ContentReviewModal.tsx';
-import { CreateWatchPartyModal } from '../modals/CreateWatchPartyModal.tsx';
 import { AddToListModal } from '../modals/AddToListModal.tsx';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
 import { AdultContentWarning } from '../common/AdultContentWarning.tsx';
+import { CreateWatchPartyModal } from '../modals/CreateWatchPartyModal.tsx';
+import { WatchSourcePicker } from '../watch-party/WatchSourcePicker.tsx';
 
 type DetailTab = 'OVERVIEW' | 'INFO' | 'CAST_CREW' | 'PLOT' | 'REVIEWS' | 'RELATED';
 
@@ -78,9 +79,6 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [showAddToList, setShowAddToList] = useState(false);
-  const [showWatchPartyModal, setShowWatchPartyModal] = useState(false);
-  const [watchPartySeason, setWatchPartySeason] = useState<number | undefined>(undefined);
-  const [watchPartyEpisode, setWatchPartyEpisode] = useState<number | undefined>(undefined);
 
   // Watched episodes set
   const [watchedEpisodes, setWatchedEpisodes] = useState<Set<string>>(new Set());
@@ -88,6 +86,38 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
   // 18+ adult content state
   const [isAdultRestricted, setIsAdultRestricted] = useState(false);
   const [adultConfirmed, setAdultConfirmed] = useState(false);
+
+  // Watch Party Modal state (Direct creation modal)
+  const [showCreateWatchParty, setShowCreateWatchParty] = useState(false);
+  const [watchPartySeason, setWatchPartySeason] = useState<number | undefined>(undefined);
+  const [watchPartyEpisode, setWatchPartyEpisode] = useState<number | undefined>(undefined);
+
+  // Watch Source Picker Modal state (Production auto-discovery & source selection)
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const [sourcePickerMode, setSourcePickerMode] = useState<'watch' | 'watch-party'>('watch');
+  const [pickerSeason, setPickerSeason] = useState<number | undefined>(undefined);
+  const [pickerEpisode, setPickerEpisode] = useState<number | undefined>(undefined);
+
+  const handleOpenWatchSolo = () => {
+    setPickerSeason(undefined);
+    setPickerEpisode(undefined);
+    setSourcePickerMode('watch');
+    setShowSourcePicker(true);
+  };
+
+  const handleOpenWatchPartyMain = (seasonNum?: number, episodeNum?: number) => {
+    setPickerSeason(seasonNum);
+    setPickerEpisode(episodeNum);
+    setSourcePickerMode('watch-party');
+    setShowSourcePicker(true);
+  };
+
+  const handleOpenWatchSoloEpisode = (seasonNum: number, episodeNum: number) => {
+    setPickerSeason(seasonNum);
+    setPickerEpisode(episodeNum);
+    setSourcePickerMode('watch');
+    setShowSourcePicker(true);
+  };
 
   const fetchMedia = async () => {
     setLoading(true);
@@ -603,7 +633,6 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
           setShowReviewModal(true);
         }}
         onOpenListModal={() => setShowAddToList(true)}
-        onOpenWatchPartyModal={() => setShowWatchPartyModal(true)}
         onOpenShareModal={() =>
           openShareModal(
             {
@@ -616,6 +645,8 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
             contentItem.userTracking?.status === 'COMPLETED'
           )
         }
+        onOpenWatchModal={handleOpenWatchSolo}
+        onOpenWatchPartyModal={() => handleOpenWatchPartyMain()}
       />
 
       {/* 2. Navigation Tabs Under Hero */}
@@ -665,12 +696,9 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
               <ContentSeasonsEpisodes
                 seasons={contentItem.seasons}
                 onToggleEpisodeWatched={handleToggleEpisodeWatched}
-                onStartWatchParty={(sNum, epNum) => {
-                  setWatchPartySeason(sNum);
-                  setWatchPartyEpisode(epNum);
-                  setShowWatchPartyModal(true);
-                }}
                 watchedEpisodes={watchedEpisodes}
+                onWatchEpisode={handleOpenWatchSoloEpisode}
+                onWatchPartyEpisode={(sNum, epNum) => handleOpenWatchPartyMain(sNum, epNum)}
               />
             )}
 
@@ -835,24 +863,6 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
         />
       )}
 
-      {/* Create Watch Party Modal */}
-      {showWatchPartyModal && (
-        <CreateWatchPartyModal
-          isOpen={showWatchPartyModal}
-          onClose={() => {
-            setShowWatchPartyModal(false);
-            setWatchPartySeason(undefined);
-            setWatchPartyEpisode(undefined);
-          }}
-          mediaId={Number(contentItem.id || mediaId)}
-          mediaTitle={contentItem.title}
-          mediaType={contentItem.type}
-          posterUrl={contentItem.posterUrl}
-          seasonNumber={watchPartySeason}
-          episodeNumber={watchPartyEpisode}
-        />
-      )}
-
       {/* Delete Review Confirm Modal */}
       {reviewToDelete !== null && (
         <ConfirmModal
@@ -864,6 +874,37 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
           variant="danger"
           onConfirm={handleDeleteReview}
           onCancel={() => setReviewToDelete(null)}
+        />
+      )}
+
+      {/* Create Watch Party Modal */}
+      {showCreateWatchParty && (
+        <CreateWatchPartyModal
+          isOpen={showCreateWatchParty}
+          onClose={() => setShowCreateWatchParty(false)}
+          mediaId={Number(contentItem.id || mediaId)}
+          mediaTitle={contentItem.title}
+          mediaType={contentItem.type}
+          posterUrl={contentItem.posterUrl}
+          seasonNumber={watchPartySeason}
+          episodeNumber={watchPartyEpisode}
+        />
+      )}
+
+      {/* Production Watch Source Picker Modal */}
+      {showSourcePicker && contentItem && (
+        <WatchSourcePicker
+          isOpen={showSourcePicker}
+          onClose={() => setShowSourcePicker(false)}
+          mediaId={Number(contentItem.id || mediaId)}
+          mediaTitle={contentItem.title}
+          mediaOriginalTitle={contentItem.originalTitle}
+          mediaYear={contentItem.year}
+          mediaType={contentItem.type}
+          posterUrl={contentItem.posterUrl}
+          seasonNumber={pickerSeason}
+          episodeNumber={pickerEpisode}
+          mode={sourcePickerMode}
         />
       )}
     </div>

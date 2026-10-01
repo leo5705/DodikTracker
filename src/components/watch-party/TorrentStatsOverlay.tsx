@@ -50,7 +50,7 @@ export const TorrentStatsOverlay: React.FC<TorrentStatsOverlayProps> = ({
     state === 'CONNECTING_PEERS' ||
     (state === 'BUFFERING' && (!stats || stats.downloaded === 0));
 
-  if (state === 'ERROR') {
+  if (state === 'ERROR' || errorMessage) {
     return (
       <div className="absolute inset-0 bg-[#080A18]/90 backdrop-blur-xs flex items-center justify-center p-6 text-center z-30 animate-fadeIn">
         <div className="max-w-md w-full p-6 rounded-3xl bg-[#0B0D20] border border-rose-500/40 text-white space-y-4 shadow-2xl">
@@ -58,16 +58,20 @@ export const TorrentStatsOverlay: React.FC<TorrentStatsOverlayProps> = ({
             <AlertCircle className="w-6 h-6" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-sm font-bold text-white">Ошибка торрент-потока</h3>
-            <p className="text-xs text-[#94A3B8]">{errorMessage || 'Не удалось загрузить торрент'}</p>
+            <h3 className="text-sm font-bold text-white">
+              {isHost ? 'Источник временно недоступен' : 'Ведущий пытается восстановить источник…'}
+            </h3>
+            <p className="text-xs text-[#94A3B8]">
+              {isHost ? 'Пытаемся восстановить воспроизведение…' : 'Пожалуйста, подождите, пока вещание восстановится.'}
+            </p>
           </div>
-          {onRetry && (
+          {onRetry && isHost && (
             <button
               onClick={onRetry}
-              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] text-white text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-2 mx-auto cursor-pointer"
+              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-2 mx-auto cursor-pointer"
             >
               <RefreshCw className="w-4 h-4" />
-              <span>Повторить подключение</span>
+              <span>Попробовать восстановить</span>
             </button>
           )}
         </div>
@@ -120,7 +124,7 @@ export const TorrentStatsOverlay: React.FC<TorrentStatsOverlayProps> = ({
 
   // 2. Compact Bottom Bar Overlay during Active Playback
   return (
-    <div className="p-2.5 rounded-2xl bg-[#080A18]/90 border border-[#1E2442] flex flex-wrap items-center justify-between gap-2.5 text-xs text-[#94A3B8]">
+    <div className="absolute bottom-4 left-4 right-4 z-20 p-2.5 rounded-2xl bg-[#080A18]/90 backdrop-blur-md border border-[#1E2442] flex flex-wrap items-center justify-between gap-2.5 text-xs text-[#94A3B8] shadow-2xl transition-all">
       {/* Left: Active File Info + Multi-file badge */}
       <div className="flex items-center gap-2 min-w-0">
         <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />

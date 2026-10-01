@@ -1,19 +1,21 @@
 import React, { useState } from 'react';
-import { Tv, Calendar, Clock, CheckCircle2, Play, ChevronDown } from 'lucide-react';
+import { Tv, Calendar, Clock, CheckCircle2, Play, ChevronDown, Users } from 'lucide-react';
 import { ContentSeason, ContentSeasonEpisode } from '../../types/content.ts';
 
 interface ContentSeasonsEpisodesProps {
   seasons: ContentSeason[];
   onToggleEpisodeWatched?: (seasonNumber: number, episodeNumber: number, watched: boolean) => void;
-  onStartWatchParty?: (seasonNumber: number, episodeNumber: number) => void;
   watchedEpisodes?: Set<string>; // key: `${seasonNumber}-${episodeNumber}`
+  onWatchEpisode?: (seasonNumber: number, episodeNumber: number) => void;
+  onWatchPartyEpisode?: (seasonNumber: number, episodeNumber: number) => void;
 }
 
 export const ContentSeasonsEpisodes: React.FC<ContentSeasonsEpisodesProps> = ({
   seasons,
   onToggleEpisodeWatched,
-  onStartWatchParty,
   watchedEpisodes = new Set(),
+  onWatchEpisode,
+  onWatchPartyEpisode,
 }) => {
   const [selectedSeasonIdx, setSelectedSeasonIdx] = useState(0);
 
@@ -106,15 +108,25 @@ export const ContentSeasonsEpisodes: React.FC<ContentSeasonsEpisodesProps> = ({
                       {ep.title || `Серия ${ep.episodeNumber}`}
                     </h4>
 
-                    <div className="flex items-center gap-2">
-                      {onStartWatchParty && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {onWatchEpisode && (
                         <button
-                          onClick={() => onStartWatchParty(currentSeason.seasonNumber, ep.episodeNumber)}
-                          className="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-800/40 text-purple-300 transition-all cursor-pointer"
-                          title="Смотреть вместе эту серию"
+                          onClick={() => onWatchEpisode(currentSeason.seasonNumber, ep.episodeNumber)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-bold bg-[#8B5CF6] hover:bg-[#7C3AED] text-white flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
-                          <Play className="w-3 h-3 fill-purple-300 text-purple-300" />
+                          <Play className="w-3.5 h-3.5 fill-white text-white" />
                           <span>Смотреть</span>
+                        </button>
+                      )}
+
+                      {onWatchPartyEpisode && (
+                        <button
+                          onClick={() => onWatchPartyEpisode(currentSeason.seasonNumber, ep.episodeNumber)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-600/80 hover:bg-emerald-600 text-white flex items-center gap-1.5 transition-colors cursor-pointer"
+                          title="Смотреть вместе с друзьями"
+                        >
+                          <Users className="w-3.5 h-3.5 text-white" />
+                          <span>Вместе</span>
                         </button>
                       )}
 
@@ -127,7 +139,7 @@ export const ContentSeasonsEpisodes: React.FC<ContentSeasonsEpisodesProps> = ({
                               !isWatched
                             )
                           }
-                          className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all ${
                             isWatched
                               ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
                               : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'

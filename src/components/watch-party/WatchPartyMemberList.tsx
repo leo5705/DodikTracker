@@ -1,15 +1,31 @@
 import React, { useState } from 'react';
-import { Users, Search, Sparkles } from 'lucide-react';
+import { Users, Search, Sparkles, Copy, Check } from 'lucide-react';
 import { useWatchParty } from '../../context/WatchPartyContext.tsx';
+import { useToast } from '../../context/NotificationContext.tsx';
 import { WatchPartyMemberRow } from './WatchPartyMemberRow.tsx';
 
 export const WatchPartyMemberList: React.FC = () => {
-  const { members } = useWatchParty();
+  const { members, room } = useWatchParty();
+  const { showToast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const filteredMembers = members.filter((m) =>
     m.username.toLowerCase().includes(searchQuery.toLowerCase().trim())
   );
+
+  const handleCopyLink = async () => {
+    if (!room?.code) return;
+    try {
+      const shareUrl = `${window.location.protocol}//${window.location.host}/watch/${room.code}`;
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      showToast('Ссылка приглашения скопирована!', 'success');
+      setTimeout(() => setCopied(false), 2000);
+    } catch (_e) {
+      showToast('Не удалось скопировать ссылку', 'error');
+    }
+  };
 
   return (
     <div className="flex flex-col h-full space-y-3">
@@ -41,9 +57,24 @@ export const WatchPartyMemberList: React.FC = () => {
       {/* List */}
       <div className="space-y-2 overflow-y-auto max-h-[380px] custom-scrollbar pr-1">
         {filteredMembers.length > 0 ? (
-          filteredMembers.map((member) => (
-            <WatchPartyMemberRow key={member.userId} member={member} />
-          ))
+          <>
+            {filteredMembers.map((member) => (
+              <WatchPartyMemberRow key={member.userId} member={member} />
+            ))}
+            {members.length <= 1 && !searchQuery && (
+              <div className="pt-4 pb-2 text-center space-y-2.5">
+                <p className="text-xs text-[#94A3B8]">Пока в комнате только вы</p>
+                <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  className="px-3.5 py-1.5 rounded-xl bg-[#8B5CF6]/20 hover:bg-[#8B5CF6]/30 border border-[#8B5CF6]/40 text-[#A78BFA] hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? '✓ Скопировано' : 'Пригласить друзей'}</span>
+                </button>
+              </div>
+            )}
+          </>
         ) : (
           <div className="py-8 text-center text-xs text-[#64748B]">
             {searchQuery ? 'Участники не найдены' : 'В комнате пока нет других участников'}

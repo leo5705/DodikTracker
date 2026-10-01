@@ -39,17 +39,15 @@
     "test:lyrics": "tsx src/server/tests/lyricsParserTests.ts && tsx src/server/tests/liveLyricsLogicTests.ts",
     "test:step22": "tsx src/server/tests/step22GeniusAndMusicLayoutTests.ts",
     "test:playlist-keys": "tsx src/server/tests/playlistIdentityKeysTests.ts",
-    "test:watchparty": "tsx src/server/tests/watchPartyLifecycleTests.ts && tsx src/server/tests/watchPartyWsTests.ts && tsx src/server/tests/watchPartyTorrentTests.ts && tsx src/server/tests/watchPartyStage6Tests.ts",
-    "test:watchparty:ws": "tsx src/server/tests/watchPartyWsTests.ts",
-    "test:watchparty:torrent": "tsx src/server/tests/watchPartyTorrentTests.ts",
-    "test:safety": "tsx src/scripts/testUpdateSafety.ts"
+    "test:safety": "tsx src/scripts/testUpdateSafety.ts",
+    "test:hardening": "tsx src/server/tests/torrentSessionHardeningTests.ts",
+    "test:watchparty-e2e": "tsx src/server/tests/watchPartyStage10_2Tests.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/cookie-parser": "^1.4.10",
     "@types/pg": "^8.23.1",
-    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.3",
     "canvas-confetti": "^1.9.4",
@@ -84,6 +82,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@types/webtorrent": "^3.0.0",
+    "@types/ws": "^8.18.2",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",

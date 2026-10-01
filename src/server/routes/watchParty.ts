@@ -9,6 +9,10 @@ import { watchPartyService } from '../services/watchParty/watchPartyService.ts';
 import rateLimit from 'express-rate-limit';
 
 import { torrentSearchService } from '../services/torrentSearch/torrentSearchService.ts';
+import { torrentSessionManager } from '../services/torrentSearch/torrentSessionManager.ts';
+import { torrentCache } from '../services/torrentSearch/torrentCache.ts';
+import { torrServerClient } from '../services/torrentSearch/torrServerClient.ts';
+import { watchPartyWsServer } from '../services/watchParty/wsServer.ts';
 
 export const watchPartyRouter = Router();
 
@@ -46,11 +50,16 @@ watchPartyRouter.post('/rooms', requireAuth, createRoomLimiter, async (req: Auth
       sourceType,
       sourceUrl,
       sourceConfig,
+      source,
       mediaMetadata,
       privacy,
       passcode,
       initialDuration,
     } = req.body;
+
+    const resolvedSourceConfig = sourceConfig || source || undefined;
+    const resolvedSourceType = sourceType || resolvedSourceConfig?.type || (mediaId ? 'TORRENT' : 'DIRECT');
+    const resolvedSourceUrl = sourceUrl || resolvedSourceConfig?.url || resolvedSourceConfig?.magnetUri || null;
 
     const room = await watchPartyService.createRoom(userId, {
       title,
@@ -58,16 +67,20 @@ watchPartyRouter.post('/rooms', requireAuth, createRoomLimiter, async (req: Auth
       mediaType,
       seasonNumber: seasonNumber !== undefined && seasonNumber !== null ? Number(seasonNumber) : null,
       episodeNumber: episodeNumber !== undefined && episodeNumber !== null ? Number(episodeNumber) : null,
-      sourceType,
-      sourceUrl,
-      sourceConfig,
+      sourceType: resolvedSourceType,
+      sourceUrl: resolvedSourceUrl,
+      sourceConfig: resolvedSourceConfig,
       mediaMetadata,
       privacy,
       passcode,
       initialDuration: initialDuration ? Number(initialDuration) : undefined,
     });
 
-    return res.status(201).json(room);
+    return res.status(201).json({
+      ...room,
+      room,
+      code: room.code,
+    });
   } catch (error: any) {
     const status = error.message.includes('обязательн') || error.message.includes('минимум') ? 422 : 400;
     return res.status(status).json({ error: error.message || 'Ошибка создания комнаты' });
@@ -214,6 +227,48 @@ watchPartyRouter.delete('/rooms/:code', requireAuth, async (req: AuthRequest, re
 });
 
 /**
+ * 8.5. PATCH /api/watch-party/rooms/:code/source
+ * Updates room media source (HOST only).
+ */
+watchPartyRouter.patch('/rooms/:code/source', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const code = req.params.code;
+    const hostUserId = req.dbUser!.id;
+    const { source, mediaId, seasonNumber, episodeNumber } = req.body || {};
+
+    if (!source || !source.type) {
+      return res.status(400).json({ error: 'Не указана конфигурация источника' });
+    }
+
+    const updatedRoom = await watchPartyService.changeSource(
+      code,
+      hostUserId,
+      source,
+      mediaId !== undefined ? mediaId : null,
+      seasonNumber !== undefined ? seasonNumber : null,
+      episodeNumber !== undefined ? episodeNumber : null
+    );
+
+    // Broadcast SOURCE_CHANGED via wsServer
+    watchPartyWsServer.broadcastToRoom(code, {
+      type: 'SOURCE_CHANGED',
+      source,
+      mediaId: mediaId ?? updatedRoom.mediaId,
+      seasonNumber: seasonNumber ?? updatedRoom.seasonNumber,
+      episodeNumber: episodeNumber ?? updatedRoom.episodeNumber,
+      updatedByUserId: hostUserId,
+    });
+
+    return res.json({ success: true, room: updatedRoom });
+  } catch (error: any) {
+    let status = 400;
+    if (error.message.includes('не найдена')) status = 404;
+    else if (error.message.includes('Только HOST')) status = 403;
+    return res.status(status).json({ error: error.message || 'Ошибка обновления источника' });
+  }
+});
+
+/**
  * 9. GET /api/watch-party/rooms/:code/messages
  * Retrieves paginated room chat history.
  */
@@ -233,44 +288,153 @@ watchPartyRouter.get('/rooms/:code/messages', requireAuth, async (req: AuthReque
 });
 
 /**
+ * 9.5. GET /api/watch-party/availability/:mediaId
+ * Lightweight cached check for movie/episode playback availability.
+ */
+watchPartyRouter.get('/availability/:mediaId', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const mediaId = Number(req.params.mediaId);
+    if (!mediaId || isNaN(mediaId)) {
+      return res.status(400).json({ error: 'Некорректный mediaId' });
+    }
+
+    const seasonNum = req.query.season !== undefined ? Number(req.query.season) : req.query.seasonNumber !== undefined ? Number(req.query.seasonNumber) : undefined;
+    const episodeNum = req.query.episode !== undefined ? Number(req.query.episode) : req.query.episodeNumber !== undefined ? Number(req.query.episodeNumber) : undefined;
+    const forceCheck = req.query.check === 'true' || req.query.refresh === 'true';
+
+    // 1. Normalize query
+    const query = await torrentSearchService.normalizeQueryFromMediaId(mediaId, seasonNum, episodeNum);
+    if (!query) {
+      return res.json({
+        available: false,
+        status: 'WATCH_UNAVAILABLE',
+        totalSources: 0,
+        mediaId,
+        seasonNumber: seasonNum,
+        episodeNumber: episodeNum,
+      });
+    }
+
+    // 2. Check cache first to avoid indexer spam
+    let searchResult = torrentCache.get(query);
+    let wasCached = true;
+
+    if (!searchResult && forceCheck) {
+      searchResult = await torrentSearchService.search(query);
+      wasCached = false;
+    }
+
+    if (!searchResult) {
+      return res.json({
+        available: null,
+        status: 'WATCH_CHECKING',
+        totalSources: 0,
+        mediaId,
+        seasonNumber: seasonNum,
+        episodeNumber: episodeNum,
+        cached: false,
+      });
+    }
+
+    const hasPlayable = searchResult.candidates && searchResult.candidates.length > 0;
+    return res.json({
+      available: hasPlayable,
+      status: hasPlayable ? 'WATCH_AVAILABLE' : 'WATCH_UNAVAILABLE',
+      totalSources: searchResult.candidates?.length || 0,
+      bestQuality: searchResult.bestCandidate?.quality?.resolution || null,
+      mediaId,
+      seasonNumber: seasonNum,
+      episodeNumber: episodeNum,
+      cached: wasCached,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Ошибка проверки доступности' });
+  }
+});
+
+/**
  * 10. POST /api/watch-party/torrents/discover
  * Automatically discovers ranked torrent candidates for a media item.
  */
 watchPartyRouter.post('/torrents/discover', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { mediaId, title, originalTitle, year, seasonNumber, episodeNumber, mediaType } = req.body || {};
+    const { mediaId, title, originalTitle, year, seasonNumber, episodeNumber, mediaType, verify } = req.body || {};
+    const shouldVerify = verify === true || req.query.verify === 'true';
+
+    console.log('[WatchSources] discovery requested');
+    console.log(`[WatchSources] mediaId=${mediaId ?? 'none'}, mediaType=${mediaType ?? 'none'}, season=${seasonNumber ?? 'none'}, episode=${episodeNumber ?? 'none'}`);
+
+    let result: any = null;
 
     if (mediaId && !isNaN(Number(mediaId))) {
-      const result = await torrentSearchService.searchByMediaId(
+      result = await torrentSearchService.searchByMediaId(
         Number(mediaId),
         seasonNumber !== undefined ? Number(seasonNumber) : undefined,
-        episodeNumber !== undefined ? Number(episodeNumber) : undefined
+        episodeNumber !== undefined ? Number(episodeNumber) : undefined,
+        shouldVerify
       );
-      return res.json(result);
+
+      // If database lookup failed to find metadata, but client supplied title, fallback to searching by title
+      if ((result.status === 'INVALID_MEDIA_METADATA' || result.status === 'METADATA_INCOMPLETE') && title && String(title).trim()) {
+        console.log(`[WatchSources] Falling back to search by title: "${title}"`);
+        result = await torrentSearchService.search(
+          {
+            title: String(title).trim(),
+            originalTitle: originalTitle ? String(originalTitle).trim() : undefined,
+            mediaType: mediaType || 'movie',
+            year: year ? Number(year) : undefined,
+            seasonNumber: seasonNumber !== undefined ? Number(seasonNumber) : undefined,
+            episodeNumber: episodeNumber !== undefined ? Number(episodeNumber) : undefined,
+          },
+          shouldVerify
+        );
+      }
+    } else if (title && String(title).trim()) {
+      result = await torrentSearchService.search(
+        {
+          title: String(title).trim(),
+          originalTitle: originalTitle ? String(originalTitle).trim() : undefined,
+          mediaType: mediaType || 'movie',
+          year: year ? Number(year) : undefined,
+          seasonNumber: seasonNumber !== undefined ? Number(seasonNumber) : undefined,
+          episodeNumber: episodeNumber !== undefined ? Number(episodeNumber) : undefined,
+        },
+        shouldVerify
+      );
+    } else {
+      return res.status(422).json({
+        available: false,
+        status: 'INVALID_MEDIA_METADATA',
+        reason: 'INVALID_MEDIA_METADATA',
+        error: 'Не указан mediaId или название произведения',
+        candidates: [],
+        totalFound: 0,
+      });
     }
 
-    if (!title || !String(title).trim()) {
-      return res.status(422).json({ error: 'Не указан mediaId или название произведения' });
-    }
-
-    const result = await torrentSearchService.search({
-      title: String(title).trim(),
-      originalTitle: originalTitle ? String(originalTitle).trim() : undefined,
-      mediaType: mediaType || 'movie',
-      year: year ? Number(year) : undefined,
-      seasonNumber: seasonNumber !== undefined ? Number(seasonNumber) : undefined,
-      episodeNumber: episodeNumber !== undefined ? Number(episodeNumber) : undefined,
+    const candList = result.candidates || [];
+    return res.json({
+      ...result,
+      available: candList.length > 0,
+      reason: result.reason || result.status || (candList.length > 0 ? 'SUCCESS' : 'NO_RESULTS'),
+      candidates: candList,
     });
-
-    return res.json(result);
   } catch (error: any) {
-    return res.status(500).json({ error: error.message || 'Ошибка автоматического поиска торрентов' });
+    console.error('[WatchSources] Discovery route error:', error?.message || error);
+    return res.status(500).json({
+      available: false,
+      status: 'ERROR',
+      reason: 'ERROR',
+      error: error.message || 'Ошибка автоматического поиска торрентов',
+      candidates: [],
+      totalFound: 0,
+    });
   }
 });
 
 /**
  * 11. POST /api/watch-party/rooms/:code/auto-torrent
- * HOST triggers auto-discovery and applies the best candidate torrent source.
+ * HOST triggers async auto-discovery and applies the best candidate torrent source.
  */
 watchPartyRouter.post('/rooms/:code/auto-torrent', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -286,28 +450,9 @@ watchPartyRouter.post('/rooms/:code/auto-torrent', requireAuth, async (req: Auth
       return res.status(400).json({ error: 'К этой комнате не привязано медиапроизведение для автопоиска' });
     }
 
-    const discoveryResult = await torrentSearchService.searchByMediaId(
-      room.mediaId,
-      room.seasonNumber || undefined,
-      room.episodeNumber || undefined
-    );
-
-    if (!discoveryResult.bestCandidate || !discoveryResult.bestCandidate.magnetUri) {
-      return res.status(404).json({
-        error: 'Не удалось автоматически подобрать торрент-источник с активными раздачами',
-        discoveryResult,
-      });
-    }
-
-    const best = discoveryResult.bestCandidate;
-    const updatedRoom = await watchPartyService.changeSource(
+    const triggerResult = await torrentSessionManager.triggerAutoTorrent(
       code,
       hostUserId,
-      {
-        type: 'TORRENT',
-        magnetUri: best.magnetUri,
-        title: best.name,
-      },
       room.mediaId,
       room.seasonNumber,
       room.episodeNumber
@@ -315,10 +460,153 @@ watchPartyRouter.post('/rooms/:code/auto-torrent', requireAuth, async (req: Auth
 
     return res.json({
       success: true,
-      selectedCandidate: best,
-      room: updatedRoom,
+      message: triggerResult.isNew ? 'Поиск торрент-источника запущен в фоновом режиме' : 'Поиск торрент-источника уже выполняется',
+      session: triggerResult.session,
     });
   } catch (error: any) {
     return res.status(400).json({ error: error.message || 'Ошибка автонастройки торрента' });
+  }
+});
+
+/**
+ * 12. GET /api/watch-party/rooms/:code/torrent-state
+ * Retrieves the current in-memory torrent discovery & preparation session.
+ */
+watchPartyRouter.get('/rooms/:code/torrent-state', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const code = req.params.code;
+    const userId = req.dbUser!.id;
+
+    // Verify membership / existence of the room
+    await watchPartyService.getRoom(code, userId);
+
+    const session = torrentSessionManager.getSession(code);
+    return res.json({
+      success: true,
+      session: session || null,
+    });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message || 'Ошибка получения состояния торрента' });
+  }
+});
+
+/**
+ * 13. POST /api/watch-party/rooms/:code/cancel-torrent
+ * HOST stops / cancels any active torrent discovery session.
+ */
+watchPartyRouter.post('/rooms/:code/cancel-torrent', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const code = req.params.code;
+    const hostUserId = req.dbUser!.id;
+
+    const room = await watchPartyService.getRoom(code, hostUserId);
+    if (room.hostUserId !== hostUserId) {
+      return res.status(403).json({ error: 'Только HOST комнаты может остановить поиск торрента' });
+    }
+
+    await torrentSessionManager.cancelSession(code);
+
+    return res.json({
+      success: true,
+      message: 'Сессия поиска торрента успешно остановлена',
+    });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message || 'Ошибка остановки поиска торрента' });
+  }
+});
+
+/**
+ * 14. GET /api/watch-party/rooms/:code/torrent-stream
+ * Secure, authenticated streaming proxy that forwards requests to internal TorrServer without credentials leakage.
+ */
+watchPartyRouter.get('/rooms/:code/torrent-stream', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { code } = req.params;
+    const { hash, index } = req.query;
+    const userId = req.dbUser!.id;
+
+    // 1. Verify user membership in the room for source protection
+    await watchPartyService.getRoom(code, userId);
+
+    if (!hash || !index) {
+      return res.status(400).json({ error: 'Не указаны hash торрента или index файла' });
+    }
+
+    // SSRF and Path Traversal Hardening: Enforce strict format validation for info hash
+    const hashStr = String(hash);
+    if (!/^[0-9a-fA-F]{40}$/.test(hashStr) && !/^[2-7a-zA-Z]{32}$/.test(hashStr)) {
+      return res.status(400).json({ error: 'Некорректный формат хэша торрента' });
+    }
+
+    const fileIndex = Number(index);
+    if (isNaN(fileIndex) || fileIndex < 0 || fileIndex > 99999) {
+      return res.status(400).json({ error: 'Некорректный индекс файла' });
+    }
+
+    // SSRF and Arbitrary Host Protection: Verify against configured internal TorrServer endpoint
+    const torrServerUrl = torrServerClient.baseUrl;
+    const targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${fileIndex}&play=1`;
+
+    const controller = new AbortController();
+    req.on('close', () => {
+      controller.abort();
+    });
+
+    const headers: Record<string, string> = {};
+    if (req.headers.range) {
+      headers['Range'] = req.headers.range;
+    }
+
+    const torrRes = await fetch(targetStreamUrl, {
+      headers,
+      signal: controller.signal,
+    });
+
+    // Copy exact content response status and header mappings
+    res.status(torrRes.status);
+
+    const forwardHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
+    forwardHeaders.forEach((h) => {
+      const val = torrRes.headers.get(h);
+      if (val) {
+        res.setHeader(h, val);
+      }
+    });
+
+    // SSRF Block: Ensure we don't return HTML/JSON or configuration secrets in place of video stream
+    const contentType = torrRes.headers.get('content-type') || '';
+    if (contentType.includes('text/html') || contentType.includes('application/json')) {
+      return res.status(502).json({ error: 'Недопустимый медиа-формат от видео-сервера' });
+    }
+
+    if (!torrRes.body) {
+      return res.end();
+    }
+
+    // Pipe response chunks safely
+    const reader = torrRes.body.getReader();
+    const pushStream = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            res.end();
+            break;
+          }
+          res.write(value);
+        }
+      } catch (err) {
+        // Handle stream connection abort safely
+        res.end();
+      }
+    };
+
+    pushStream();
+  } catch (error: any) {
+    if (error.name === 'AbortError') return;
+    console.error('[TORRENT-PROXY] Direct proxy error:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Критическая ошибка трансляции видеопотока' });
+    }
   }
 });

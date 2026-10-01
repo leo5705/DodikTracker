@@ -147,30 +147,36 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
               </button>
             </>
           ) : (
-            /* MEMBER View: Sync button */
-            <button
-              type="button"
-              onClick={handleManualSync}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
-                syncFeedback
-                  ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-400'
-                  : 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white shadow-md shadow-[#7C3AED]/25'
-              }`}
-              title="Запросить синхронизацию с хостом"
-              aria-label="Синхронизироваться с хостом"
-            >
-              {syncFeedback ? (
-                <>
-                  <Check className="w-4 h-4 text-emerald-400" />
-                  <span>Синхронизировано!</span>
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4" />
-                  <span>Синхронизироваться</span>
-                </>
-              )}
-            </button>
+            /* MEMBER View: Sync button & host control notice */
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={handleManualSync}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                  syncFeedback
+                    ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-400'
+                    : 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white shadow-md shadow-[#7C3AED]/25'
+                }`}
+                title="Запросить синхронизацию с хостом"
+                aria-label="Синхронизироваться с хостом"
+              >
+                {syncFeedback ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span>Синхронизировано!</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Синхронизироваться</span>
+                  </>
+                )}
+              </button>
+              
+              <span className="hidden sm:inline text-xs text-[#94A3B8] font-medium">
+                👥 Воспроизведением управляет ведущий
+              </span>
+            </div>
           )}
         </div>
 

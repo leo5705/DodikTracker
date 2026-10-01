@@ -87,33 +87,6 @@ apiRouter.get('/health/ready', async (req, res) => {
   }
 });
 
-apiRouter.get('/system/services', async (req, res) => {
-  try {
-    const { torznabClient } = await import('./services/torrentSearch/torznabClient.ts');
-    const { torrServerClient } = await import('./services/torrentSearch/torrServerClient.ts');
-
-    const prowlarrStatus = await torznabClient.isAvailable();
-    const torrServerStatus = await torrServerClient.healthCheck();
-
-    res.json({
-      prowlarr: {
-        configuredUrl: process.env.PROWLARR_URL || 'http://prowlarr:9696',
-        hasApiKey: Boolean(process.env.PROWLARR_API_KEY),
-        status: prowlarrStatus.ok ? 'CONNECTED' : 'UNAVAILABLE',
-        reason: prowlarrStatus.reason,
-      },
-      torrServer: {
-        configuredUrl: process.env.TORRSERVER_URL || 'http://torrserver:8090',
-        status: torrServerStatus.isAvailable ? 'CONNECTED' : 'UNAVAILABLE',
-        version: torrServerStatus.version,
-        error: torrServerStatus.error,
-      },
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Ошибка проверки системных сервисов' });
-  }
-});
-
 apiRouter.get('/system/version', async (req, res) => {
   try {
     const manifestPath = path.resolve('release-manifest.json');

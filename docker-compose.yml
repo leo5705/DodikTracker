@@ -1,6 +1,27 @@
 version: '3.8'
 
 services:
+  dodik-tracker:
+    build: .
+    container_name: dodik_tracker
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgres://dodik_user:dodik_password@postgres:5432/dodik_tracker
+      - PROWLARR_URL=http://prowlarr:9696
+      - TORRSERVER_URL=http://torrserver:8090
+    depends_on:
+      - postgres
+      - prowlarr
+      - torrserver
+    volumes:
+      - ./public/uploads:/app/public/uploads
+    networks:
+      - dodik_network
+
   postgres:
     image: postgres:16-alpine
     container_name: dodik_postgres
@@ -24,6 +45,8 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=UTC
+    ports:
+      - "127.0.0.1:9696:9696"
     volumes:
       - prowlarr_data:/config
     networks:
@@ -35,6 +58,8 @@ services:
     restart: unless-stopped
     environment:
       - TS_PORT=8090
+    ports:
+      - "127.0.0.1:8090:8090"
     volumes:
       - torrserver_data:/torrents
     networks:

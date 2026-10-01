@@ -10,7 +10,40 @@ async function runMigrations() {
 
   let pool: Pool;
 
-  if (connectionString) {
+  const socketPath = (() => {
+    const candidates = ['/app/cloudsql', '/cloudsql'];
+    for (const base of candidates) {
+      try {
+        if (fs.existsSync(base)) {
+          const entries = fs.readdirSync(base);
+          for (const entry of entries) {
+            const fullPath = path.join(base, entry);
+            if (fs.statSync(fullPath).isDirectory()) {
+              if (fs.existsSync(path.join(fullPath, '.s.PGSQL.5432'))) {
+                return fullPath;
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+    return null;
+  })();
+
+  if (socketPath) {
+    const user = process.env.SQL_ADMIN_USER || process.env.SQL_USER || 'dodik_user';
+    const password = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD || 'Dodik_Password_2026!';
+    const database = process.env.SQL_DB_NAME || 'cloud_sql_development_database';
+
+    pool = new Pool({
+      host: socketPath,
+      user,
+      password,
+      database,
+      max: 1,
+      connectionTimeoutMillis: 15000,
+    });
+  } else if (connectionString) {
     pool = new Pool({
       connectionString,
       max: 1,

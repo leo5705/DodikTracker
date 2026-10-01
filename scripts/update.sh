@@ -763,21 +763,32 @@ if should_run_stage 5; then
     log "WARN" "[STAGE: git_pull] WARNING: current local branch is $CURRENT_LOCAL_BRANCH, production target branch is $DEPLOY_BRANCH"
   fi
 
-  FAILED_COMMAND="git fetch origin $DEPLOY_BRANCH"
-  fetch_exit=0
-  run_timed 60 git fetch origin "$DEPLOY_BRANCH" >> "$LOG_FILE" 2>&1 || fetch_exit=$?
-  if [ $fetch_exit -ne 0 ]; then
-    if is_timeout $fetch_exit; then
-      log "ERROR" "[STAGE: git_pull] [TIMEOUT] Git fetch origin $DEPLOY_BRANCH exceeded 60 seconds."
-      rollback_update "Git operation timed out (fetch origin/$DEPLOY_BRANCH exceeded 60s)."
-    else
-      log "ERROR" "[STAGE: git_pull] Git fetch origin $DEPLOY_BRANCH failed with exit code $fetch_exit."
-      rollback_update "Failed to fetch from remote branch origin/$DEPLOY_BRANCH. Network or git remote failure."
-    fi
-    exit 1
+  has_remote=0
+  if git remote | grep -q "^origin$"; then
+    has_remote=1
   fi
 
-  TARGET_COMMIT=$(git rev-parse "origin/$DEPLOY_BRANCH" 2>/dev/null || echo "$PREVIOUS_COMMIT")
+  if [ $has_remote -eq 1 ]; then
+    FAILED_COMMAND="git fetch origin $DEPLOY_BRANCH"
+    fetch_exit=0
+    run_timed 60 git fetch origin "$DEPLOY_BRANCH" >> "$LOG_FILE" 2>&1 || fetch_exit=$?
+    if [ $fetch_exit -ne 0 ]; then
+      if is_timeout $fetch_exit; then
+        log "ERROR" "[STAGE: git_pull] [TIMEOUT] Git fetch origin $DEPLOY_BRANCH exceeded 60 seconds."
+        rollback_update "Git operation timed out (fetch origin/$DEPLOY_BRANCH exceeded 60s)."
+      else
+        log "ERROR" "[STAGE: git_pull] Git fetch origin $DEPLOY_BRANCH failed with exit code $fetch_exit."
+        rollback_update "Failed to fetch from remote branch origin/$DEPLOY_BRANCH. Network or git remote failure."
+      fi
+      exit 1
+    fi
+
+    TARGET_COMMIT=$(git rev-parse "origin/$DEPLOY_BRANCH" 2>/dev/null || echo "$PREVIOUS_COMMIT")
+  else
+    log "INFO" "[STAGE: git_pull] No remote 'origin' configured. Running update on current commit $PREVIOUS_COMMIT."
+    TARGET_COMMIT="$PREVIOUS_COMMIT"
+  fi
+
   log "INFO" "[STAGE: git_pull] Current commit: ${PREVIOUS_COMMIT:0:7} | Target commit: ${TARGET_COMMIT:0:7}"
 
   if [ "$PREVIOUS_COMMIT" = "$TARGET_COMMIT" ]; then

@@ -64,6 +64,13 @@ export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
     const currentGen = ++this.loadGeneration;
     const magnet = config.magnetUri || config.url || '';
 
+    const isHttpStream = config.url && (config.url.startsWith('http://') || config.url.startsWith('https://') || config.url.startsWith('/'));
+    if (isHttpStream) {
+      this.setState('READY');
+      this.callbacks.onReady?.(this.attachedVideo || undefined);
+      return;
+    }
+
     // 1. Check browser WebRTC support
     if (typeof window !== 'undefined') {
       const webrtcSupported = (WebTorrent as any).WEBRTC_SUPPORT;
@@ -320,6 +327,17 @@ export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
     videoElement.addEventListener('waiting', this.handleVideoWaiting);
     videoElement.addEventListener('playing', this.handleVideoPlaying);
     videoElement.addEventListener('durationchange', this.handleDurationChange);
+
+    const isHttpStream = this.currentConfig?.url && (this.currentConfig.url.startsWith('http://') || this.currentConfig.url.startsWith('https://') || this.currentConfig.url.startsWith('/'));
+    if (isHttpStream) {
+      if (videoElement.src !== this.currentConfig.url) {
+        videoElement.src = this.currentConfig.url;
+        videoElement.load();
+      }
+      this.setState('READY');
+      this.callbacks.onReady?.(videoElement);
+      return;
+    }
 
     if (this.activeFile && this._state !== 'ERROR' && this._state !== 'DESTROYING') {
       this.renderActiveFile(videoElement, this.loadGeneration);

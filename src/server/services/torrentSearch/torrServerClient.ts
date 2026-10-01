@@ -7,29 +7,55 @@ import { TorrServerStatus, TorrServerStreamInfo } from './torrentSearchTypes.ts'
 import { selectBestVideoFile, FileSelectionOptions, TorrentFileItem } from './torrentFileSelector.ts';
 
 export class TorrServerClient {
-  private get baseUrl(): string {
-    return (process.env.TORRSERVER_URL || 'http://localhost:8090').replace(/\/+$/, '');
+  private cachedResolvedUrl: string | null = null;
+
+  public get baseUrl(): string {
+    if (this.cachedResolvedUrl) {
+      return this.cachedResolvedUrl;
+    }
+    const envUrl = process.env.TORRSERVER_URL?.trim();
+    if (envUrl) {
+      return envUrl.replace(/\/+$/, '');
+    }
+    return 'http://127.0.0.1:8090';
   }
 
   /**
-   * Health check for TorrServer.
+   * Health check for TorrServer with host probing.
    */
   public async healthCheck(): Promise<TorrServerStatus> {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4000);
+    const rawEnvUrl = process.env.TORRSERVER_URL?.trim();
+    const envUrl = rawEnvUrl ? rawEnvUrl.replace(/\/+$/, '') : null;
 
-      const res = await fetch(`${this.baseUrl}/echo`, { signal: controller.signal });
-      clearTimeout(timer);
+    const candidateUrls = [
+      ...(envUrl ? [envUrl] : []),
+      'http://127.0.0.1:8090',
+      'http://localhost:8090',
+    ].filter((v, i, a) => a.indexOf(v) === i);
 
-      if (res.ok) {
-        const text = await res.text().catch(() => 'TorrServer');
-        return { isAvailable: true, version: text };
+    const primaryUrl = this.baseUrl;
+    let lastError = `Не удалось подключиться к TorrServer (${primaryUrl}): служба не запущена или недоступна`;
+
+    for (const url of candidateUrls) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2000);
+
+        const res = await fetch(`${url}/echo`, { signal: controller.signal });
+        clearTimeout(timer);
+
+        if (res.ok) {
+          this.cachedResolvedUrl = url;
+          const text = await res.text().catch(() => 'TorrServer');
+          return { isAvailable: true, version: text };
+        }
+        lastError = `HTTP ${res.status}: TorrServer echo failed (${url})`;
+      } catch (err: any) {
+        // Continue probing next candidate
       }
-      return { isAvailable: false, error: `HTTP ${res.status}: TorrServer echo failed` };
-    } catch (err: any) {
-      return { isAvailable: false, error: err?.message || 'TorrServer недоступен' };
     }
+
+    return { isAvailable: false, error: lastError };
   }
 
   /**
@@ -153,6 +179,22 @@ export class TorrServerClient {
       };
     } catch (_e) {
       return null;
+    }
+  }
+
+  /**
+   * Removes a torrent from TorrServer.
+   */
+  public async removeTorrent(infoHash: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/torrents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'rem', hash: infoHash }),
+      });
+      return res.ok;
+    } catch (_e) {
+      return false;
     }
   }
 }

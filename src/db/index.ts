@@ -47,10 +47,32 @@ export const createPool = () => {
 
     let poolConfig: PoolConfig;
 
-    if (resolvedHost && (process.env.SQL_USER || socketPath)) {
+    if (socketPath) {
+      // Prioritize Cloud SQL via Unix Domain Socket in sandbox/applet environments
+      const user = process.env.SQL_ADMIN_USER || process.env.SQL_USER || 'dodik_user';
+      const password = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD || 'Dodik_Password_2026!';
+      const database = process.env.SQL_DB_NAME || 'cloud_sql_development_database';
+
+      poolConfig = {
+        host: socketPath,
+        user,
+        password,
+        database,
+        max: 10,
+        connectionTimeoutMillis: 15000,
+        idleTimeoutMillis: 30000,
+      };
+    } else if (connectionString) {
+      poolConfig = {
+        connectionString,
+        max: 10,
+        connectionTimeoutMillis: 15000,
+        idleTimeoutMillis: 30000,
+      };
+    } else if (resolvedHost && (process.env.SQL_USER || socketPath)) {
       // Cloud SQL instance (Unix Domain Socket or proxy host)
-      const user = process.env.SQL_ADMIN_USER || process.env.SQL_USER || 'ai_studio_admin';
-      const password = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD || 'r+/5CNdAXr/sCMiW';
+      const user = process.env.SQL_USER || 'dodik_user';
+      const password = process.env.SQL_PASSWORD || 'Dodik_Password_2026!';
       const database = process.env.SQL_DB_NAME || 'cloud_sql_development_database';
 
       poolConfig = {
@@ -66,13 +88,6 @@ export const createPool = () => {
       if (!resolvedHost.startsWith('/')) {
         poolConfig.port = parseInt(process.env.SQL_PORT || '5432', 10);
       }
-    } else if (connectionString) {
-      poolConfig = {
-        connectionString,
-        max: 10,
-        connectionTimeoutMillis: 15000,
-        idleTimeoutMillis: 30000,
-      };
     } else {
       const host = process.env.PGHOST || 'localhost';
       const port = parseInt(process.env.SQL_PORT || process.env.PGPORT || '5432', 10);

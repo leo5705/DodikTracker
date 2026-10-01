@@ -8,6 +8,10 @@ import { db } from '../../../db/index.ts';
 import { sql } from 'drizzle-orm';
 import { logAdminAction } from './auditHelper.ts';
 import { verifyUploadsAndDatabase } from '../../../scripts/verifyUploads.ts';
+import { torrentE2eService } from '../../services/torrentSearch/torrentE2eService.ts';
+import { torrentTraceService } from '../../services/torrentSearch/torrentTraceService.ts';
+import { torznabClient } from '../../services/torrentSearch/torznabClient.ts';
+import { torrServerClient } from '../../services/torrentSearch/torrServerClient.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -1211,3 +1215,209 @@ systemRouter.delete('/system/backups/uploads/:filename', async (req: AuthRequest
     res.status(500).json({ error: 'Не удалось удалить архив', details: err.message });
   }
 });
+
+// =============================================================================
+// 9. System Services Diagnostics (/api/admin/system/services)
+// =============================================================================
+systemRouter.get('/system/services', async (_req: AuthRequest, res: Response) => {
+  try {
+    // 1. Check Prowlarr via dynamic candidate resolution
+    const prowlarrHealth = await torznabClient.isAvailable();
+    const effectiveProwlarrUrl = torznabClient.prowlarrUrl;
+
+    // 2. Check TorrServer via dynamic candidate resolution
+    const torrHealth = await torrServerClient.healthCheck();
+    const effectiveTorrUrl = torrServerClient.baseUrl;
+
+    // 3. Check DB & PM2
+    const [dbStatus, pm2Status] = await Promise.all([
+      getDatabaseStatus(),
+      getPm2Status(),
+    ]);
+
+    res.json({
+      timestamp: new Date().toISOString(),
+      services: {
+        database: {
+          name: 'PostgreSQL Database',
+          status: dbStatus.status === 'connected' ? 'ONLINE' : 'OFFLINE',
+          latencyMs: dbStatus.latencyMs,
+          error: dbStatus.error,
+        },
+        pm2: {
+          name: 'PM2 App (dodik-tracker)',
+          status: pm2Status.status === 'online' ? 'ONLINE' : pm2Status.status.toUpperCase(),
+          uptimeSec: pm2Status.uptime,
+          restarts: pm2Status.restarts,
+        },
+        prowlarr: {
+          name: 'Prowlarr Torznab Service',
+          urlMasked: effectiveProwlarrUrl.replace(/:\/\/([^@]+@)?/, '://***@'),
+          configured: Boolean(effectiveProwlarrUrl),
+          reachable: prowlarrHealth.ok,
+          status: prowlarrHealth.ok ? 'ONLINE' : (prowlarrHealth.reason || 'OFFLINE'),
+        },
+        torrserver: {
+          name: 'TorrServer Engine',
+          urlMasked: effectiveTorrUrl.replace(/:\/\/([^@]+@)?/, '://***@'),
+          configured: Boolean(effectiveTorrUrl),
+          reachable: torrHealth.isAvailable,
+          status: torrHealth.isAvailable ? 'ONLINE' : (torrHealth.error || 'OFFLINE'),
+          version: torrHealth.version || 'unknown',
+        },
+      },
+      torrentE2e: {
+        enabled: process.env.DODIK_TORRENT_E2E_TEST_ENABLED !== 'false',
+        latestJob: torrentE2eService.getLatestJob(),
+      },
+    });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error getting services status:', err);
+    res.status(500).json({ error: 'Не удалось получить статус системных сервисов', details: err.message });
+  }
+});
+
+// =============================================================================
+// 10. Torrent Pipeline E2E Diagnostic Endpoints
+// =============================================================================
+
+// POST /api/admin/system/torrent-e2e/simulate-load
+systemRouter.post('/system/torrent-e2e/simulate-load', async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const result = await torrentE2eService.runMultiRoomSimulation({
+      id: user.id,
+      username: user.username,
+    });
+
+    await logAdminAction({
+      userId: user.id,
+      action: 'TORRENT_LOAD_SIMULATION_EXECUTED',
+      details: `Executed multi-room watch party load & safety simulation`,
+      ip: req.ip,
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[AdminSystem] Error executing load simulation:', err);
+    res.status(500).json({ error: 'Не удалось выполнить симуляцию нагрузки Torrent Watch Party', details: err.message });
+  }
+});
+
+// POST /api/admin/system/torrent-e2e/start (or /trigger)
+systemRouter.post('/system/torrent-e2e/start', async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { isNew, job } = torrentE2eService.startE2eJob({
+      id: user.id,
+      username: user.username,
+    });
+
+    if (isNew) {
+      await logAdminAction({
+        userId: user.id,
+        action: 'TORRENT_E2E_STARTED',
+        details: `Started Torrent E2E Diagnostic job: ${job.jobId}`,
+        ip: req.ip,
+      });
+    }
+
+    res.status(isNew ? 202 : 200).json({
+      success: true,
+      isNew,
+      job,
+    });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error starting Torrent E2E test:', err);
+    res.status(500).json({ error: 'Не удалось запустить Torrent E2E диагностику', details: err.message });
+  }
+});
+
+systemRouter.post('/system/torrent-e2e/trigger', async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.dbUser!;
+    const { isNew, job } = torrentE2eService.startE2eJob({
+      id: user.id,
+      username: user.username,
+    });
+
+    if (isNew) {
+      await logAdminAction({
+        userId: user.id,
+        action: 'TORRENT_E2E_STARTED',
+        details: `Triggered Torrent E2E Diagnostic job: ${job.jobId}`,
+        ip: req.ip,
+      });
+    }
+
+    res.status(isNew ? 202 : 200).json({
+      success: true,
+      isNew,
+      job,
+    });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error triggering Torrent E2E test:', err);
+    res.status(500).json({ error: 'Не удалось запустить Torrent E2E диагностику', details: err.message });
+  }
+});
+
+// GET /api/admin/system/torrent-e2e/status
+systemRouter.get('/system/torrent-e2e/status', async (_req: AuthRequest, res: Response) => {
+  try {
+    const active = torrentE2eService.getActiveJob();
+    const latest = torrentE2eService.getLatestJob();
+
+    res.json({
+      activeJob: active,
+      latestJob: latest,
+      isRunning: Boolean(active && (active.status === 'RUNNING' || active.status === 'QUEUED')),
+    });
+  } catch (err: any) {
+    console.error('[AdminSystem] Error getting Torrent E2E status:', err);
+    res.status(500).json({ error: 'Не удалось получить статус Torrent E2E диагностики', details: err.message });
+  }
+});
+
+// GET /api/admin/system/torrent-e2e/job/:jobId
+systemRouter.get('/system/torrent-e2e/job/:jobId', async (req: AuthRequest, res: Response) => {
+  try {
+    const { jobId } = req.params;
+    const job = torrentE2eService.getJob(jobId);
+
+    if (!job) {
+      return res.status(404).json({ error: 'Диагностическая задача не найдена' });
+    }
+
+    res.json(job);
+  } catch (err: any) {
+    console.error('[AdminSystem] Error getting Torrent E2E job:', err);
+    res.status(500).json({ error: 'Ошибка получения задачи Torrent E2E', details: err.message });
+  }
+});
+
+// POST /api/admin/system/watch-source-trace
+systemRouter.post('/system/watch-source-trace', async (req: AuthRequest, res: Response) => {
+  try {
+    const { mediaId, mediaType, seasonNumber, episodeNumber } = req.body || {};
+
+    const traceReport = await torrentTraceService.executeTrace({
+      mediaId,
+      mediaType,
+      seasonNumber: seasonNumber !== undefined ? Number(seasonNumber) : undefined,
+      episodeNumber: episodeNumber !== undefined ? Number(episodeNumber) : undefined,
+    });
+
+    await logAdminAction({
+      userId: req.dbUser!.id,
+      action: 'WATCH_SOURCE_TRACE_EXECUTED',
+      details: `Live discovery trace for mediaId: ${mediaId}, status: ${traceReport.overallStatus}`,
+      ip: req.ip,
+    });
+
+    res.json(traceReport);
+  } catch (err: any) {
+    console.error('[AdminSystem] Error executing watch source trace:', err);
+    res.status(500).json({ error: 'Ошибка выполнения трассировки поиска', details: err.message });
+  }
+});
+

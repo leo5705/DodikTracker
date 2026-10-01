@@ -119,8 +119,5 @@ export function rankTorrentCandidates(
   // Filter out candidates with score <= 0 (e.g. sample releases or 0 seeders with bad matches)
   const validCandidates = scored.filter((c) => c.score > 0);
 
-  // If no candidates had score > 0, return top scored candidates sorted anyway
-  const listToSort = validCandidates.length > 0 ? validCandidates : scored;
-
-  return listToSort.sort((a, b) => b.score - a.score);
+  return validCandidates.sort((a, b) => b.score - a.score);
 }

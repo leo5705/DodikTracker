@@ -25,6 +25,7 @@ import {
   Check,
   Flame,
   X,
+  Users,
 } from 'lucide-react';
 import { UnifiedContentItem, ContentType } from '../../types/content.ts';
 import { useRouter } from '../../context/RouterContext.tsx';
@@ -43,8 +44,10 @@ interface ContentHeroProps {
   onOpenReviewModal?: () => void;
   onOpenListModal?: () => void;
   onOpenShareModal?: () => void;
-  onOpenWatchPartyModal?: () => void;
   onRatingUpdated?: (newRating: number | null, newDodikData?: DodikRatingData) => void;
+  onOpenWatchModal?: () => void;
+  onOpenWatchPartyModal?: () => void;
+  isWatchAvailable?: boolean | null;
 }
 
 export const ContentHero: React.FC<ContentHeroProps> = ({
@@ -57,8 +60,10 @@ export const ContentHero: React.FC<ContentHeroProps> = ({
   onOpenReviewModal,
   onOpenListModal,
   onOpenShareModal,
-  onOpenWatchPartyModal,
   onRatingUpdated,
+  onOpenWatchModal,
+  onOpenWatchPartyModal,
+  isWatchAvailable,
 }) => {
   const { navigate } = useRouter();
   const { dbUser } = useAuth();
@@ -359,16 +364,37 @@ export const ContentHero: React.FC<ContentHeroProps> = ({
 
           {/* 3. Action Buttons & CTAs */}
           <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-[#1E2442]">
-            {/* Совместный просмотр (Watch Party / Смотреть) */}
-            {onOpenWatchPartyModal && (
+            {/* Single-user Watch / Watch Episode CTA */}
+            {(onOpenWatchModal || onOpenWatchPartyModal) && (item.type === 'MOVIE' || item.type === 'TV' || item.type === 'ANIME') && (
+              isWatchAvailable === false ? (
+                <div
+                  title="Для этого контента пока не найден доступный источник."
+                  className="px-4 py-2.5 rounded-xl bg-[#151932] border border-[#1E2442] text-[#64748B] text-xs font-semibold inline-flex items-center gap-2 cursor-not-allowed select-none"
+                >
+                  <Play className="w-4 h-4 text-[#64748B]" />
+                  <span>Просмотр недоступен</span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onOpenWatchModal || onOpenWatchPartyModal}
+                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-black text-xs font-black inline-flex items-center gap-2 shadow-lg shadow-amber-500/25 transition-all cursor-pointer"
+                >
+                  <Play className="w-4 h-4 fill-black text-black" />
+                  <span>{item.type === 'MOVIE' ? 'Смотреть' : 'Смотреть серию'}</span>
+                </button>
+              )
+            )}
+
+            {/* Main Watch Party CTA: «Смотреть вместе» */}
+            {onOpenWatchPartyModal && isWatchAvailable !== false && (item.type === 'MOVIE' || item.type === 'TV' || item.type === 'ANIME') && (
               <button
                 type="button"
                 onClick={onOpenWatchPartyModal}
-                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#8B5CF6]/25 to-[#6366F1]/25 hover:from-[#8B5CF6]/40 hover:to-[#6366F1]/40 text-white border border-[#8B5CF6]/60 text-xs font-bold inline-flex items-center gap-2 shadow-sm transition-all cursor-pointer"
-                title="Смотреть вместе с друзьями (Watch Party)"
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-black text-xs font-black inline-flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition-all cursor-pointer"
               >
-                <Play className="w-3.5 h-3.5 fill-[#A78BFA] text-[#A78BFA]" />
-                <span>Смотреть</span>
+                <Users className="w-4 h-4 text-black" />
+                <span>Смотреть вместе</span>
               </button>
             )}
 

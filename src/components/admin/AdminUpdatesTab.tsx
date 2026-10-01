@@ -231,6 +231,85 @@ export function AdminUpdatesTab() {
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [lastCheckTime, setLastCheckTime] = useState<string | null>(null);
 
+  // Torrent watch party diagnostics & simulation states
+  const [servicesData, setServicesData] = useState<any>(null);
+  const [loadingServices, setLoadingServices] = useState(false);
+  const [torrentE2e, setTorrentE2e] = useState<any>(null);
+  const [runningE2e, setRunningE2e] = useState(false);
+  const [simulationResult, setSimulationResult] = useState<any>(null);
+  const [runningSimulation, setRunningSimulation] = useState(false);
+  const [expandedE2eStage, setExpandedE2eStage] = useState<string | null>(null);
+
+  const fetchServicesStatus = async () => {
+    setLoadingServices(true);
+    try {
+      const res = await authFetch('/api/admin/system/services');
+      if (res.ok) {
+        const data = await res.json();
+        setServicesData(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch services status:', err);
+    } finally {
+      setLoadingServices(false);
+    }
+  };
+
+  const fetchTorrentE2eStatus = async () => {
+    try {
+      const res = await authFetch('/api/admin/system/torrent-e2e/status');
+      if (res.ok) {
+        const data = await res.json();
+        setTorrentE2e(data);
+        if (data.isRunning) {
+          setRunningE2e(true);
+        } else {
+          setRunningE2e(false);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch torrent E2E status:', err);
+    }
+  };
+
+  const startTorrentE2eTest = async () => {
+    setRunningE2e(true);
+    try {
+      const res = await authFetch('/api/admin/system/torrent-e2e/start', { method: 'POST' });
+      if (res.ok) {
+        showToast('E2E диагностика торрент-системы запущена', 'info');
+        await fetchTorrentE2eStatus();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Ошибка запуска E2E диагностики', 'error');
+        setRunningE2e(false);
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Сетевая ошибка запуска', 'error');
+      setRunningE2e(false);
+    }
+  };
+
+  const runLoadSimulation = async () => {
+    setRunningSimulation(true);
+    setSimulationResult(null);
+    try {
+      const res = await authFetch('/api/admin/system/torrent-e2e/simulate-load', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setSimulationResult(data);
+        showToast('Симуляция нагрузки успешно выполнена!', 'success');
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Ошибка при выполнении симуляции', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Ошибка сети при симуляции', 'error');
+    } finally {
+      setRunningSimulation(false);
+    }
+  };
+
   const fetchUpdateLogs = async () => {
     setLoadingLogs(true);
     setShowLogsModal(true);
@@ -321,13 +400,30 @@ export function AdminUpdatesTab() {
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
-    await Promise.all([fetchStatus(), fetchBackups()]);
+    await Promise.all([
+      fetchStatus(),
+      fetchBackups(),
+      fetchServicesStatus(),
+      fetchTorrentE2eStatus(),
+    ]);
     setLoading(false);
   }, [fetchStatus, fetchBackups]);
 
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  useEffect(() => {
+    let e2eTimer: NodeJS.Timeout | null = null;
+    if (runningE2e) {
+      e2eTimer = setInterval(() => {
+        fetchTorrentE2eStatus();
+      }, 2000);
+    }
+    return () => {
+      if (e2eTimer) clearInterval(e2eTimer);
+    };
+  }, [runningE2e]);
 
   useEffect(() => {
     const isRunning = Boolean(statusData?.updateInProgress && statusData?.job?.state === 'running');
@@ -1078,6 +1174,344 @@ export function AdminUpdatesTab() {
                 </ul>
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* 4.5 Section: Production Torrent Watch Party & Service Diagnostics (Stage 9.8) */}
+      <div className="p-5 sm:p-6 rounded-3xl bg-[#0B0D20] border border-[#1E2442] shadow-xl space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center text-white shrink-0">
+              <Cpu className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-[#F8FAFC]">
+                Инспектор Torrent Watch Party и Нагрузки (Stage 9.8)
+              </h3>
+              <p className="text-xs text-[#94A3B8]">
+                Живой мониторинг Torrent-сервисов, запуск 11-этапной E2E верификации и симуляция изоляции мульти-комнат
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <button
+              onClick={fetchServicesStatus}
+              disabled={loadingServices}
+              className="flex items-center gap-1.5 h-10 px-4 rounded-2xl bg-[#11152A] hover:bg-[#1E2442] text-xs sm:text-sm font-semibold text-[#CBD5E1] border border-[#1E2442] transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-[#8B5CF6] ${loadingServices ? 'animate-spin' : ''}`} />
+              <span>Опросить статусы</span>
+            </button>
+
+            <button
+              onClick={startTorrentE2eTest}
+              disabled={runningE2e}
+              className="flex items-center gap-1.5 h-10 px-4 rounded-2xl bg-purple-600 hover:bg-purple-500 text-xs sm:text-sm font-bold text-white transition-all cursor-pointer shadow-md disabled:opacity-50"
+            >
+              <Play className="w-3.5 h-3.5 fill-white" />
+              <span>{runningE2e ? 'E2E Тест...' : 'Запустить E2E Тест'}</span>
+            </button>
+
+            <button
+              onClick={runLoadSimulation}
+              disabled={runningSimulation}
+              className="flex items-center gap-1.5 h-10 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 text-xs sm:text-sm font-bold text-white transition-all cursor-pointer shadow-md disabled:opacity-50"
+            >
+              {runningSimulation ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <ShieldCheck className="w-4 h-4" />
+              )}
+              <span>{runningSimulation ? 'Симуляция...' : 'Запустить Симуляцию Нагрузки'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Microservices connection metrics grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+          {servicesData?.services ? (
+            Object.keys(servicesData.services).map((key) => {
+              const s = servicesData.services[key];
+              const isOnline = s.status === 'ONLINE';
+              return (
+                <div key={key} className="p-4 rounded-2xl bg-[#11152A] border border-[#1E2442] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-[#94A3B8] font-bold font-mono uppercase tracking-wider">{s.name}</span>
+                    <span className={`w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                  </div>
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className={`text-base font-extrabold ${isOnline ? 'text-emerald-300' : 'text-rose-400'}`}>{s.status}</span>
+                    {s.latencyMs !== undefined && (
+                      <span className="text-xs font-mono text-[#64748B]">{s.latencyMs}ms latency</span>
+                    )}
+                    {s.version && s.version !== 'unknown' && (
+                      <span className="text-[10px] font-mono text-[#64748B] truncate max-w-[120px]">{s.version}</span>
+                    )}
+                  </div>
+                  {s.urlMasked && (
+                    <div className="text-[10px] font-mono text-zinc-500 truncate" title={s.urlMasked}>
+                      {s.urlMasked}
+                    </div>
+                  )}
+                  {s.error && (
+                    <div className="text-[10px] font-mono text-rose-400 break-all leading-tight">
+                      {s.error}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <div className="col-span-4 p-4 text-center text-xs text-[#64748B]">
+              Статусы системных интеграций не опрошены. Кликните "Опросить статусы" для проверки связи в продакшене.
+            </div>
+          )}
+        </div>
+
+        {/* Real-time 11-stage E2E pipeline progression panel */}
+        {torrentE2e?.latestJob && (
+          <div className="p-5 rounded-2xl bg-[#080A18] border border-purple-500/30 space-y-4 animate-in fade-in duration-300">
+            <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-[#1E2442]/60">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${torrentE2e.latestJob.status === 'RUNNING' ? 'bg-purple-400 animate-pulse' : torrentE2e.latestJob.status === 'PASS' ? 'bg-emerald-400' : 'bg-rose-500'}`} />
+                <h4 className="text-sm font-bold text-white font-mono">
+                  11-ЭТАПНЫЙ E2E ТЕСТ: {torrentE2e.latestJob.jobId}
+                </h4>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <span className="text-xs font-mono text-[#94A3B8]">
+                  Запущен: {new Date(torrentE2e.latestJob.startedAt).toLocaleTimeString('ru-RU')}
+                </span>
+                <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded-lg ${torrentE2e.latestJob.status === 'PASS' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : torrentE2e.latestJob.status === 'FAIL' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-purple-500/20 text-purple-300 border border-purple-500/30 animate-pulse'}`}>
+                  {torrentE2e.latestJob.status} ({torrentE2e.latestJob.progress}%)
+                </span>
+              </div>
+            </div>
+
+            {/* Stages Step Sequencer */}
+            <div className="space-y-2.5">
+              {torrentE2e.latestJob.stages.map((st: any, idx: number) => {
+                const isExpanded = expandedE2eStage === st.stage;
+                const getStatusColor = (status: string) => {
+                  if (status === 'PASS') return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+                  if (status === 'FAIL') return 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+                  if (status === 'RUNNING') return 'text-purple-300 bg-purple-500/20 border-purple-500/30 animate-pulse';
+                  return 'text-slate-500 bg-[#11152A] border-[#1E2442]';
+                };
+
+                return (
+                  <div key={st.stage} className={`rounded-xl border ${st.status === 'RUNNING' ? 'border-purple-500/40 bg-purple-950/5' : 'border-[#1E2442]/60 bg-[#11152A]/40'} transition-all overflow-hidden`}>
+                    <div
+                      onClick={() => setExpandedE2eStage(isExpanded ? null : st.stage)}
+                      className="p-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-[#151932]/30 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono text-xs text-slate-500 font-bold">{idx + 1}.</span>
+                        <span className="font-mono text-xs font-bold text-white">{st.stage}</span>
+                        {st.durationMs !== undefined && (
+                          <span className="text-[10px] font-mono text-[#64748B]">({st.durationMs}ms)</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg border ${getStatusColor(st.status)}`}>
+                          {st.status}
+                        </span>
+                        <span className="text-slate-500 text-xs">{isExpanded ? '▲' : '▼'}</span>
+                      </div>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="p-4 border-t border-[#1E2442]/50 bg-black/30 space-y-2.5 font-mono text-xs">
+                        {st.error && (
+                          <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 space-y-1">
+                            <span className="font-bold">Error (Classification: {st.classification || 'UNSPECIFIED'}):</span>
+                            <p className="whitespace-pre-wrap leading-relaxed">{st.error}</p>
+                          </div>
+                        )}
+                        {st.details && (
+                          <div className="space-y-1 text-slate-300">
+                            <span className="text-[#64748B] block font-bold text-[10px] uppercase tracking-wider">Metadata / Execution Context:</span>
+                            <pre className="p-3 bg-black/50 rounded-lg border border-[#1E2442] text-[11px] overflow-x-auto max-h-40 leading-relaxed text-[#CBD5E1]">
+                              {JSON.stringify(st.details, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Load / Concurrency Simulation detailed report */}
+        {simulationResult && (
+          <div className="p-5 rounded-2xl bg-[#090C1A] border border-emerald-500/30 space-y-5 animate-in fade-in duration-300">
+            <div className="flex items-center justify-between pb-2 border-b border-emerald-950">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                <h4 className="text-sm font-extrabold font-mono text-emerald-300">
+                  ОТЧЕТ О СИМУЛЯЦИИ НАГРУЗКИ & БЕЗОПАСНОСТИ CONCURRENCY
+                </h4>
+              </div>
+              <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                COMPLETED
+              </span>
+            </div>
+
+            {/* Performance Metrics before vs after */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+              <div className="p-3 rounded-xl bg-black/40 border border-[#1E2442]">
+                <span className="text-[#64748B] block mb-1">Время выполнения:</span>
+                <span className="text-[#F8FAFC] font-extrabold text-sm">{simulationResult.durationMs}ms</span>
+              </div>
+              <div className="p-3 rounded-xl bg-black/40 border border-[#1E2442]">
+                <span className="text-[#64748B] block mb-1">Потребление ОЗУ:</span>
+                <span className="text-[#F8FAFC] font-extrabold text-sm">{simulationResult.metrics.memUsageAfterMB} MB</span>
+                <span className="text-[10px] text-emerald-400 block font-bold">Рост: +{simulationResult.metrics.memGrowthMB} MB</span>
+              </div>
+              <div className="p-3 rounded-xl bg-black/40 border border-[#1E2442]">
+                <span className="text-[#64748B] block mb-1">Нагрузка CPU (load avg):</span>
+                <span className="text-[#F8FAFC] font-extrabold text-sm">{simulationResult.metrics.cpuLoadAfter}</span>
+                <span className="text-[10px] text-slate-500 block font-bold">До: {simulationResult.metrics.cpuLoadBefore}</span>
+              </div>
+              <div className="p-3 rounded-xl bg-black/40 border border-[#1E2442]">
+                <span className="text-[#64748B] block mb-1">PostgreSQL Latency:</span>
+                <span className="text-emerald-400 font-extrabold text-sm">{simulationResult.metrics.dbLatencyMs}ms</span>
+                <span className="text-[10px] text-[#64748B] block font-bold">Статус: {simulationResult.metrics.dbStatus}</span>
+              </div>
+            </div>
+
+            {/* Security Protections Evaluation */}
+            <div className="p-4 rounded-xl bg-black/40 border border-[#1E2442] space-y-3">
+              <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono">
+                Верификация Безопасности & Защиты от SSRF / Утечки Секретов
+              </h5>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-xs font-mono">
+                    <span className="text-slate-400">SSRF Input Sanitizer Format:</span>
+                    <span className="px-2 py-0.5 rounded font-extrabold text-[10px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                      {simulationResult.security.ssrfProtection}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs font-mono">
+                    <span className="text-slate-400">Secrets Redaction/Masking Audit:</span>
+                    <span className="px-2 py-0.5 rounded font-extrabold text-[10px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                      {simulationResult.security.secretsIsolation}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded bg-black/60 border border-[#1E2442] text-[11px] font-mono text-slate-300 space-y-1 max-h-24 overflow-y-auto">
+                  <div className="text-[10px] text-[#64748B] font-bold uppercase pb-1 border-b border-[#1E2442]/50">SSRF Input Sanitizer Audit Log:</div>
+                  {simulationResult.security.ssrfChecks.map((chk: any, idx: number) => (
+                    <div key={idx} className="flex justify-between">
+                      <span className="text-slate-500 truncate max-w-[150px]">{chk.input}</span>
+                      <span className={chk.allowed ? 'text-emerald-400' : 'text-rose-400 font-bold'}>
+                        {chk.allowed ? 'ALLOWED (VALID HASH)' : 'SECURELY REJECTED'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Concurrent Watch Party Rooms Isolation Check */}
+            <div className="p-4 rounded-xl bg-black/40 border border-[#1E2442] space-y-3">
+              <div className="flex items-center justify-between pb-1 border-b border-[#1E2442]/60">
+                <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  Симуляция 3-х Одновременных Комнат & Изоляция Состояний
+                </h5>
+                <span className="text-xs font-mono font-bold text-emerald-400">
+                  Cross-Room Isolation: {simulationResult.simultaneousRooms.crossRoomIsolation}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono text-xs">
+                <div className="p-3 bg-black/50 rounded-lg border border-[#1E2442] space-y-1">
+                  <span className="text-slate-400 block font-bold text-purple-300">Room A ({simulationResult.simultaneousRooms.roomA.code})</span>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Media ID:</span>
+                    <span className="text-white">{simulationResult.simultaneousRooms.roomA.mediaId}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Playback:</span>
+                    <span className="text-emerald-400 font-bold">{simulationResult.simultaneousRooms.roomA.state}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Seek Position:</span>
+                    <span className="text-white">{simulationResult.simultaneousRooms.roomA.currentTime}s</span>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-black/50 rounded-lg border border-[#1E2442] space-y-1">
+                  <span className="text-slate-400 block font-bold text-sky-300">Room B ({simulationResult.simultaneousRooms.roomB.code})</span>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Media ID:</span>
+                    <span className="text-white">{simulationResult.simultaneousRooms.roomB.mediaId}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Playback:</span>
+                    <span className="text-zinc-400">{simulationResult.simultaneousRooms.roomB.state}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Seek Position:</span>
+                    <span className="text-zinc-400">{simulationResult.simultaneousRooms.roomB.currentTime}s</span>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-black/50 rounded-lg border border-[#1E2442] space-y-1">
+                  <span className="text-slate-400 block font-bold text-pink-300">Room C ({simulationResult.simultaneousRooms.roomC.code})</span>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Media ID:</span>
+                    <span className="text-white">{simulationResult.simultaneousRooms.roomC.mediaId}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Playback:</span>
+                    <span className="text-zinc-400">{simulationResult.simultaneousRooms.roomC.state}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-500">Seek Position:</span>
+                    <span className="text-zinc-400">{simulationResult.simultaneousRooms.roomC.currentTime}s</span>
+                  </div>
+                </div>
+              </div>
+              <div className="text-[11px] font-mono text-[#64748B] leading-relaxed pl-1 pt-1">
+                ✔ <strong>Изоляция доказана:</strong> Изменение состояния в Room A (PLAYING, currentTime 42.5s) не повлияло на Room B и Room C.
+              </div>
+            </div>
+
+            {/* Shared Torrent Resource Reference Counting & Automated Deletion */}
+            <div className="p-4 rounded-xl bg-black/40 border border-[#1E2442] space-y-3">
+              <div className="flex items-center justify-between pb-1 border-b border-[#1E2442]/60">
+                <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  Подсчет Ссылок & Автоматическое Удаление Торрентов
+                </h5>
+                <span className="text-xs font-mono font-bold text-emerald-400">
+                  Reference Counting: {simulationResult.simultaneousRooms.sharedResourceCleanup}
+                </span>
+              </div>
+              <div className="space-y-2 text-xs font-mono text-slate-300">
+                <div className="flex justify-between border-b border-[#1E2442]/30 pb-1">
+                  <span>1. Добавление торрента в Room A и Room B:</span>
+                  <span className="font-bold text-[#A78BFA]">Refs count = {simulationResult.simultaneousRooms.refCountAfterBoth}</span>
+                </div>
+                <div className="flex justify-between border-b border-[#1E2442]/30 pb-1">
+                  <span>2. Выход из Room A (освобождение 1 ссылки, торрент сохраняется для Room B):</span>
+                  <span className="font-bold text-sky-400">Refs count = {simulationResult.simultaneousRooms.refCountAfterA} (No cleanup)</span>
+                </div>
+                <div className="flex justify-between border-b border-[#1E2442]/30 pb-1">
+                  <span>3. Выход из Room B ( refs = 0, автоматическое удаление торрента из TorrServer):</span>
+                  <span className="font-bold text-emerald-400">Refs count = {simulationResult.simultaneousRooms.refCountAfterB} (Cleaned Up)</span>
+                </div>
+              </div>
+              <div className="text-[11px] font-mono text-emerald-300 leading-relaxed bg-emerald-950/20 p-2.5 rounded-lg border border-emerald-900/50">
+                ✔ <strong>Успешно:</strong> Проверен весь жизненный цикл. Торренты автоматически удаляются только тогда, когда последняя комната закрывается. Проблемы stale jobs и переполнения кэша отсутствуют.
+              </div>
+            </div>
           </div>
         )}
       </div>

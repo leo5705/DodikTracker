@@ -9,7 +9,7 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
-        'webtorrent': path.resolve(__dirname, 'node_modules/webtorrent/dist/webtorrent.min.js'),
+        'webtorrent': 'webtorrent/dist/webtorrent.min.js',
       },
     },
     server: {

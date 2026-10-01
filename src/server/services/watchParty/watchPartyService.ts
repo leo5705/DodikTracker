@@ -232,10 +232,14 @@ export class WatchPartyService {
     }
 
     const code = await this.generateUniqueRoomCode();
+    const rawConfig = input.sourceConfig || (input as any).source;
+    const rawType = input.sourceType || (input as any).source?.type || rawConfig?.type || 'DIRECT';
+    const rawUrl = input.sourceUrl || (input as any).source?.url || rawConfig?.url;
+
     const { sanitizedType, sanitizedUrl, sanitizedConfig } = sanitizeSourceConfig(
-      input.sourceType || 'DIRECT',
-      input.sourceUrl,
-      input.sourceConfig
+      rawType,
+      rawUrl,
+      rawConfig
     );
     const sourceConfigStr = sanitizedConfig ? JSON.stringify(sanitizedConfig) : null;
     const mediaMetadataStr = input.mediaMetadata ? JSON.stringify(input.mediaMetadata) : null;
@@ -287,6 +291,26 @@ export class WatchPartyService {
         avatar: hostUser.avatar,
         role: 'HOST',
       });
+    }
+
+    // If the room is created with TORRENT source and has media but no magnetUri/url, trigger auto-torrent discovery!
+    if (sanitizedType === 'TORRENT' && !sanitizedUrl && (!sanitizedConfig || !sanitizedConfig.magnetUri)) {
+      if (input.mediaId) {
+        try {
+          const { torrentSessionManager } = await import('../torrentSearch/torrentSessionManager.ts');
+          torrentSessionManager.triggerAutoTorrent(
+            code,
+            hostUserId,
+            input.mediaId,
+            input.seasonNumber ?? null,
+            input.episodeNumber ?? null
+          ).catch((err) => {
+            console.error('[TORRENT-AUTO] Automatic trigger on room creation failed:', err);
+          });
+        } catch (_err) {
+          console.error('[TORRENT-AUTO] Failed to import torrentSessionManager for automatic room creation:', _err);
+        }
+      }
     }
 
     return formattedDto;
@@ -632,6 +656,12 @@ export class WatchPartyService {
       .where(eq(watchPartyRooms.id, roomDto.id))
       .returning();
 
+    // Clean up Torrent session and release any active references
+    try {
+      const { torrentSessionManager } = await import('../torrentSearch/torrentSessionManager.ts');
+      await torrentSessionManager.cancelSession(roomDto.code);
+    } catch (_err) {}
+
     roomManager.unregisterRoom(roomDto.code);
 
     const hostUser = await this.getHostUser(closedRecord.hostUserId);
@@ -869,6 +899,33 @@ export class WatchPartyService {
       })
       .where(eq(watchPartyRooms.id, roomDto.id))
       .returning();
+
+    // Clean up previous Torrent session and release any references
+    try {
+      const { torrentSessionManager } = await import('../torrentSearch/torrentSessionManager.ts');
+      await torrentSessionManager.cancelSession(roomDto.code);
+
+      // If the new source is TORRENT and either it has no magnet/url, or the episode/media changed:
+      if (sanitizedType === 'TORRENT' && (
+        !source.magnetUri || 
+        (mediaId !== undefined && mediaId !== roomDto.mediaId) || 
+        (seasonNumber !== undefined && seasonNumber !== roomDto.seasonNumber) || 
+        (episodeNumber !== undefined && episodeNumber !== roomDto.episodeNumber)
+      )) {
+        const finalMediaId = mediaId !== undefined && mediaId !== null ? mediaId : roomDto.mediaId;
+        if (finalMediaId) {
+          torrentSessionManager.triggerAutoTorrent(
+            roomDto.code,
+            hostUserId,
+            finalMediaId,
+            seasonNumber !== undefined ? seasonNumber : roomDto.seasonNumber,
+            episodeNumber !== undefined ? episodeNumber : roomDto.episodeNumber
+          ).catch((err) => {
+            console.error('[TORRENT-AUTO] Automatic episode transition trigger failed:', err);
+          });
+        }
+      }
+    } catch (_err) {}
 
     roomManager.setSource(roomDto.code, sanitizedConfig || source, mediaId, seasonNumber, episodeNumber);
 

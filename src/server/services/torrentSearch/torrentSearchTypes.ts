@@ -59,9 +59,18 @@ export interface TorrentCandidate {
 
 export type TorrentSearchStatus =
   | 'SUCCESS'
-  | 'METADATA_INCOMPLETE'
   | 'NO_RESULTS'
+  | 'NO_INDEXERS'
+  | 'NO_PLAYABLE_FILES'
+  | 'RESULTS_BUT_NO_PLAYABLE_FILE'
+  | 'TORRSERVER_UNAVAILABLE'
+  | 'TORRSERVER_LOAD_FAILED'
+  | 'STREAM_VALIDATION_FAILED'
   | 'PROWLARR_UNAVAILABLE'
+  | 'PROWLARR_AUTH_FAILED'
+  | 'INVALID_MEDIA_METADATA'
+  | 'METADATA_INCOMPLETE'
+  | 'SEARCH_ERROR'
   | 'ERROR';
 
 export interface TorrentSearchResult {
@@ -72,6 +81,7 @@ export interface TorrentSearchResult {
   totalFound: number;
   executionTimeMs: number;
   error?: string;
+  reason?: string;
 }
 
 export interface TorrServerStatus {

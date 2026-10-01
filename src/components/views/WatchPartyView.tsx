@@ -7,6 +7,9 @@ import { WatchPartyPlayer } from '../watch-party/WatchPartyPlayer.tsx';
 import { WatchPartyRoomInfo } from '../watch-party/WatchPartyRoomInfo.tsx';
 import { WatchPartyMemberList } from '../watch-party/WatchPartyMemberList.tsx';
 import { WatchPartyChat } from '../watch-party/WatchPartyChat.tsx';
+import { SourcePreparationScreen } from '../watch-party/SourcePreparationScreen.tsx';
+import { WatchSourcePicker } from '../watch-party/WatchSourcePicker.tsx';
+import { useToast } from '../../context/NotificationContext.tsx';
 import {
   MessageSquare,
   Users,
@@ -25,6 +28,8 @@ import {
   Check,
   Edit3,
   Download,
+  Copy,
+  X,
 } from 'lucide-react';
 import { MediaSourceConfig, WatchPartySourceType, TorrentMediaFile } from '../../types/watchParty.ts';
 import { validateAndParseMagnet } from '../../utils/magnetValidator.ts';
@@ -49,15 +54,40 @@ export const WatchPartyView: React.FC<WatchPartyViewProps> = ({ roomCode: propCo
     disconnect,
     clearError,
     hostChangeSource,
+    torrentState,
+    torrentFile,
+    torrentErrorCode,
+    torrentErrorMessage,
+    torrentFallbackCount,
+    torrentRetryCount,
+    hostTriggerAutoTorrent,
+    hostCancelAutoTorrent,
   } = useWatchParty();
 
   const activeCode = propCode || route.params?.code || route.params?.id || '';
+
+  const { showToast } = useToast();
+  const [copiedInvite, setCopiedInvite] = useState(false);
+  const [hideInviteBanner, setHideInviteBanner] = useState(false);
+
+  const handleCopyInviteLink = async () => {
+    try {
+      const inviteUrl = `${window.location.protocol}//${window.location.host}/watch/${room?.code || activeCode}`;
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopiedInvite(true);
+      showToast('Ссылка приглашения скопирована в буфер обмена!', 'success');
+      setTimeout(() => setCopiedInvite(false), 2000);
+    } catch (_e) {
+      showToast('Не удалось скопировать ссылку', 'error');
+    }
+  };
 
   const [passcode, setPasscode] = useState('');
   const [passcodeSubmitted, setPasscodeSubmitted] = useState(false);
   const [activeTab, setActiveTab] = useState<'chat' | 'members'>('chat');
 
   // Source change modal state for HOST
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [showSourceModal, setShowSourceModal] = useState(false);
   const [newSourceType, setNewSourceType] = useState<WatchPartySourceType>('DIRECT');
   const [newSourceUrl, setNewSourceUrl] = useState('');
@@ -139,6 +169,10 @@ export const WatchPartyView: React.FC<WatchPartyViewProps> = ({ roomCode: propCo
 
   // Open source modal prefilled with current room info
   const handleOpenSourceModal = () => {
+    if (room?.mediaId) {
+      setShowSourcePicker(true);
+      return;
+    }
     if (room) {
       setNewSourceType(room.sourceType || 'DIRECT');
       setNewSourceUrl(room.sourceUrl || room.sourceConfig?.url || '');
@@ -347,15 +381,67 @@ export const WatchPartyView: React.FC<WatchPartyViewProps> = ({ roomCode: propCo
       {/* Top Bar Header */}
       <WatchPartyHeader />
 
+      {/* Quick Invite Friends Banner when host is alone in the room */}
+      {isHost && members.length <= 1 && !hideInviteBanner && (
+        <div className="p-4 rounded-3xl bg-gradient-to-r from-[#11152A] via-[#0E1226] to-[#0B0D20] border border-[#1E2442] shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#7C3AED] to-[#6366F1] flex items-center justify-center text-white shrink-0 shadow-lg shadow-[#7C3AED]/20">
+              <Users className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-sm font-bold text-white tracking-tight">Пригласить друга</h4>
+              <p className="text-xs text-[#94A3B8] truncate font-mono mt-0.5">
+                {`${window.location.protocol}//${window.location.host}/watch/${room?.code || activeCode}`}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+            <button
+              type="button"
+              onClick={handleCopyInviteLink}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-md shadow-[#7C3AED]/20"
+            >
+              {copiedInvite ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
+              <span>{copiedInvite ? '✓ Ссылка скопирована' : 'Скопировать'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setHideInviteBanner(true)}
+              className="p-2 rounded-xl text-[#64748B] hover:text-white hover:bg-[#151932] transition-colors cursor-pointer"
+              title="Скрыть"
+              aria-label="Скрыть"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Grid: Player on Left, Side Panel (Chat & Members) on Right */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
         {/* Left Area: Content Info Card + Video Player + Host Quick Controls (8 cols on lg) */}
         <div className="lg:col-span-8 space-y-3">
           <WatchPartyRoomInfo />
-          <WatchPartyPlayer />
 
-          {/* Host Source Control Banner */}
-          {isHost && (
+          {torrentState && torrentState !== 'READY' ? (
+            <SourcePreparationScreen
+              torrentState={torrentState}
+              torrentFile={torrentFile}
+              torrentErrorMessage={torrentErrorMessage}
+              isHost={isHost}
+              onRetry={hostTriggerAutoTorrent}
+              onCancel={hostCancelAutoTorrent}
+              onOpenSourceModal={handleOpenSourceModal}
+              torrentFallbackCount={torrentFallbackCount}
+              torrentRetryCount={torrentRetryCount}
+            />
+          ) : (
+            <WatchPartyPlayer />
+          )}
+
+          {/* Source Control Banner */}
+          {isHost ? (
             <div className="p-3.5 rounded-2xl bg-[#0B0D20] border border-[#1E2442] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-xl bg-[#8B5CF6]/15 text-[#A78BFA] shrink-0">
@@ -368,19 +454,40 @@ export const WatchPartyView: React.FC<WatchPartyViewProps> = ({ roomCode: propCo
                       {room?.sourceType || 'DIRECT'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-[#94A3B8] truncate max-w-md">
-                    {room?.sourceUrl || 'Источник не настроен'}
+                  <p className="text-[11px] text-[#94A3B8] truncate max-w-xs sm:max-w-md">
+                    {room?.sourceConfig?.title || room?.sourceConfig?.fileName || room?.sourceUrl || 'Источник не настроен'}
                   </p>
                 </div>
               </div>
 
-              <button
-                onClick={handleOpenSourceModal}
-                className="px-3 py-2 rounded-xl bg-[#151932] hover:bg-[#8B5CF6]/20 border border-[#1E2442] hover:border-[#8B5CF6]/50 text-xs font-semibold text-[#A78BFA] hover:text-white transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                <span>Изменить медиа</span>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {room?.mediaId ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowSourcePicker(true)}
+                    className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:brightness-110 text-white font-bold text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Выбрать другой источник</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleOpenSourceModal}
+                    className="px-3 py-2 rounded-xl bg-[#151932] hover:bg-[#8B5CF6]/20 border border-[#1E2442] hover:border-[#8B5CF6]/50 text-xs font-semibold text-[#A78BFA] hover:text-white transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Изменить медиа</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="p-3 rounded-2xl bg-[#0B0D20] border border-[#1E2442] flex items-center justify-between text-xs text-[#94A3B8] shadow-sm">
+              <div className="flex items-center gap-2">
+                <Film className="w-4 h-4 text-[#8B5CF6]" />
+                <span>Источник видеопотока</span>
+              </div>
+              <span className="text-[11px] text-[#64748B] italic">Источник выбирает ведущий</span>
             </div>
           )}
         </div>
@@ -613,6 +720,28 @@ export const WatchPartyView: React.FC<WatchPartyViewProps> = ({ roomCode: propCo
             </form>
           </div>
         </div>
+      )}
+      {/* HOST Automatic Source Picker Modal */}
+      {showSourcePicker && room && (
+        <WatchSourcePicker
+          isOpen={showSourcePicker}
+          onClose={() => setShowSourcePicker(false)}
+          mediaId={room.mediaId || 0}
+          mediaTitle={room.title || 'Медиа'}
+          mediaType={room.mediaType || 'movie'}
+          seasonNumber={room.seasonNumber || undefined}
+          episodeNumber={room.episodeNumber || undefined}
+          mode="switch-source"
+          onSourceSelected={(config) => {
+            hostChangeSource(
+              config,
+              room.mediaId || undefined,
+              room.seasonNumber || undefined,
+              room.episodeNumber || undefined
+            );
+            setShowSourcePicker(false);
+          }}
+        />
       )}
     </div>
   );

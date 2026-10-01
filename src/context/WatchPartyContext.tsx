@@ -15,6 +15,7 @@ import {
   MediaSourceConfig,
   ServerToClientEvent,
   ClientToServerEvent,
+  TorrentSourceState,
 } from '../types/watchParty.ts';
 
 export type WatchPartyConnectionState =
@@ -39,6 +40,13 @@ interface WatchPartyContextType {
   kickedReason: string | null;
   roomClosedReason: string | null;
   syncNotification: string | null;
+  // Torrent State
+  torrentState: TorrentSourceState | null;
+  torrentFile: { name: string; index: number; path: string; sizeBytes?: number } | null;
+  torrentErrorCode: string | null;
+  torrentErrorMessage: string | null;
+  torrentFallbackCount: number;
+  torrentRetryCount: number;
   // Actions
   connect: (roomCode: string, passcode?: string) => void;
   disconnect: () => void;
@@ -46,6 +54,8 @@ interface WatchPartyContextType {
   hostPause: (position?: number) => void;
   hostSeek: (position: number) => void;
   hostChangeSource: (source: MediaSourceConfig, mediaId?: number, seasonNumber?: number, episodeNumber?: number) => void;
+  hostTriggerAutoTorrent: () => Promise<void>;
+  hostCancelAutoTorrent: () => Promise<void>;
   hostTransfer: (targetUserId: number) => void;
   hostKick: (targetUserId: number, ban?: boolean) => void;
   hostCloseRoom: () => void;
@@ -75,6 +85,14 @@ export const WatchPartyProvider: React.FC<{ children: ReactNode }> = ({ children
   const [kickedReason, setKickedReason] = useState<string | null>(null);
   const [roomClosedReason, setRoomClosedReason] = useState<string | null>(null);
   const [syncNotification, setSyncNotification] = useState<string | null>(null);
+
+  // Torrent tracking states
+  const [torrentState, setTorrentState] = useState<TorrentSourceState | null>(null);
+  const [torrentFile, setTorrentFile] = useState<{ name: string; index: number; path: string; sizeBytes?: number } | null>(null);
+  const [torrentErrorCode, setTorrentErrorCode] = useState<string | null>(null);
+  const [torrentErrorMessage, setTorrentErrorMessage] = useState<string | null>(null);
+  const [torrentFallbackCount, setTorrentFallbackCount] = useState<number>(0);
+  const [torrentRetryCount, setTorrentRetryCount] = useState<number>(0);
 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -175,6 +193,19 @@ export const WatchPartyProvider: React.FC<{ children: ReactNode }> = ({ children
                 setAuthoritativePlayback(data.authoritativePlayback);
                 setMembers(data.members || []);
                 loadChatHistory(data.room.code);
+
+                // Fetch initial torrent state if active
+                authFetch(`/api/watch-party/rooms/${data.room.code}/torrent-state`)
+                  .then((r) => r.json())
+                  .then((tsRes) => {
+                    if (tsRes.success && tsRes.session) {
+                      setTorrentState(tsRes.session.state);
+                      setTorrentFile(tsRes.session.selectedFile || null);
+                      setTorrentErrorCode(tsRes.session.errorCode || null);
+                      setTorrentErrorMessage(tsRes.session.errorMessage || null);
+                    }
+                  })
+                  .catch(() => {});
                 break;
 
               case 'PLAYBACK_UPDATE':
@@ -230,6 +261,32 @@ export const WatchPartyProvider: React.FC<{ children: ReactNode }> = ({ children
                       }
                     : null
                 );
+                // Reset torrent state upon source change
+                setTorrentState(null);
+                setTorrentFile(null);
+                setTorrentErrorCode(null);
+                setTorrentErrorMessage(null);
+                setTorrentFallbackCount(0);
+                setTorrentRetryCount(0);
+                break;
+
+              case 'TORRENT_STATE_UPDATE' as any: {
+                const update = data as any;
+                setTorrentState(update.state);
+                setTorrentFile(update.selectedFile || null);
+                setTorrentErrorCode(update.errorCode || null);
+                setTorrentErrorMessage(update.errorMessage || null);
+                setTorrentFallbackCount(update.fallbackCount || 0);
+                setTorrentRetryCount(update.retryCount || 0);
+                break;
+              }
+
+              case 'TORRENT_SOURCE_READY' as any:
+                setTorrentState('READY');
+                setTorrentErrorCode(null);
+                setTorrentErrorMessage(null);
+                setTorrentFallbackCount(0);
+                setTorrentRetryCount(0);
                 break;
 
               case 'CHAT_MESSAGE':
@@ -319,6 +376,15 @@ export const WatchPartyProvider: React.FC<{ children: ReactNode }> = ({ children
     setRoom(null);
     setMembers([]);
     setChatMessages([]);
+    setKickedReason(null);
+    setRoomClosedReason(null);
+    setError(null);
+    setTorrentState(null);
+    setTorrentFile(null);
+    setTorrentErrorCode(null);
+    setTorrentErrorMessage(null);
+    setTorrentFallbackCount(0);
+    setTorrentRetryCount(0);
   }, []);
 
   // HOST Controls
@@ -349,6 +415,36 @@ export const WatchPartyProvider: React.FC<{ children: ReactNode }> = ({ children
     },
     [sendWsEvent]
   );
+
+  const hostTriggerAutoTorrent = useCallback(async () => {
+    if (!room) return;
+    try {
+      const res = await authFetch(`/api/watch-party/rooms/${room.code}/auto-torrent`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Ошибка автозапуска торрента');
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Ошибка поиска торрента');
+    }
+  }, [room, authFetch]);
+
+  const hostCancelAutoTorrent = useCallback(async () => {
+    if (!room) return;
+    try {
+      const res = await authFetch(`/api/watch-party/rooms/${room.code}/cancel-torrent`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Ошибка отмены сессии поиска');
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Ошибка остановки сессии');
+    }
+  }, [room, authFetch]);
 
   const hostTransfer = useCallback(
     (targetUserId: number) => {
@@ -434,12 +530,20 @@ export const WatchPartyProvider: React.FC<{ children: ReactNode }> = ({ children
         kickedReason,
         roomClosedReason,
         syncNotification,
+        torrentState,
+        torrentFile,
+        torrentErrorCode,
+        torrentErrorMessage,
+        torrentFallbackCount,
+        torrentRetryCount,
         connect,
         disconnect,
         hostPlay,
         hostPause,
         hostSeek,
         hostChangeSource,
+        hostTriggerAutoTorrent,
+        hostCancelAutoTorrent,
         hostTransfer,
         hostKick,
         hostCloseRoom,

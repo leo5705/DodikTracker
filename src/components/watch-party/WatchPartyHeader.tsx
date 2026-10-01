@@ -15,16 +15,20 @@ import {
 import { useWatchParty } from '../../context/WatchPartyContext.tsx';
 import { useRouter } from '../../context/RouterContext.tsx';
 import { useShare } from '../../context/ShareContext.tsx';
+import { useToast } from '../../context/NotificationContext.tsx';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
+import { WatchSourcePicker } from './WatchSourcePicker.tsx';
 
 export const WatchPartyHeader: React.FC = () => {
-  const { room, isHost, members, hostCloseRoom, disconnect } = useWatchParty();
+  const { room, isHost, members, hostCloseRoom, disconnect, hostChangeSource } = useWatchParty();
   const { navigate, goBack } = useRouter();
   const { openShareModal } = useShare();
+  const { showToast } = useToast();
 
   const [copied, setCopied] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
 
   if (!room) return null;
 
@@ -32,19 +36,19 @@ export const WatchPartyHeader: React.FC = () => {
     try {
       await navigator.clipboard.writeText(room.code);
       setCopied(true);
+      showToast(`Код комнаты ${room.code} скопирован!`, 'success');
       setTimeout(() => setCopied(false), 2000);
-    } catch (_e) {}
+    } catch (_e) {
+      showToast('Не удалось скопировать код', 'error');
+    }
   };
 
-  const handleShare = () => {
-    if (room.mediaId) {
-      openShareModal({
-        id: room.mediaId,
-        title: `Совместный просмотр: ${room.title}`,
-        type: room.mediaType || 'movie',
-        posterUrl: room.mediaMetadata?.posterUrl || null,
-      });
-    } else {
+  const handleShare = async () => {
+    try {
+      const shareUrl = `${window.location.protocol}//${window.location.host}/watch/${room.code}`;
+      await navigator.clipboard.writeText(shareUrl);
+      showToast('Ссылка приглашения скопирована в буфер обмена!', 'success');
+    } catch (_err) {
       handleCopyCode();
     }
   };
@@ -146,7 +150,19 @@ export const WatchPartyHeader: React.FC = () => {
         </div>
 
         {/* Right Side: Quick Action Buttons */}
-        <div className="flex items-center gap-2 self-end md:self-center shrink-0">
+        <div className="flex items-center gap-2 self-end md:self-center shrink-0 flex-wrap">
+          {isHost && room.mediaId && (
+            <button
+              type="button"
+              onClick={() => setShowSourcePicker(true)}
+              className="px-3.5 py-2 rounded-xl bg-[#151932] hover:bg-[#8B5CF6]/20 border border-[#1E2442] hover:border-[#8B5CF6]/40 text-xs font-semibold text-[#A78BFA] hover:text-white inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Сменить источник или качество видеопотока"
+            >
+              <Sparkles className="w-4 h-4 text-[#A78BFA]" />
+              <span>Источник</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleShare}
@@ -180,6 +196,31 @@ export const WatchPartyHeader: React.FC = () => {
           )}
         </div>
       </header>
+
+      {/* Host Source Picker Modal */}
+      {showSourcePicker && room.mediaId && (
+        <WatchSourcePicker
+          isOpen={showSourcePicker}
+          onClose={() => setShowSourcePicker(false)}
+          mediaId={room.mediaId}
+          mediaTitle={room.title}
+          mediaType={room.mediaType || 'movie'}
+          posterUrl={room.mediaMetadata?.posterUrl}
+          seasonNumber={room.seasonNumber || undefined}
+          episodeNumber={room.episodeNumber || undefined}
+          mode="switch-source"
+          onSourceSelected={(newSource) => {
+            hostChangeSource(
+              newSource,
+              room.mediaId || undefined,
+              room.seasonNumber || undefined,
+              room.episodeNumber || undefined
+            );
+            showToast('Источник обновлён для всех участников комнаты', 'success');
+            setShowSourcePicker(false);
+          }}
+        />
+      )}
 
       {/* Confirm Close Modal (HOST) */}
       <ConfirmModal
