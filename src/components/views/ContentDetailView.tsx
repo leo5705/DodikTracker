@@ -40,6 +40,7 @@ import { ContentReviewsSection } from '../content/ContentReviewsSection.tsx';
 import { ContentSimilar } from '../content/ContentSimilar.tsx';
 import { ContentRatingModal } from '../content/ContentRatingModal.tsx';
 import { ContentReviewModal } from '../content/ContentReviewModal.tsx';
+import { CreateWatchPartyModal } from '../modals/CreateWatchPartyModal.tsx';
 import { AddToListModal } from '../modals/AddToListModal.tsx';
 import { ConfirmModal } from '../modals/ConfirmModal.tsx';
 import { AdultContentWarning } from '../common/AdultContentWarning.tsx';
@@ -77,6 +78,9 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [showAddToList, setShowAddToList] = useState(false);
+  const [showWatchPartyModal, setShowWatchPartyModal] = useState(false);
+  const [watchPartySeason, setWatchPartySeason] = useState<number | undefined>(undefined);
+  const [watchPartyEpisode, setWatchPartyEpisode] = useState<number | undefined>(undefined);
 
   // Watched episodes set
   const [watchedEpisodes, setWatchedEpisodes] = useState<Set<string>>(new Set());
@@ -599,6 +603,7 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
           setShowReviewModal(true);
         }}
         onOpenListModal={() => setShowAddToList(true)}
+        onOpenWatchPartyModal={() => setShowWatchPartyModal(true)}
         onOpenShareModal={() =>
           openShareModal(
             {
@@ -660,6 +665,11 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
               <ContentSeasonsEpisodes
                 seasons={contentItem.seasons}
                 onToggleEpisodeWatched={handleToggleEpisodeWatched}
+                onStartWatchParty={(sNum, epNum) => {
+                  setWatchPartySeason(sNum);
+                  setWatchPartyEpisode(epNum);
+                  setShowWatchPartyModal(true);
+                }}
                 watchedEpisodes={watchedEpisodes}
               />
             )}
@@ -822,6 +832,24 @@ export const ContentDetailView: React.FC<ContentDetailViewProps> = ({
           }}
           onClose={() => setShowAddToList(false)}
           onAdded={() => setShowAddToList(false)}
+        />
+      )}
+
+      {/* Create Watch Party Modal */}
+      {showWatchPartyModal && (
+        <CreateWatchPartyModal
+          isOpen={showWatchPartyModal}
+          onClose={() => {
+            setShowWatchPartyModal(false);
+            setWatchPartySeason(undefined);
+            setWatchPartyEpisode(undefined);
+          }}
+          mediaId={Number(contentItem.id || mediaId)}
+          mediaTitle={contentItem.title}
+          mediaType={contentItem.type}
+          posterUrl={contentItem.posterUrl}
+          seasonNumber={watchPartySeason}
+          episodeNumber={watchPartyEpisode}
         />
       )}
 

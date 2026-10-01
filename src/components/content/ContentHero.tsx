@@ -43,6 +43,7 @@ interface ContentHeroProps {
   onOpenReviewModal?: () => void;
   onOpenListModal?: () => void;
   onOpenShareModal?: () => void;
+  onOpenWatchPartyModal?: () => void;
   onRatingUpdated?: (newRating: number | null, newDodikData?: DodikRatingData) => void;
 }
 
@@ -56,6 +57,7 @@ export const ContentHero: React.FC<ContentHeroProps> = ({
   onOpenReviewModal,
   onOpenListModal,
   onOpenShareModal,
+  onOpenWatchPartyModal,
   onRatingUpdated,
 }) => {
   const { navigate } = useRouter();
@@ -357,6 +359,19 @@ export const ContentHero: React.FC<ContentHeroProps> = ({
 
           {/* 3. Action Buttons & CTAs */}
           <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-[#1E2442]">
+            {/* Совместный просмотр (Watch Party / Смотреть) */}
+            {onOpenWatchPartyModal && (
+              <button
+                type="button"
+                onClick={onOpenWatchPartyModal}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#8B5CF6]/25 to-[#6366F1]/25 hover:from-[#8B5CF6]/40 hover:to-[#6366F1]/40 text-white border border-[#8B5CF6]/60 text-xs font-bold inline-flex items-center gap-2 shadow-sm transition-all cursor-pointer"
+                title="Смотреть вместе с друзьями (Watch Party)"
+              >
+                <Play className="w-3.5 h-3.5 fill-[#A78BFA] text-[#A78BFA]" />
+                <span>Смотреть</span>
+              </button>
+            )}
+
             {/* Main CTA: «Изменить статус» (Dropdown) */}
             <div className="relative">
               <button

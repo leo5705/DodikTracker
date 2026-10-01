@@ -14,6 +14,7 @@ import { telegramBot } from './src/server/telegram.ts';
 import { initDbSettings } from './src/server/init.ts';
 import { startMessageCleanupCron } from './src/server/services/messageCleanup.ts';
 import { PUBLIC_UPLOADS_DIR, ensureUploadDirsExist } from './src/server/routes/upload.ts';
+import { watchPartyWsServer } from './src/server/services/watchParty/wsServer.ts';
 
 async function startServer() {
   ensureUploadDirsExist();
@@ -127,6 +128,31 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Handle WebSocket upgrade for Watch Party
+  httpServer.on('upgrade', async (req, socket, head) => {
+    try {
+      const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+      if (url.pathname === '/ws/watch-party') {
+        const user = await watchPartyWsServer.authenticateRequest(req);
+        if (!user) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+
+        watchPartyWsServer.getWss().handleUpgrade(req, socket, head, (ws: any) => {
+          ws.userId = user.id;
+          ws.username = user.username;
+          ws.avatar = user.avatar;
+          watchPartyWsServer.getWss().emit('connection', ws, req);
+        });
+      }
+    } catch (upgradeErr) {
+      console.warn('[Server] Watch Party WS Upgrade error:', upgradeErr);
+      socket.destroy();
+    }
+  });
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Dodik Tracker server running on http://0.0.0.0:${PORT}`);

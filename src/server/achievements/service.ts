@@ -1,5 +1,4 @@
-import { db } from '../../db/index.ts';
-import { Pool } from 'pg';
+import { db, pool } from '../../db/index.ts';
 import {
   achievements,
   userAchievements,
@@ -25,18 +24,9 @@ export class AchievementService {
    * Initializes PostgreSQL tables and seeds default achievements if empty.
    */
   async init(): Promise<void> {
-    const adminPool = new Pool({
-      host: process.env.SQL_HOST,
-      user: process.env.SQL_ADMIN_USER || process.env.SQL_USER,
-      password: process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD,
-      database: process.env.SQL_DB_NAME,
-      max: 2,
-      connectionTimeoutMillis: 10000,
-    });
-
     try {
       // 1. Ensure tables exist in PostgreSQL
-      await adminPool.query(`
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS achievements (
           id SERIAL PRIMARY KEY,
           slug TEXT NOT NULL UNIQUE,
@@ -97,13 +87,10 @@ export class AchievementService {
 
       // Grant permissions to the application user
       if (process.env.SQL_USER && process.env.SQL_USER !== (process.env.SQL_ADMIN_USER || '')) {
-        await adminPool.query(`
+        await pool.query(`
           GRANT ALL PRIVILEGES ON TABLE achievements, user_achievements, achievement_history TO "${process.env.SQL_USER}";
-          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "${process.env.SQL_USER}";
-        `);
+        `).catch(() => {});
       }
-
-      await adminPool.end();
 
       // 2. Seed initial achievements if table is empty
       const existing = await db.select({ id: achievements.id }).from(achievements).limit(1);
@@ -129,11 +116,6 @@ export class AchievementService {
       }
     } catch (err) {
       console.error('[Achievements] Init error:', err);
-      try {
-        await adminPool.end();
-      } catch {
-        // ignore
-      }
     }
   }
 

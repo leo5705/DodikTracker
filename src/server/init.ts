@@ -41,19 +41,30 @@ export async function initDbSettings() {
     const targetAdminEmail = process.env.INITIAL_ADMIN_EMAIL || process.env.ADMIN_EMAIL;
 
     if (targetAdminUsername) {
+      const cleanUsername = targetAdminUsername.trim().toLowerCase();
       await db
         .update(users)
-        .set({ role: 'SUPER_ADMIN' })
-        .where(eq(users.username, targetAdminUsername.trim().toLowerCase()))
+        .set({ role: 'SUPER_ADMIN', roles: '["user", "super_admin"]' })
+        .where(eq(users.username, cleanUsername))
         .catch(() => {});
     }
 
     if (targetAdminEmail) {
-      await db
-        .update(users)
-        .set({ role: 'SUPER_ADMIN' })
-        .where(eq(users.email, targetAdminEmail.trim().toLowerCase()))
-        .catch(() => {});
+      const cleanEmail = targetAdminEmail.trim().toLowerCase();
+      if (cleanEmail.includes('@')) {
+        await db
+          .update(users)
+          .set({ role: 'SUPER_ADMIN', roles: '["user", "super_admin"]' })
+          .where(eq(users.email, cleanEmail))
+          .catch(() => {});
+      } else {
+        // Fallback: if user provided username in INITIAL_ADMIN_EMAIL
+        await db
+          .update(users)
+          .set({ role: 'SUPER_ADMIN', roles: '["user", "super_admin"]' })
+          .where(eq(users.username, cleanEmail))
+          .catch(() => {});
+      }
     }
   } catch (err) {
     console.error('[Init] Failed to initialize DB settings:', err);

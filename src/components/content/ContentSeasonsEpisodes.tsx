@@ -5,12 +5,14 @@ import { ContentSeason, ContentSeasonEpisode } from '../../types/content.ts';
 interface ContentSeasonsEpisodesProps {
   seasons: ContentSeason[];
   onToggleEpisodeWatched?: (seasonNumber: number, episodeNumber: number, watched: boolean) => void;
+  onStartWatchParty?: (seasonNumber: number, episodeNumber: number) => void;
   watchedEpisodes?: Set<string>; // key: `${seasonNumber}-${episodeNumber}`
 }
 
 export const ContentSeasonsEpisodes: React.FC<ContentSeasonsEpisodesProps> = ({
   seasons,
   onToggleEpisodeWatched,
+  onStartWatchParty,
   watchedEpisodes = new Set(),
 }) => {
   const [selectedSeasonIdx, setSelectedSeasonIdx] = useState(0);
@@ -104,25 +106,38 @@ export const ContentSeasonsEpisodes: React.FC<ContentSeasonsEpisodesProps> = ({
                       {ep.title || `Серия ${ep.episodeNumber}`}
                     </h4>
 
-                    {onToggleEpisodeWatched && (
-                      <button
-                        onClick={() =>
-                          onToggleEpisodeWatched(
-                            currentSeason.seasonNumber,
-                            ep.episodeNumber,
-                            !isWatched
-                          )
-                        }
-                        className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all ${
-                          isWatched
-                            ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
-                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
-                        }`}
-                      >
-                        <CheckCircle2 className={`w-3.5 h-3.5 ${isWatched ? 'text-emerald-400' : ''}`} />
-                        <span>{isWatched ? 'Просмотрено' : 'Отметить'}</span>
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {onStartWatchParty && (
+                        <button
+                          onClick={() => onStartWatchParty(currentSeason.seasonNumber, ep.episodeNumber)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-800/40 text-purple-300 transition-all cursor-pointer"
+                          title="Смотреть вместе эту серию"
+                        >
+                          <Play className="w-3 h-3 fill-purple-300 text-purple-300" />
+                          <span>Смотреть</span>
+                        </button>
+                      )}
+
+                      {onToggleEpisodeWatched && (
+                        <button
+                          onClick={() =>
+                            onToggleEpisodeWatched(
+                              currentSeason.seasonNumber,
+                              ep.episodeNumber,
+                              !isWatched
+                            )
+                          }
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all cursor-pointer ${
+                            isWatched
+                              ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                          }`}
+                        >
+                          <CheckCircle2 className={`w-3.5 h-3.5 ${isWatched ? 'text-emerald-400' : ''}`} />
+                          <span>{isWatched ? 'Просмотрено' : 'Отметить'}</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Air date & Runtime badges */}

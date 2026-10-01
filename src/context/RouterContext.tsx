@@ -48,7 +48,8 @@ export interface RouteMatch {
     | 'game-developer-detail'
     | 'game-publishers'
     | 'game-publisher-detail'
-    | 'game-series-detail';
+    | 'game-series-detail'
+    | 'watch-party';
   params: Record<string, string>;
   pathname: string;
 }
@@ -76,6 +77,19 @@ export function parseRoute(rawPathname: string): RouteMatch {
     } catch {
       // ignore
     }
+  }
+
+  // Watch Party Routes: /watch/:code, /watch-party/:code, /watch, /watch-party
+  const watchPartyMatch = cleanPath.match(/^\/(?:watch|watch-party)\/([a-zA-Z0-9_.-]+)$/);
+  if (watchPartyMatch) {
+    return {
+      name: 'watch-party',
+      params: { ...queryParams, code: watchPartyMatch[1] },
+      pathname: cleanPath,
+    };
+  }
+  if (cleanPath === '/watch' || cleanPath === '/watch-party') {
+    return { name: 'watch-party', params: queryParams, pathname: cleanPath };
   }
 
   // Game Routes

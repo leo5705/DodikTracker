@@ -51,6 +51,8 @@ import { MusicPlaylistView } from './components/views/MusicPlaylistView.tsx';
 import { MusicPlaylistImportView } from './components/views/MusicPlaylistImportView.tsx';
 import { MusicSectionLayout } from './components/music/MusicSectionLayout.tsx';
 import { MusicPlayerProvider } from './context/MusicPlayerContext.tsx';
+import { WatchPartyProvider } from './context/WatchPartyContext.tsx';
+import { WatchPartyView } from './components/views/WatchPartyView.tsx';
 import { AuthGatekeeper } from './components/auth/AuthGatekeeper.tsx';
 import { ResetPasswordView } from './components/auth/ResetPasswordView.tsx';
 import { MiniMessenger } from './components/modals/MiniMessenger.tsx';
@@ -273,6 +275,9 @@ function MainApp() {
       case 'music-playlist':
         return <MusicSectionLayout><MusicPlaylistView key={route.params.id} id={route.params.id} /></MusicSectionLayout>;
 
+      case 'watch-party':
+        return <WatchPartyView key={route.params?.code || 'watch-party'} roomCode={route.params?.code} />;
+
       case 'notifications':
         return <NotificationCenterView onNavigate={navigate} />;
 
@@ -344,7 +349,9 @@ export default function App() {
         <NotificationWrapper>
           <ShareProvider>
             <MusicPlayerProvider>
-              <ErrorBoundary><MainApp /></ErrorBoundary>
+              <WatchPartyProvider>
+                <ErrorBoundary><MainApp /></ErrorBoundary>
+              </WatchPartyProvider>
             </MusicPlayerProvider>
           </ShareProvider>
         </NotificationWrapper>

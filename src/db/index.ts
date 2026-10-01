@@ -49,8 +49,8 @@ export const createPool = () => {
 
     if (resolvedHost && (process.env.SQL_USER || socketPath)) {
       // Cloud SQL instance (Unix Domain Socket or proxy host)
-      const user = process.env.SQL_USER || 'dodik_user';
-      const password = process.env.SQL_PASSWORD || 'Dodik_Password_2026!';
+      const user = process.env.SQL_ADMIN_USER || process.env.SQL_USER || 'ai_studio_admin';
+      const password = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD || 'r+/5CNdAXr/sCMiW';
       const database = process.env.SQL_DB_NAME || 'cloud_sql_development_database';
 
       poolConfig = {

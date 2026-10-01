@@ -1233,6 +1233,87 @@ export const musicTrackTransitions = pgTable('music_track_transitions', {
   unqTransition: uniqueIndex('music_track_transitions_from_to_unq').on(table.fromTrackId, table.toTrackId),
 }));
 
+// 57. Watch Party Rooms (Synchronous viewing sessions)
+export const watchPartyRooms = pgTable('watch_party_rooms', {
+  id: serial('id').primaryKey(),
+  code: text('code').notNull().unique(), // e.g. "wtch-8f2a9c" or random slug
+  title: text('title').notNull(),
+  mediaId: integer('media_id').references(() => media.id, { onDelete: 'set null' }),
+  mediaType: text('media_type').notNull().default('MOVIE'), // 'MOVIE' | 'TV' | 'ANIME' | etc.
+  seasonNumber: integer('season_number'),
+  episodeNumber: integer('episode_number'),
+  hostUserId: integer('host_user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  sourceType: text('source_type').notNull().default('DIRECT'), // 'DIRECT' | 'HLS' | 'YOUTUBE' | 'TORRENT'
+  sourceUrl: text('source_url'),
+  sourceConfig: text('source_config'), // JSON string: { subtitles, audioTracks, torrentMagnetOrUrl, ... }
+  mediaMetadata: text('media_metadata'), // JSON string: { title, posterUrl, year, description, ... }
+  status: text('status').notNull().default('ACTIVE'), // 'ACTIVE' | 'CLOSED'
+  privacy: text('privacy').notNull().default('PUBLIC'), // 'PUBLIC' | 'PRIVATE'
+  passcodeHash: text('passcode_hash'), // Safe bcrypt hash for private rooms, NEVER plain text
+  playbackState: text('playback_state').notNull().default('PAUSED'), // 'PLAYING' | 'PAUSED'
+  lastCurrentTime: doublePrecision('last_current_time').notNull().default(0),
+  lastDuration: doublePrecision('last_duration').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+  closedAt: timestamp('closed_at'),
+}, (table) => ({
+  codeIdx: uniqueIndex('watch_party_rooms_code_idx').on(table.code),
+  hostIdx: index('watch_party_rooms_host_idx').on(table.hostUserId),
+  statusIdx: index('watch_party_rooms_status_idx').on(table.status),
+  mediaIdx: index('watch_party_rooms_media_idx').on(table.mediaId),
+  createdAtIdx: index('watch_party_rooms_created_at_idx').on(table.createdAt),
+}));
+
+// 58. Watch Party Members
+export const watchPartyMembers = pgTable('watch_party_members', {
+  id: serial('id').primaryKey(),
+  roomId: integer('room_id').references(() => watchPartyRooms.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  role: text('role').notNull().default('MEMBER'), // 'HOST' | 'MEMBER'
+  isBanned: boolean('is_banned').notNull().default(false),
+  joinedAt: timestamp('joined_at').defaultNow(),
+  lastSeenAt: timestamp('last_seen_at').defaultNow(),
+  leftAt: timestamp('left_at'),
+}, (table) => ({
+  roomIdx: index('watch_party_members_room_idx').on(table.roomId),
+  userIdIdx: index('watch_party_members_user_idx').on(table.userId),
+  unqRoomMember: uniqueIndex('watch_party_members_room_user_unq').on(table.roomId, table.userId),
+}));
+
+// 59. Watch Party Messages (Chat & System events)
+export const watchPartyMessages = pgTable('watch_party_messages', {
+  id: serial('id').primaryKey(),
+  roomId: integer('room_id').references(() => watchPartyRooms.id, { onDelete: 'cascade' }).notNull(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  type: text('type').notNull().default('TEXT'), // 'TEXT' | 'SYSTEM' | 'ACTION'
+  content: text('content').notNull(),
+  playbackTimestamp: doublePrecision('playback_timestamp'), // Video offset timestamp when message was sent
+  metadata: text('metadata'), // JSON string for structured action payloads
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  roomIdx: index('watch_party_messages_room_idx').on(table.roomId),
+  userIdIdx: index('watch_party_messages_user_idx').on(table.userId),
+  createdAtIdx: index('watch_party_messages_created_at_idx').on(table.createdAt),
+}));
+
+export const watchPartyRoomsRelations = relations(watchPartyRooms, ({ one, many }) => ({
+  hostUser: one(users, { fields: [watchPartyRooms.hostUserId], references: [users.id] }),
+  media: one(media, { fields: [watchPartyRooms.mediaId], references: [media.id] }),
+  members: many(watchPartyMembers),
+  messages: many(watchPartyMessages),
+}));
+
+export const watchPartyMembersRelations = relations(watchPartyMembers, ({ one }) => ({
+  room: one(watchPartyRooms, { fields: [watchPartyMembers.roomId], references: [watchPartyRooms.id] }),
+  user: one(users, { fields: [watchPartyMembers.userId], references: [users.id] }),
+}));
+
+export const watchPartyMessagesRelations = relations(watchPartyMessages, ({ one }) => ({
+  room: one(watchPartyRooms, { fields: [watchPartyMessages.roomId], references: [watchPartyRooms.id] }),
+  user: one(users, { fields: [watchPartyMessages.userId], references: [users.id] }),
+}));
+
+
 
 
 
