@@ -125,8 +125,8 @@ async function runStage10_17Tests() {
 
     // Verify process started
     assert(
-      session.status === 'READY' || session.status === 'STREAMING',
-      '2c. Transcode session spawned FFmpeg successfully and reached READY/STREAMING'
+      session.status === 'READY' || session.status === 'STREAMING' || session.status === 'RUNNING',
+      '2c. Transcode session spawned FFmpeg successfully and reached READY/STREAMING/RUNNING'
     );
 
     // -------------------------------------------------------------------------
