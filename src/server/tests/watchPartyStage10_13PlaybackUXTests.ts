@@ -169,7 +169,7 @@ async function runStage10_13Tests() {
     // -------------------------------------------------------------------------
     // TEST 5: Buffering lifecycle does not trigger false fatal error
     // -------------------------------------------------------------------------
-    let isBufferingState: boolean = false;
+    let isBufferingState = false as boolean;
     let videoError: string | null = null;
 
     // Simulate waiting event

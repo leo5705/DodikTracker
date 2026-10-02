@@ -6,6 +6,18 @@
 import { BaseMediaSourceAdapter } from './MediaSourceAdapter.ts';
 import { WatchPartySourceType, MediaSourceConfig } from '../../types/watchParty.ts';
 
+function isMatchingMediaSrc(currentVideoSrc: string, targetUrl: string): boolean {
+  if (!currentVideoSrc || !targetUrl) return false;
+  if (currentVideoSrc === targetUrl) return true;
+  if (currentVideoSrc.endsWith(targetUrl)) return true;
+  try {
+    const fullTarget = typeof window !== 'undefined' ? new URL(targetUrl, window.location.href).href : targetUrl;
+    return currentVideoSrc === fullTarget;
+  } catch {
+    return false;
+  }
+}
+
 export class DirectMediaSourceAdapter extends BaseMediaSourceAdapter {
   readonly type: WatchPartySourceType = 'DIRECT';
 
@@ -25,7 +37,7 @@ export class DirectMediaSourceAdapter extends BaseMediaSourceAdapter {
     await super.attach(videoElement);
     if (!this.currentConfig?.url) return;
 
-    if (videoElement.src !== this.currentConfig.url) {
+    if (!isMatchingMediaSrc(videoElement.src, this.currentConfig.url)) {
       videoElement.src = this.currentConfig.url;
       videoElement.load();
     }

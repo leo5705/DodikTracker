@@ -27,6 +27,8 @@ interface WatchPartyControlsProps {
   onToggleMute: () => void;
   onToggleFullscreen: () => void;
   onForceSyncAll?: () => void;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
 }
 
 export function formatSecondsToTime(seconds: number): string {
@@ -54,6 +56,8 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
   onToggleMute,
   onToggleFullscreen,
   onForceSyncAll,
+  onInteractionStart,
+  onInteractionEnd,
 }) => {
   const { isHost, authoritativePlayback, requestSync, forceSyncAll } = useWatchParty();
   const [syncFeedback, setSyncFeedback] = useState(false);
@@ -91,6 +95,7 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
 
+    onInteractionStart?.();
     const targetTime = getTimeFromPointer(e);
     setIsDragging(true);
     setDragTime(targetTime);
@@ -116,6 +121,7 @@ export const WatchPartyControls: React.FC<WatchPartyControlsProps> = ({
       const targetTime = getTimeFromPointer(e);
       setIsDragging(false);
       onSeek(targetTime);
+      onInteractionEnd?.();
     }
   };
 

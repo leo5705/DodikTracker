@@ -31,6 +31,18 @@ const DEFAULT_WEBRTC_TRACKERS = [
 
 const METADATA_TIMEOUT_MS = 60000; // 60s timeout
 
+function isMatchingMediaSrc(currentVideoSrc: string, targetUrl: string): boolean {
+  if (!currentVideoSrc || !targetUrl) return false;
+  if (currentVideoSrc === targetUrl) return true;
+  if (currentVideoSrc.endsWith(targetUrl)) return true;
+  try {
+    const fullTarget = typeof window !== 'undefined' ? new URL(targetUrl, window.location.href).href : targetUrl;
+    return currentVideoSrc === fullTarget;
+  } catch {
+    return false;
+  }
+}
+
 export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
   readonly type: WatchPartySourceType = 'TORRENT';
 
@@ -88,7 +100,7 @@ export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
 
       this.setState('READY');
       if (this.attachedVideo) {
-        if (!this.attachedVideo.src.endsWith(streamUrl) && this.attachedVideo.src !== streamUrl) {
+        if (!isMatchingMediaSrc(this.attachedVideo.src, streamUrl)) {
           this.attachedVideo.src = streamUrl;
           this.attachedVideo.load();
         }
@@ -358,8 +370,8 @@ export class TorrentMediaSourceAdapter extends BaseMediaSourceAdapter {
     videoElement.addEventListener('durationchange', this.handleDurationChange);
 
     const isHttpStream = this.currentConfig?.url && (this.currentConfig.url.startsWith('http://') || this.currentConfig.url.startsWith('https://') || this.currentConfig.url.startsWith('/'));
-    if (isHttpStream) {
-      if (videoElement.src !== this.currentConfig.url) {
+    if (isHttpStream && this.currentConfig?.url) {
+      if (!isMatchingMediaSrc(videoElement.src, this.currentConfig.url)) {
         videoElement.src = this.currentConfig.url;
         videoElement.load();
       }

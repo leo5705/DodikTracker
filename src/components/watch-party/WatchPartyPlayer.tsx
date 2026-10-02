@@ -16,6 +16,18 @@ import {
 import { parseVideo } from '../../utils/videoUtils.ts';
 import { validateAndParseMagnet } from '../../utils/magnetValidator.ts';
 
+function isMatchingMediaSrc(currentVideoSrc: string, targetUrl: string): boolean {
+  if (!currentVideoSrc || !targetUrl) return false;
+  if (currentVideoSrc === targetUrl) return true;
+  if (currentVideoSrc.endsWith(targetUrl)) return true;
+  try {
+    const fullTarget = typeof window !== 'undefined' ? new URL(targetUrl, window.location.href).href : targetUrl;
+    return currentVideoSrc === fullTarget;
+  } catch {
+    return false;
+  }
+}
+
 export const WatchPartyPlayer: React.FC = () => {
   const {
     room,
@@ -39,7 +51,15 @@ export const WatchPartyPlayer: React.FC = () => {
   const wasPlayingBeforeSeekRef = useRef<boolean>(false);
   const stallTimerRef = useRef<NodeJS.Timeout | null>(null);
   const playGenerationRef = useRef<number>(0);
+  const playRequestPendingRef = useRef<boolean>(false);
+  const isBufferingRef = useRef<boolean>(false);
+  const lastUserSeekTimestampRef = useRef<number>(0);
+  const lastAssignedSrcRef = useRef<string | null>(null);
+
+  // Controls auto-hide & interaction locks
   const hideControlsTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isHoveringControlsRef = useRef<boolean>(false);
+  const isInteractingWithControlsRef = useRef<boolean>(false);
 
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
@@ -105,14 +125,26 @@ export const WatchPartyPlayer: React.FC = () => {
     return target;
   }, [authoritativePlayback, duration]);
 
-  // 3. Resilient Playback Initiator (Tokenized generation prevents play/load race conditions)
-  const safePlay = useCallback(() => {
+  // Keep stable refs for async callbacks to prevent adapter re-instantiation
+  const calculateTargetPositionRef = useRef(calculateTargetPosition);
+  calculateTargetPositionRef.current = calculateTargetPosition;
+
+  const authoritativePlaybackRef = useRef(authoritativePlayback);
+  authoritativePlaybackRef.current = authoritativePlayback;
+
+  // 3. Centralized Play Coordinator: requestPlaybackStart(reason)
+  const requestPlaybackStart = useCallback((reason: string) => {
     const video = videoRef.current;
     if (!video || isYouTube || isSeekingRef.current) return;
-    if (authoritativePlayback.state !== 'PLAYING') return;
+    if (authoritativePlaybackRef.current.state !== 'PLAYING') return;
+    if (playRequestPendingRef.current) return;
+    if (!video.paused) return; // already playing
+    if (!streamSrc && !sourceUrl && !sourceConfig.magnetUri && !sourceConfig.infoHash) return;
+
+    playRequestPendingRef.current = true;
+    console.log(`[WatchPartyPlayer] PLAY_REQUEST (${reason})`);
 
     const curGen = ++playGenerationRef.current;
-    // Enforce current audio settings
     video.volume = volume;
     video.muted = isMuted;
 
@@ -120,22 +152,30 @@ export const WatchPartyPlayer: React.FC = () => {
     if (playPromise !== undefined) {
       playPromise
         .then(() => {
+          playRequestPendingRef.current = false;
           if (curGen !== playGenerationRef.current) return;
           setIsBuffering(false);
+          isBufferingRef.current = false;
+          console.log(`[WatchPartyPlayer] PLAY_STARTED (${reason})`);
         })
         .catch((err) => {
+          playRequestPendingRef.current = false;
           if (curGen !== playGenerationRef.current) return;
           if (err.name === 'NotAllowedError') {
-            // Autoplay blocked by browser policy without user gesture
             console.warn('[WatchPartyPlayer] Autoplay with sound prevented by browser policy');
           } else if (err.name === 'AbortError') {
-            // Normal abort due to quick pause or src switch - safely ignore
+            // Normal abort due to pause or quick switch
           } else {
-            console.warn('[WatchPartyPlayer] Playback attempt error:', err);
+            console.warn('[WatchPartyPlayer] Play attempt error:', err);
           }
         });
+    } else {
+      playRequestPendingRef.current = false;
     }
-  }, [authoritativePlayback.state, isYouTube, volume, isMuted]);
+  }, [isYouTube, volume, isMuted, streamSrc, sourceUrl, sourceConfig.magnetUri, sourceConfig.infoHash]);
+
+  const requestPlaybackStartRef = useRef(requestPlaybackStart);
+  requestPlaybackStartRef.current = requestPlaybackStart;
 
   // 4. Authoritative Play / Pause Synchronization
   useEffect(() => {
@@ -144,16 +184,17 @@ export const WatchPartyPlayer: React.FC = () => {
 
     if (authoritativePlayback.state === 'PLAYING') {
       if (video.paused && torrentState !== 'FETCHING_METADATA' && torrentState !== 'CONNECTING_PEERS') {
-        safePlay();
+        requestPlaybackStart('AUTHORITATIVE_PLAY');
       }
     } else if (authoritativePlayback.state === 'PAUSED') {
+      playRequestPendingRef.current = false;
       if (!video.paused) {
         video.pause();
       }
     }
-  }, [authoritativePlayback.state, isYouTube, torrentState, safePlay]);
+  }, [authoritativePlayback.state, isYouTube, torrentState, requestPlaybackStart]);
 
-  // 5. Audio Settings Synchronization
+  // 5. Audio Settings Synchronization & Diagnostics
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
@@ -162,16 +203,28 @@ export const WatchPartyPlayer: React.FC = () => {
     }
   }, [volume, isMuted]);
 
-  // 6. Drift Correction & Controlled Seek
+  // 6. Drift Correction & Controlled Seek with BUFFERING & SEEK PROTECTION
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || isYouTube || isSeekingRef.current || torrentState === 'FETCHING_METADATA') return;
+    if (!video || isYouTube || torrentState === 'FETCHING_METADATA') return;
+
+    const isBufferingActive = isBuffering || isBufferingRef.current || video.readyState < 3;
+    const isUserSeeking = isSeekingRef.current || video.seeking || (Date.now() - lastUserSeekTimestampRef.current < 1500);
 
     const targetPos = calculateTargetPosition();
     const currentLocal = video.currentTime;
     const drift = currentLocal - targetPos; // negative = lag, positive = ahead
 
-    // Severe Lag (> 2.5s) -> Hard Seek
+    // CRITICAL STAGE 10.15: If player is actively buffering or seeking, DO NOT hard seek!
+    if (isBufferingActive || isUserSeeking) {
+      if (Math.abs(drift) >= 2.5) {
+        console.log('[WatchPartyPlayer] DRIFT_SKIPPED_BUFFERING', { drift: drift.toFixed(2), isBuffering: isBufferingActive, isSeeking: isUserSeeking });
+      }
+      video.playbackRate = 1.0;
+      return;
+    }
+
+    // Severe Lag (> 2.5s) -> Hard Seek (ONLY when NOT buffering and NOT seeking!)
     if (Math.abs(drift) >= 2.5) {
       isApplyingRemoteSyncRef.current = true;
       video.currentTime = Math.max(0, targetPos);
@@ -192,9 +245,9 @@ export const WatchPartyPlayer: React.FC = () => {
     else {
       video.playbackRate = 1.0;
     }
-  }, [authoritativePlayback.position, authoritativePlayback.serverTimestamp, isYouTube, torrentState, calculateTargetPosition]);
+  }, [authoritativePlayback.position, authoritativePlayback.serverTimestamp, authoritativePlayback.state, isYouTube, torrentState, isBuffering, calculateTargetPosition]);
 
-  // 7. Stable MediaSourceAdapter Loader & Lifecycle
+  // 7. Single Source Assignment & Stable MediaSourceAdapter Lifecycle
   const stableSourceKey = `${sourceType}:${sourceConfig.infoHash || sourceConfig.url || sourceUrl}:${sourceConfig.torrentFileIndex ?? 0}`;
 
   const initMediaAdapter = useCallback(async () => {
@@ -211,9 +264,14 @@ export const WatchPartyPlayer: React.FC = () => {
         onFilesDiscovered: (files) => setDiscoveredFiles(files),
         onBuffering: (buffering) => {
           setIsBuffering(buffering);
+          isBufferingRef.current = buffering;
+          if (buffering) {
+            console.log('[WatchPartyPlayer] BUFFERING_START');
+          } else {
+            console.log('[WatchPartyPlayer] BUFFERING_END');
+          }
         },
         onError: (err) => {
-          // If we have an active HTTP stream URL, don't immediately treat minor buffering/network hiccups as fatal
           if (!streamSrc) {
             setVideoError(err);
           }
@@ -221,19 +279,21 @@ export const WatchPartyPlayer: React.FC = () => {
         onDurationChange: (dur) => setDuration(dur),
         onReady: (elem) => {
           if (elem) {
-            const target = calculateTargetPosition();
+            const target = calculateTargetPositionRef.current();
             if (target > 0) elem.currentTime = target;
-            if (authoritativePlayback.state === 'PLAYING') {
-              safePlay();
+            if (authoritativePlaybackRef.current.state === 'PLAYING') {
+              requestPlaybackStartRef.current('ADAPTER_READY');
             }
           }
         },
       });
 
       adapterRef.current = adapter;
+      const targetLoadUrl = streamSrc || sourceConfig.url;
+
       await adapter.load({
         ...sourceConfig,
-        url: streamSrc || sourceConfig.url,
+        url: targetLoadUrl,
       });
 
       if (videoRef.current && !isYouTube) {
@@ -245,7 +305,7 @@ export const WatchPartyPlayer: React.FC = () => {
         setVideoError(err?.message || 'Не удалось инициализировать источник медиа');
       }
     }
-  }, [sourceType, stableSourceKey, streamSrc, isYouTube, calculateTargetPosition, authoritativePlayback.state, safePlay]);
+  }, [sourceType, stableSourceKey, streamSrc, isYouTube, sourceConfig, sourceUrl]);
 
   useEffect(() => {
     initMediaAdapter();
@@ -259,12 +319,12 @@ export const WatchPartyPlayer: React.FC = () => {
   // 8. Fullscreen API synchronization listener
   useEffect(() => {
     const handleFullscreenChange = () => {
-      const isCurrentlyFs = Boolean(
+      const currentFsElem =
         document.fullscreenElement ||
         (document as any).webkitFullscreenElement ||
         (document as any).mozFullScreenElement ||
-        (document as any).msFullscreenElement
-      );
+        (document as any).msFullscreenElement;
+      const isCurrentlyFs = Boolean(currentFsElem && currentFsElem === playerContainerRef.current);
       setIsFullscreen(isCurrentlyFs);
       if (!isCurrentlyFs) {
         setShowControlsInFullscreen(true);
@@ -284,20 +344,28 @@ export const WatchPartyPlayer: React.FC = () => {
     };
   }, []);
 
-  // 9. Auto-hide controls in fullscreen after inactivity
-  const handlePlayerMouseMove = () => {
-    if (!isFullscreen) return;
-    setShowControlsInFullscreen(true);
-
+  // 9. Auto-hide controls in fullscreen after inactivity (protected against active hover & drag interactions)
+  const resetHideControlsTimer = useCallback(() => {
     if (hideControlsTimerRef.current) {
       clearTimeout(hideControlsTimerRef.current);
+      hideControlsTimerRef.current = null;
     }
+    setShowControlsInFullscreen(true);
 
-    if (authoritativePlayback.state === 'PLAYING') {
+    if (isFullscreen && authoritativePlayback.state === 'PLAYING') {
+      if (isHoveringControlsRef.current || isInteractingWithControlsRef.current) {
+        return;
+      }
       hideControlsTimerRef.current = setTimeout(() => {
-        setShowControlsInFullscreen(false);
+        if (!isHoveringControlsRef.current && !isInteractingWithControlsRef.current) {
+          setShowControlsInFullscreen(false);
+        }
       }, 3500);
     }
+  }, [isFullscreen, authoritativePlayback.state]);
+
+  const handlePlayerMouseMove = () => {
+    resetHideControlsTimer();
   };
 
   // 10. Local HTML5 Video Event Listeners
@@ -320,7 +388,7 @@ export const WatchPartyPlayer: React.FC = () => {
     setDuration(dur);
     setVideoError(null);
 
-    // Enforce audio sync
+    // Audio & media diagnostics
     video.volume = volume;
     video.muted = isMuted;
 
@@ -331,15 +399,16 @@ export const WatchPartyPlayer: React.FC = () => {
     }
 
     if (authoritativePlayback.state === 'PLAYING' && video.paused) {
-      safePlay();
+      requestPlaybackStart('LOADED_METADATA');
     }
   };
 
   const handleWaiting = () => {
     setIsBuffering(true);
+    isBufferingRef.current = true;
+    console.log('[WatchPartyPlayer] BUFFERING_START');
     sendProgress(currentTime, duration, true);
 
-    // Prolonged buffering check: log diagnostic without marking fatal error
     if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
     stallTimerRef.current = setTimeout(() => {
       const video = videoRef.current;
@@ -351,6 +420,8 @@ export const WatchPartyPlayer: React.FC = () => {
 
   const handlePlaying = () => {
     setIsBuffering(false);
+    isBufferingRef.current = false;
+    console.log('[WatchPartyPlayer] BUFFERING_END');
     if (stallTimerRef.current) {
       clearTimeout(stallTimerRef.current);
       stallTimerRef.current = null;
@@ -359,6 +430,7 @@ export const WatchPartyPlayer: React.FC = () => {
 
   const handleCanPlay = () => {
     setIsBuffering(false);
+    isBufferingRef.current = false;
     if (stallTimerRef.current) {
       clearTimeout(stallTimerRef.current);
       stallTimerRef.current = null;
@@ -368,19 +440,20 @@ export const WatchPartyPlayer: React.FC = () => {
       video.volume = volume;
       video.muted = isMuted;
       if (authoritativePlayback.state === 'PLAYING' && video.paused) {
-        safePlay();
+        requestPlaybackStart('CAN_PLAY');
       }
     }
   };
 
   const handleSeeked = () => {
     setIsBuffering(false);
+    isBufferingRef.current = false;
     isSeekingRef.current = false;
     const video = videoRef.current;
     if (video) {
       setCurrentTime(video.currentTime);
       if (wasPlayingBeforeSeekRef.current && video.paused && authoritativePlayback.state === 'PLAYING') {
-        safePlay();
+        requestPlaybackStart('SEEKED');
       }
     }
   };
@@ -400,11 +473,13 @@ export const WatchPartyPlayer: React.FC = () => {
   // Dedicated Seek Handler
   const handleSeek = (seconds: number) => {
     if (!isHost) return;
+    lastUserSeekTimestampRef.current = Date.now();
     const video = videoRef.current;
     if (video) {
       wasPlayingBeforeSeekRef.current = !video.paused;
       isSeekingRef.current = true;
       setIsBuffering(true);
+      isBufferingRef.current = true;
       video.currentTime = seconds;
       setCurrentTime(seconds);
     }
@@ -446,7 +521,14 @@ export const WatchPartyPlayer: React.FC = () => {
     const container = playerContainerRef.current;
     if (!container) return;
 
-    if (!document.fullscreenElement) {
+    const isFs = Boolean(
+      document.fullscreenElement ||
+      (document as any).webkitFullscreenElement ||
+      (document as any).mozFullScreenElement ||
+      (document as any).msFullscreenElement
+    );
+
+    if (!isFs) {
       if (container.requestFullscreen) {
         container.requestFullscreen().catch(() => {});
       } else if ((container as any).webkitRequestFullscreen) {
@@ -456,8 +538,6 @@ export const WatchPartyPlayer: React.FC = () => {
       } else if ((container as any).msRequestFullscreen) {
         (container as any).msRequestFullscreen();
       }
-      setIsFullscreen(true);
-      setShowControlsInFullscreen(true);
     } else {
       if (document.exitFullscreen) {
         document.exitFullscreen().catch(() => {});
@@ -468,8 +548,6 @@ export const WatchPartyPlayer: React.FC = () => {
       } else if ((document as any).msExitFullscreen) {
         (document as any).msExitFullscreen();
       }
-      setIsFullscreen(false);
-      setShowControlsInFullscreen(true);
     }
   };
 
@@ -518,7 +596,7 @@ export const WatchPartyPlayer: React.FC = () => {
     <div
       ref={playerContainerRef}
       onMouseMove={handlePlayerMouseMove}
-      className={`relative flex flex-col ${
+      className={`watch-party-fullscreen-container relative flex flex-col ${
         isFullscreen
           ? 'w-full h-full bg-black justify-center items-center overflow-hidden'
           : 'space-y-3'
@@ -544,7 +622,6 @@ export const WatchPartyPlayer: React.FC = () => {
         ) : streamSrc || isTorrent ? (
           <video
             ref={videoRef}
-            src={streamSrc}
             poster={room?.mediaMetadata?.posterUrl || undefined}
             playsInline
             muted={isMuted}
@@ -601,6 +678,14 @@ export const WatchPartyPlayer: React.FC = () => {
       {/* Media Player Controls Overlay (Fullscreen or Standard Inline) */}
       {isFullscreen ? (
         <div
+          onMouseEnter={() => {
+            isHoveringControlsRef.current = true;
+            setShowControlsInFullscreen(true);
+          }}
+          onMouseLeave={() => {
+            isHoveringControlsRef.current = false;
+            resetHideControlsTimer();
+          }}
           className={`absolute bottom-0 left-0 right-0 p-4 md:p-6 z-30 transition-all duration-300 pointer-events-auto bg-gradient-to-t from-black/95 via-black/60 to-transparent ${
             showControlsInFullscreen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'
           }`}
@@ -617,6 +702,14 @@ export const WatchPartyPlayer: React.FC = () => {
             onToggleMute={handleToggleMute}
             onToggleFullscreen={handleToggleFullscreen}
             onForceSyncAll={handleForceSyncAll}
+            onInteractionStart={() => {
+              isInteractingWithControlsRef.current = true;
+              setShowControlsInFullscreen(true);
+            }}
+            onInteractionEnd={() => {
+              isInteractingWithControlsRef.current = false;
+              resetHideControlsTimer();
+            }}
           />
         </div>
       ) : (
