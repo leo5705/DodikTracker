@@ -14,6 +14,7 @@ import { torrentCache } from '../services/torrentSearch/torrentCache.ts';
 import { torrServerClient } from '../services/torrentSearch/torrServerClient.ts';
 import { watchPartyWsServer } from '../services/watchParty/wsServer.ts';
 import { audioTranscodeManager } from '../services/watchParty/audioTranscodeManager.ts';
+import { mediaRouteManager } from '../services/watchParty/mediaRouteManager.ts';
 
 export const watchPartyRouter = Router();
 
@@ -682,44 +683,44 @@ async function proxyTorrServerStream(
   // transcode audio to AAC on the fly while strictly copying video (-c:v copy).
   // If audio is already natively supported (AAC, MP3, Opus), stream directly.
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // STAGE 10.21: STABLE MEDIA ROUTING (ONE SOURCE -> ONE MEDIA ROUTE)
+  // Routing decision is resolved once and remains strictly immutable.
+  // Probing never silently falls back to DIRECT_STREAM on timeout; returns 503 PENDING.
+  // ---------------------------------------------------------------------------
   const forceDirect = req.query.direct === '1' || req.query.forceDirect === '1';
-  if (!forceDirect) {
-    let codecInfo = audioTranscodeManager.getCachedCodec(hashStr, targetIndex);
-    if (!codecInfo) {
-      try {
-        const { mediaDiagnosticService } = await import('../services/torrentSearch/mediaDiagnosticService.ts');
-        const probeReport = await mediaDiagnosticService.probeMedia(targetStreamUrl, 6000);
-        const primaryAudio = probeReport.audio;
-        const codec = primaryAudio?.codec || 'none';
-        const nativeSupport = primaryAudio ? primaryAudio.browserNativeSupport === 'NATIVE' : true;
-        codecInfo = { codec, nativeSupport };
-        audioTranscodeManager.setCachedCodec(hashStr, targetIndex, codec, nativeSupport);
+  const startSeconds = req.query.ss ? parseFloat(String(req.query.ss)) : 0;
+  const audioTrackIndex = req.query.audioTrack !== undefined ? Number(req.query.audioTrack) : undefined;
 
-        console.log(`[WATCH_DIAG] Probe: container=${probeReport.container}, video=${probeReport.video?.codec} (${probeReport.video?.width}x${probeReport.video?.height} @ ${probeReport.video?.fps || '?'}fps), audio=${codec} (${primaryAudio?.channels || 0}ch @ ${primaryAudio?.sampleRate || 0}Hz), subs=${probeReport.subtitleTracksCount} (languages: ${probeReport.subtitles.map((s) => s.language || s.codec).join(', ') || 'none'}), browserNativeAudio=${nativeSupport ? 'YES' : 'NO'}`);
-      } catch (_probeErr: any) {
-        console.log(`[WATCH_DIAG] Probe timed out or failed: ${_probeErr.message}, falling back to direct stream`);
-        // Fallback to direct stream if probe times out/fails
-        codecInfo = { codec: 'unknown', nativeSupport: true };
-      }
-    }
+  const routeResolution = await mediaRouteManager.resolveRoute(hashStr, targetIndex, targetStreamUrl, {
+    forceDirect,
+    waitTimeoutMs: 4500,
+  });
 
-    console.log(`[WATCH_DIAG] Routing decision: ${!codecInfo.nativeSupport && codecInfo.codec !== 'none' ? 'AAC_TRANSCODE' : 'DIRECT_STREAM'} (codec: ${codecInfo.codec})`);
-
-    // If audio is NOT natively supported by modern browsers (e.g. AC-3, E-AC-3, DTS, TrueHD)
-    if (!codecInfo.nativeSupport && codecInfo.codec !== 'none') {
-      const startSeconds = req.query.ss ? parseFloat(String(req.query.ss)) : 0;
-      const audioTrackIndex = req.query.audioTrack !== undefined ? Number(req.query.audioTrack) : undefined;
-
-      return await audioTranscodeManager.handleTranscodeRequest(req, res, {
-        infoHash: hashStr,
-        fileIndex: targetIndex,
-        sourceStreamUrl: targetStreamUrl,
-        audioCodec: codecInfo.codec,
-        audioTrackIndex,
-        startOffsetSeconds: isNaN(startSeconds) ? 0 : startSeconds,
-        resolvedFileName,
+  if (routeResolution.status === 'PENDING') {
+    if (!res.headersSent) {
+      res.status(503).setHeader('Retry-After', String(routeResolution.retryAfter || 1)).json({
+        error: 'Диагностика медиа-потока выполняется. Пожалуйста, подождите...',
+        code: 'MEDIA_DIAGNOSTIC_PENDING',
+        retryAfter: routeResolution.retryAfter || 1,
       });
     }
+    return;
+  }
+
+  console.log(`[WATCH_DIAG] Routing decision: ${routeResolution.route === 'TRANSCODE' ? 'AAC_TRANSCODE' : 'DIRECT_STREAM'} (codec: ${routeResolution.codec || 'none'})`);
+
+  // If audio requires transcoding: route to persistent spool transcode
+  if (routeResolution.route === 'TRANSCODE') {
+    return await audioTranscodeManager.handleTranscodeRequest(req, res, {
+      infoHash: hashStr,
+      fileIndex: targetIndex,
+      sourceStreamUrl: targetStreamUrl,
+      audioCodec: routeResolution.codec || 'ac3',
+      audioTrackIndex,
+      startOffsetSeconds: isNaN(startSeconds) ? 0 : startSeconds,
+      resolvedFileName,
+    });
   }
 
   res.status(torrRes.status);
