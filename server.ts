@@ -170,4 +170,20 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
+process.on('SIGTERM', async () => {
+  try {
+    const { audioTranscodeManager } = await import('./src/server/services/watchParty/audioTranscodeManager.ts');
+    await audioTranscodeManager.shutdown();
+  } catch (_e) {}
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  try {
+    const { audioTranscodeManager } = await import('./src/server/services/watchParty/audioTranscodeManager.ts');
+    await audioTranscodeManager.shutdown();
+  } catch (_e) {}
+  process.exit(0);
+});
+
 startServer();

@@ -13,6 +13,7 @@ import { torrentSessionManager } from '../services/torrentSearch/torrentSessionM
 import { torrentCache } from '../services/torrentSearch/torrentCache.ts';
 import { torrServerClient } from '../services/torrentSearch/torrServerClient.ts';
 import { watchPartyWsServer } from '../services/watchParty/wsServer.ts';
+import { audioTranscodeManager } from '../services/watchParty/audioTranscodeManager.ts';
 
 export const watchPartyRouter = Router();
 
@@ -670,6 +671,47 @@ async function proxyTorrServerStream(
     return;
   }
 
+  // ---------------------------------------------------------------------------
+  // STAGE 10.17: AUDIO COMPATIBILITY LAYER & AAC TRANSCODING
+  // If the audio track is encoded with an unsupported browser codec (AC-3, DTS),
+  // transcode audio to AAC on the fly while strictly copying video (-c:v copy).
+  // If audio is already natively supported (AAC, MP3, Opus), stream directly.
+  // ---------------------------------------------------------------------------
+  const forceDirect = req.query.direct === '1' || req.query.forceDirect === '1';
+  if (!forceDirect) {
+    let codecInfo = audioTranscodeManager.getCachedCodec(hashStr, targetIndex);
+    if (!codecInfo) {
+      try {
+        const { mediaDiagnosticService } = await import('../services/torrentSearch/mediaDiagnosticService.ts');
+        const probeReport = await mediaDiagnosticService.probeMedia(targetStreamUrl, 6000);
+        const primaryAudio = probeReport.audio;
+        const codec = primaryAudio?.codec || 'none';
+        const nativeSupport = primaryAudio ? primaryAudio.browserNativeSupport === 'NATIVE' : true;
+        codecInfo = { codec, nativeSupport };
+        audioTranscodeManager.setCachedCodec(hashStr, targetIndex, codec, nativeSupport);
+      } catch (_probeErr) {
+        // Fallback to direct stream if probe times out/fails
+        codecInfo = { codec: 'unknown', nativeSupport: true };
+      }
+    }
+
+    // If audio is NOT natively supported by modern browsers (e.g. AC-3, E-AC-3, DTS, TrueHD)
+    if (!codecInfo.nativeSupport && codecInfo.codec !== 'none') {
+      const startSeconds = req.query.ss ? parseFloat(String(req.query.ss)) : 0;
+      const audioTrackIndex = req.query.audioTrack !== undefined ? Number(req.query.audioTrack) : undefined;
+
+      return await audioTranscodeManager.handleTranscodeRequest(req, res, {
+        infoHash: hashStr,
+        fileIndex: targetIndex,
+        sourceStreamUrl: targetStreamUrl,
+        audioCodec: codecInfo.codec,
+        audioTrackIndex,
+        startOffsetSeconds: isNaN(startSeconds) ? 0 : startSeconds,
+        resolvedFileName,
+      });
+    }
+  }
+
   res.status(torrRes.status);
 
   // Content-Type normalization for audio/video browser pipelines
@@ -785,3 +827,92 @@ watchPartyRouter.get('/torrents/stream', optionalAuth, async (req: AuthRequest, 
     }
   }
 });
+
+/**
+ * 16. GET /api/watch-party/rooms/:code/media-diagnostics
+ * Deep media inspection of room's active media source using ffprobe.
+ */
+watchPartyRouter.get('/rooms/:code/media-diagnostics', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const code = req.params.code;
+    const room = await watchPartyService.getRoom(code);
+    if (!room) {
+      return res.status(404).json({ error: 'Комната не найдена' });
+    }
+
+    const { mediaDiagnosticService } = await import('../services/torrentSearch/mediaDiagnosticService.ts');
+    let targetUrl = room.sourceUrl || room.sourceConfig?.url;
+
+    if (!targetUrl && room.sourceConfig?.infoHash) {
+      const idx = room.sourceConfig.torrentFileIndex ?? 0;
+      targetUrl = torrServerClient.getStreamUrl(room.sourceConfig.infoHash, idx);
+    }
+
+    if (!targetUrl) {
+      return res.status(400).json({ error: 'У комнаты не настроен активный медиа-поток' });
+    }
+
+    // If targetUrl is a relative path to our proxy, convert to TorrServer direct stream or local url
+    if (targetUrl.startsWith('/api/watch-party/torrents/stream')) {
+      const urlObj = new URL(targetUrl, 'http://127.0.0.1:3000');
+      const hash = urlObj.searchParams.get('hash');
+      const idx = parseInt(urlObj.searchParams.get('index') || '0', 10);
+      if (hash) {
+        targetUrl = torrServerClient.getStreamUrl(hash, idx);
+      }
+    }
+
+    const report = await mediaDiagnosticService.probeMedia(targetUrl);
+    return res.json({ success: true, roomCode: code, report });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Ошибка диагностики медиа-файла' });
+  }
+});
+
+/**
+ * 17. GET /api/watch-party/torrents/diagnostics
+ * Diagnostic endpoint to probe any media stream or TorrServer stream by infoHash and index.
+ */
+watchPartyRouter.get('/torrents/diagnostics', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { hash, index, url } = req.query;
+    const { mediaDiagnosticService } = await import('../services/torrentSearch/mediaDiagnosticService.ts');
+
+    let targetUrl = url ? String(url).trim() : '';
+    if (!targetUrl && hash) {
+      const fileIdx = typeof index !== 'undefined' ? Number(index) : 0;
+      targetUrl = torrServerClient.getStreamUrl(String(hash).trim(), fileIdx);
+    }
+
+    if (!targetUrl) {
+      return res.status(400).json({ error: 'Не указан url или hash для проверки' });
+    }
+
+    const report = await mediaDiagnosticService.probeMedia(targetUrl);
+    return res.json({ success: true, targetUrl, report });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Ошибка диагностики медиа-файла' });
+  }
+});
+
+/**
+ * 18. GET /api/watch-party/transcode/status
+ * Diagnostic status of active audio transcode sessions and host FFmpeg availability.
+ */
+watchPartyRouter.get('/transcode/status', optionalAuth, async (_req: AuthRequest, res: Response) => {
+  try {
+    const ffmpegInfo = await audioTranscodeManager.isFFmpegAvailable();
+    const activeSessions = audioTranscodeManager.getActiveSessions().map((s) => s.toInfo());
+    return res.json({
+      success: true,
+      ffmpeg: ffmpegInfo,
+      maxSessions: audioTranscodeManager.maxSessions,
+      activeSessionsCount: activeSessions.length,
+      sessions: activeSessions,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Ошибка получения статуса транскодирования' });
+  }
+});
+
+

@@ -392,6 +392,42 @@ export const WatchPartyPlayer: React.FC = () => {
     video.volume = volume;
     video.muted = isMuted;
 
+    // Stage 10.16 Browser Media API Diagnostic Logging
+    const audioTracks = (video as any).audioTracks;
+    const audioTrackList = audioTracks
+      ? Array.from({ length: audioTracks.length }, (_, i) => ({
+          id: audioTracks[i].id,
+          kind: audioTracks[i].kind,
+          label: audioTracks[i].label,
+          language: audioTracks[i].language,
+          enabled: audioTracks[i].enabled,
+        }))
+      : 'audioTracks API not supported by this browser engine (standard in Chromium/WebKit)';
+
+    const canPlayTests = {
+      'video/mp4; codecs="avc1.42E01E, mp4a.40.2"': video.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
+      'video/mp4; codecs="avc1.42E01E, ac-3"': video.canPlayType('video/mp4; codecs="avc1.42E01E, ac-3"'),
+      'video/mp4; codecs="avc1.42E01E, ec-3"': video.canPlayType('video/mp4; codecs="avc1.42E01E, ec-3"'),
+      'video/x-matroska; codecs="avc1, mp4a.40.2"': video.canPlayType('video/x-matroska; codecs="avc1, mp4a.40.2"'),
+      'video/x-matroska; codecs="avc1, ac-3"': video.canPlayType('video/x-matroska; codecs="avc1, ac-3"'),
+      'video/x-matroska; codecs="avc1, dts"': video.canPlayType('video/x-matroska; codecs="avc1, dts"'),
+      'video/x-matroska; codecs="avc1, opus"': video.canPlayType('video/x-matroska; codecs="avc1, opus"'),
+    };
+
+    console.log('[WatchPartyMediaDebug] loadedmetadata media diagnostic:', {
+      duration: video.duration,
+      videoWidth: video.videoWidth,
+      videoHeight: video.videoHeight,
+      volume: video.volume,
+      muted: video.muted,
+      paused: video.paused,
+      readyState: video.readyState,
+      networkState: video.networkState,
+      error: video.error,
+      audioTracks: audioTrackList,
+      canPlayTests,
+    });
+
     // Align initial position
     const target = calculateTargetPosition();
     if (target > 0) {

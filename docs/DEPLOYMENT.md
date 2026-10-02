@@ -10,6 +10,9 @@
 - **Node.js**: v20.x LTS (рекомендуется v22.x LTS)
 - **npm**: 10.x+
 - **PostgreSQL**: 15 или 16
+- **FFmpeg**: v4.4+ / v6.x (для серверного аудио-транскодирования Watch Party AC-3/DTS -> AAC)
+  - Проверка: `which ffmpeg && ffmpeg -version`
+  - Установка на Ubuntu 24.04: `sudo apt update && sudo apt install -y ffmpeg`
 - **Process Manager**: PM2 (имя процесса: `dodik-tracker`)
 - **Reverse Proxy**: Nginx
 - **Порт приложения**: `127.0.0.1:3000`
