@@ -316,10 +316,10 @@ export class AudioTranscodeSession {
       }
     };
 
-    if (typeof req.on === 'function') {
+    if (req && typeof req.on === 'function') {
       req.on('close', cleanupClient);
     }
-    if (typeof res.on === 'function') {
+    if (res && typeof res.on === 'function') {
       res.on('finish', cleanupClient);
     }
 
@@ -376,6 +376,21 @@ export class AudioTranscodeSession {
     if (requestedStart >= currentSize) {
       if (this.status === 'COMPLETED') {
         // Stream is fully encoded and requested offset is out of bounds
+        res.status(416);
+        res.setHeader('Content-Range', `bytes */${this.totalSize || currentSize}`);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.end();
+        return;
+      }
+
+      // Range Representation Isolation: If requested offset is excessively ahead of current transcode head
+      // (e.g. alien byte range from original multi-gigabyte MKV representation), do NOT poll-wait 6s for it!
+      // Reject immediately with 416 so the player re-synchronizes with the fMP4 timeline.
+      const maxSpoolLookahead = 15 * 1024 * 1024; // 15 MB
+      if (requestedStart > currentSize + maxSpoolLookahead) {
+        console.warn(
+          `[TRANSCODE_SPOOL] foreign representation Range offset detected: requested ${requestedStart}, current ${currentSize}. Rejecting with 416.`
+        );
         res.status(416);
         res.setHeader('Content-Range', `bytes */${this.totalSize || currentSize}`);
         res.setHeader('Accept-Ranges', 'bytes');

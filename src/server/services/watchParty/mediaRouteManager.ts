@@ -94,6 +94,9 @@ export class MediaRouteManager {
       (existing.route === 'DIRECT' || existing.route === 'TRANSCODE') &&
       existing.route !== route
     ) {
+      console.warn(
+        `[MEDIA_ROUTE] route transition rejected from=${existing.route === 'TRANSCODE' ? 'AAC_TRANSCODE' : 'DIRECT_STREAM'} to=${route === 'TRANSCODE' ? 'AAC_TRANSCODE' : 'DIRECT_STREAM'} key=${key}`
+      );
       throw new Error(
         `[MEDIA_ROUTE] Forbidden route switch: cannot change route from ${existing.route} to ${route} for source ${key}`
       );
@@ -103,7 +106,7 @@ export class MediaRouteManager {
       existing.route = route;
       existing.lastAccess = Date.now();
       if (codec) existing.codec = codec;
-      console.log(`[MEDIA_ROUTE] source=${this.mask(infoHash)} route=${route} updated`);
+      console.log(`[MEDIA_ROUTE] route locked route=${route === 'TRANSCODE' ? 'AAC_TRANSCODE' : 'DIRECT_STREAM'} key=${key}`);
     } else {
       this.sessions.set(key, {
         key,
@@ -114,7 +117,8 @@ export class MediaRouteManager {
         createdAt: Date.now(),
         lastAccess: Date.now(),
       });
-      console.log(`[MEDIA_ROUTE] source=${this.mask(infoHash)} route=${route} created`);
+      console.log(`[MEDIA_ROUTE] session created key=${key}`);
+      console.log(`[MEDIA_ROUTE] route locked route=${route === 'TRANSCODE' ? 'AAC_TRANSCODE' : 'DIRECT_STREAM'} key=${key}`);
     }
   }
 
@@ -146,18 +150,18 @@ export class MediaRouteManager {
 
       // If route is already locked: IMMUTABLE REUSE
       if (session.route === 'DIRECT') {
-        console.log(`[MEDIA_ROUTE] source=${masked} route=DIRECT reused`);
+        console.log(`[MEDIA_ROUTE] route reuse route=DIRECT_STREAM key=${key}`);
         return { status: 'READY', route: 'DIRECT', codec: session.codec || 'unknown' };
       }
 
       if (session.route === 'TRANSCODE') {
-        console.log(`[MEDIA_ROUTE] source=${masked} route=TRANSCODE reused`);
+        console.log(`[MEDIA_ROUTE] route reuse route=AAC_TRANSCODE key=${key}`);
         return { status: 'READY', route: 'TRANSCODE', codec: session.codec || 'ac3' };
       }
 
       // If currently PROBING: await existing in-flight probe promise with bounded wait
       if (session.route === 'PROBING' && session.probePromise) {
-        console.log(`[MEDIA_ROUTE] source=${masked} state=PROBING (awaiting existing probe)`);
+        console.log(`[MEDIA_ROUTE] state PROBING key=${key} (awaiting existing probe)`);
         await Promise.race([
           session.probePromise.catch(() => {}),
           new Promise((resolve) => setTimeout(resolve, waitTimeoutMs)),
@@ -168,7 +172,7 @@ export class MediaRouteManager {
           return { status: 'READY', route: currentRoute, codec: session.codec };
         }
 
-        console.log(`[MEDIA_ROUTE] source=${masked} probe=PENDING`);
+        console.log(`[MEDIA_ROUTE] state PROBING key=${key}`);
         return {
           status: 'PENDING',
           code: 'MEDIA_DIAGNOSTIC_PENDING',
@@ -187,7 +191,8 @@ export class MediaRouteManager {
       lastAccess: Date.now(),
     };
     this.sessions.set(key, session);
-    console.log(`[MEDIA_ROUTE] source=${masked} state=PROBING`);
+    console.log(`[MEDIA_ROUTE] session created key=${key}`);
+    console.log(`[MEDIA_ROUTE] state PROBING key=${key}`);
 
     // Launch single in-flight probe promise
     session.probePromise = (async () => {
@@ -203,11 +208,13 @@ export class MediaRouteManager {
 
         if (!nativeSupport && codec !== 'none') {
           session!.route = 'TRANSCODE';
-          console.log(`[MEDIA_ROUTE] source=${masked} probe=SUCCESS codec=${codec} route=TRANSCODE`);
+          console.log(`[MEDIA_ROUTE] probe success codec=${codec} key=${key}`);
+          console.log(`[MEDIA_ROUTE] route locked route=AAC_TRANSCODE key=${key}`);
           return { route: 'TRANSCODE' as const, codec };
         } else {
           session!.route = 'DIRECT';
-          console.log(`[MEDIA_ROUTE] source=${masked} probe=SUCCESS codec=${codec} route=DIRECT`);
+          console.log(`[MEDIA_ROUTE] probe success codec=${codec} key=${key}`);
+          console.log(`[MEDIA_ROUTE] route locked route=DIRECT_STREAM key=${key}`);
           return { route: 'DIRECT' as const, codec };
         }
       } catch (err: any) {
@@ -229,7 +236,7 @@ export class MediaRouteManager {
     }
 
     // Still pending or error during probe: return 503 MEDIA_DIAGNOSTIC_PENDING so client retries
-    console.log(`[MEDIA_ROUTE] source=${masked} probe=PENDING`);
+    console.log(`[MEDIA_ROUTE] state PROBING key=${key}`);
     return {
       status: 'PENDING',
       code: 'MEDIA_DIAGNOSTIC_PENDING',
