@@ -160,6 +160,7 @@ export class AudioTranscodeSession {
       this.status = 'READY';
 
       console.log(`[AUDIO_TRANSCODE] ffmpeg started (pid: ${proc.pid}, offset: ${offsetSeconds}s, codec: ${this.audioCodec})`);
+      console.log(`[WATCH_DIAG] FFmpeg process started: PID=${proc.pid}, inputCodec=${this.audioCodec}, output=aac/fmp4, offset=${offsetSeconds}s, sourceUrl=${this.sourceStreamUrl}`);
 
       proc.stdout.on('data', (chunk: Buffer) => {
         this.totalBytesTranscoded += chunk.length;
@@ -187,6 +188,7 @@ export class AudioTranscodeSession {
         const text = errChunk.toString().trim();
         if (text) {
           this.lastStderr = text.slice(-500); // keep recent error tail
+          console.log(`[WATCH_DIAG] FFmpeg stderr (PID ${proc.pid}): ${text.slice(-200)}`);
         }
       });
 
@@ -266,6 +268,7 @@ export class AudioTranscodeSession {
     this.lastActivity = Date.now();
 
     console.log(`[AUDIO_TRANSCODE] client attached (clientId: ${clientId}, total clients: ${this.clients.size})`);
+    console.log(`[WATCH_DIAG] Transcode client attached: clientId=${clientId}, totalClients=${this.clients.size}, Range=${req.headers?.range || 'none'}`);
 
     // Clean up when client disconnects
     req.on('close', () => {
@@ -308,6 +311,7 @@ export class AudioTranscodeSession {
       client.isClosed = true;
       this.clients.delete(clientId);
       console.log(`[AUDIO_TRANSCODE] client detached (clientId: ${clientId}, remaining clients: ${this.clients.size})`);
+      console.log(`[WATCH_DIAG] Transcode client detached: clientId=${clientId}, remainingClients=${this.clients.size}`);
     }
 
     // If 0 clients remain, start cleanup timer

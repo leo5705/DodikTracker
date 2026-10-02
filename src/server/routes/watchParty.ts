@@ -359,11 +359,11 @@ watchPartyRouter.get('/availability/:mediaId', optionalAuth, async (req: AuthReq
  */
 watchPartyRouter.post('/torrents/discover', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { mediaId, title, originalTitle, year, seasonNumber, episodeNumber, mediaType, verify } = req.body || {};
+    const { mediaId, title, originalTitle, year, seasonNumber, episodeNumber, mediaType, durationMinutes, verify } = req.body || {};
     const shouldVerify = verify === true || req.query.verify === 'true';
 
     console.log('[WatchSources] discovery requested');
-    console.log(`[WatchSources] mediaId=${mediaId ?? 'none'}, mediaType=${mediaType ?? 'none'}, season=${seasonNumber ?? 'none'}, episode=${episodeNumber ?? 'none'}`);
+    console.log(`[WatchSources] mediaId=${mediaId ?? 'none'}, mediaType=${mediaType ?? 'none'}, season=${seasonNumber ?? 'none'}, episode=${episodeNumber ?? 'none'}, duration=${durationMinutes ?? 'none'}`);
 
     let result: any = null;
 
@@ -384,6 +384,7 @@ watchPartyRouter.post('/torrents/discover', optionalAuth, async (req: AuthReques
             originalTitle: originalTitle ? String(originalTitle).trim() : undefined,
             mediaType: mediaType || 'movie',
             year: year ? Number(year) : undefined,
+            durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
             seasonNumber: seasonNumber !== undefined ? Number(seasonNumber) : undefined,
             episodeNumber: episodeNumber !== undefined ? Number(episodeNumber) : undefined,
           },
@@ -397,6 +398,7 @@ watchPartyRouter.post('/torrents/discover', optionalAuth, async (req: AuthReques
           originalTitle: originalTitle ? String(originalTitle).trim() : undefined,
           mediaType: mediaType || 'movie',
           year: year ? Number(year) : undefined,
+          durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
           seasonNumber: seasonNumber !== undefined ? Number(seasonNumber) : undefined,
           episodeNumber: episodeNumber !== undefined ? Number(episodeNumber) : undefined,
         },
@@ -569,8 +571,11 @@ async function proxyTorrServerStream(
   let targetStreamUrl = `${torrServerUrl}/stream?link=${encodeURIComponent(hashStr)}&index=${targetIndex}&play=1`;
   let resolvedFileName: string | undefined;
 
+  console.log(`[WATCH_DIAG] Stream request: hash=${hashStr.slice(0, 10)}..., index=${requestedFileIndex}, Range=${req.headers.range || 'none'}, ss=${req.query.ss || 'none'}, direct=${req.query.direct || '0'}`);
+
   const controller = new AbortController();
   req.on('close', () => {
+    console.log(`[WATCH_DIAG] Client request closed/aborted: hash=${hashStr.slice(0, 10)}..., index=${targetIndex}`);
     controller.abort();
   });
 
@@ -689,11 +694,16 @@ async function proxyTorrServerStream(
         const nativeSupport = primaryAudio ? primaryAudio.browserNativeSupport === 'NATIVE' : true;
         codecInfo = { codec, nativeSupport };
         audioTranscodeManager.setCachedCodec(hashStr, targetIndex, codec, nativeSupport);
-      } catch (_probeErr) {
+
+        console.log(`[WATCH_DIAG] Probe: container=${probeReport.container}, video=${probeReport.video?.codec} (${probeReport.video?.width}x${probeReport.video?.height} @ ${probeReport.video?.fps || '?'}fps), audio=${codec} (${primaryAudio?.channels || 0}ch @ ${primaryAudio?.sampleRate || 0}Hz), subs=${probeReport.subtitleTracksCount} (languages: ${probeReport.subtitles.map((s) => s.language || s.codec).join(', ') || 'none'}), browserNativeAudio=${nativeSupport ? 'YES' : 'NO'}`);
+      } catch (_probeErr: any) {
+        console.log(`[WATCH_DIAG] Probe timed out or failed: ${_probeErr.message}, falling back to direct stream`);
         // Fallback to direct stream if probe times out/fails
         codecInfo = { codec: 'unknown', nativeSupport: true };
       }
     }
+
+    console.log(`[WATCH_DIAG] Routing decision: ${!codecInfo.nativeSupport && codecInfo.codec !== 'none' ? 'AAC_TRANSCODE' : 'DIRECT_STREAM'} (codec: ${codecInfo.codec})`);
 
     // If audio is NOT natively supported by modern browsers (e.g. AC-3, E-AC-3, DTS, TrueHD)
     if (!codecInfo.nativeSupport && codecInfo.codec !== 'none') {
@@ -730,6 +740,8 @@ async function proxyTorrServerStream(
   if (contentRange) {
     res.setHeader('Content-Range', contentRange);
   }
+
+  console.log(`[WATCH_DIAG] Direct stream headers sent: status=${torrRes.status}, Content-Type=${finalContentType}, Content-Range=${contentRange || 'none'}, Content-Length=${contentLength || 'none'}`);
 
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

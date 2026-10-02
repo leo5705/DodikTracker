@@ -22,8 +22,10 @@ export function parseQualityFromTitle(title: string): TorrentQualityInfo {
   // Source
   let source: string | undefined;
   if (/bdremux|remux/i.test(title)) source = 'BDremux';
-  else if (/bluray|bdrip|brrip/i.test(title)) source = 'BDRip';
-  else if (/web-dl|webrip|web/i.test(title)) source = 'WEB-DL';
+  else if (/\bweb-dl\b|\bwebdl\b/i.test(title)) source = 'WEB-DL';
+  else if (/\bwebrip\b|\bweb\b/i.test(title)) source = 'WEBRip';
+  else if (/\bbluray\b/i.test(title)) source = 'BluRay';
+  else if (/\bbdrip\b|\bbrrip\b/i.test(title)) source = 'BDRip';
   else if (/hdtv|hdtvrip/i.test(title)) source = 'HDTV';
   else if (/dvdrip|dvd/i.test(title)) source = 'DVDRip';
 
@@ -35,14 +37,25 @@ export function parseQualityFromTitle(title: string): TorrentQualityInfo {
 
   // Audio Codec
   let audioCodec: string | undefined;
-  if (/dts-hd|dts/i.test(title)) audioCodec = 'DTS';
+  if (/dts-hd|dtshd/i.test(title)) audioCodec = 'DTS-HD';
+  else if (/\bdts\b/i.test(title)) audioCodec = 'DTS';
   else if (/atmos|truehd/i.test(title)) audioCodec = 'TrueHD';
-  else if (/ac3|dd5\.1|dd\+/i.test(title)) audioCodec = 'AC3';
-  else if (/aac/i.test(title)) audioCodec = 'AAC';
+  else if (/eac3|e-ac-3|dd\+|ddp/i.test(title)) audioCodec = 'E-AC-3';
+  else if (/ac3|ac-3|dd5\.1/i.test(title)) audioCodec = 'AC3';
+  else if (/\baac\b/i.test(title)) audioCodec = 'AAC';
+  else if (/\bopus\b/i.test(title)) audioCodec = 'Opus';
+  else if (/\bmp3\b/i.test(title)) audioCodec = 'MP3';
   else if (/flac/i.test(title)) audioCodec = 'FLAC';
 
   const isHDR = /hdr10\+|hdr10|hdr|vision/i.test(title);
   const is10Bit = /10bit|10-bit/i.test(title);
+
+  // Subtitles
+  const subtitles: string[] = [];
+  if (/\b(rus\s?sub|русские субтитры|rus\s?subs)\b/i.test(title)) subtitles.push('ru');
+  if (/\b(eng\s?sub|english subtitles|eng\s?subs)\b/i.test(title)) subtitles.push('en');
+  if (/\b(forced|форсированные)\b/i.test(title)) subtitles.push('forced');
+  if (subtitles.length === 0 && /\b(sub|subs|субтитры)\b/i.test(title)) subtitles.push('sub');
 
   return {
     resolution,
@@ -51,6 +64,7 @@ export function parseQualityFromTitle(title: string): TorrentQualityInfo {
     audioCodec,
     isHDR,
     is10Bit,
+    subtitles: subtitles.length > 0 ? subtitles : undefined,
   };
 }
 

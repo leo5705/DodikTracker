@@ -1,9 +1,10 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { useWatchParty } from '../../context/WatchPartyContext.tsx';
+import { useAuth } from '../../context/AuthContext.tsx';
 import { WatchPartyControls } from './WatchPartyControls.tsx';
 import { TorrentStatsOverlay } from './TorrentStatsOverlay.tsx';
 import { TorrentFilePickerModal } from '../modals/TorrentFilePickerModal.tsx';
-import { Loader2, Film } from 'lucide-react';
+import { Loader2, Film, AlertCircle } from 'lucide-react';
 import { MediaSourceFactory } from '../../services/mediaSources/MediaSourceFactory.ts';
 import { IMediaSourceAdapter } from '../../services/mediaSources/MediaSourceAdapter.ts';
 import {
@@ -13,6 +14,7 @@ import {
   TorrentMediaFile,
   TorrentPeerStats,
 } from '../../types/watchParty.ts';
+import { TorrentCandidate } from '../../server/services/torrentSearch/torrentSearchTypes.ts';
 import { parseVideo } from '../../utils/videoUtils.ts';
 import { validateAndParseMagnet } from '../../utils/magnetValidator.ts';
 
@@ -28,6 +30,15 @@ function isMatchingMediaSrc(currentVideoSrc: string, targetUrl: string): boolean
   }
 }
 
+function formatBufferedRanges(buffered: TimeRanges | null): string {
+  if (!buffered || buffered.length === 0) return 'empty';
+  const parts: string[] = [];
+  for (let i = 0; i < buffered.length; i++) {
+    parts.push(`[${buffered.start(i).toFixed(2)} - ${buffered.end(i).toFixed(2)}]`);
+  }
+  return parts.join(', ');
+}
+
 export const WatchPartyPlayer: React.FC = () => {
   const {
     room,
@@ -40,6 +51,7 @@ export const WatchPartyPlayer: React.FC = () => {
     forceSyncAll,
     hostChangeSource,
   } = useWatchParty();
+  const { authFetch } = useAuth();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -55,6 +67,17 @@ export const WatchPartyPlayer: React.FC = () => {
   const isBufferingRef = useRef<boolean>(false);
   const lastUserSeekTimestampRef = useRef<number>(0);
   const lastAssignedSrcRef = useRef<string | null>(null);
+
+  // Stage 10.19 Startup Synchronization & Adaptive Prebuffer refs
+  const initialSyncAppliedRef = useRef<boolean>(false);
+  const initialSyncPendingTargetRef = useRef<number | null>(null);
+  const initialSyncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Stage 10.19 Buffer Starvation & Fallback states
+  const waitingTimestampsRef = useRef<number[]>([]);
+  const [isSourceStarved, setIsSourceStarved] = useState<boolean>(false);
+  const [fallbackCandidate, setFallbackCandidate] = useState<TorrentCandidate | null>(null);
+  const [dismissedStarvation, setDismissedStarvation] = useState<boolean>(false);
 
   // Controls auto-hide & interaction locks
   const hideControlsTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -157,6 +180,7 @@ export const WatchPartyPlayer: React.FC = () => {
           setIsBuffering(false);
           isBufferingRef.current = false;
           console.log(`[WatchPartyPlayer] PLAY_STARTED (${reason})`);
+          console.log(`[WATCH_DIAG] PLAYBACK_START (reason: ${reason}, currentTime: ${video.currentTime.toFixed(2)}s)`);
         })
         .catch((err) => {
           playRequestPendingRef.current = false;
@@ -176,6 +200,69 @@ export const WatchPartyPlayer: React.FC = () => {
 
   const requestPlaybackStartRef = useRef(requestPlaybackStart);
   requestPlaybackStartRef.current = requestPlaybackStart;
+
+  // Stage 10.19 Initial Startup Synchronization helpers
+  const applyInitialSync = useCallback((targetSeconds: number) => {
+    initialSyncAppliedRef.current = true;
+    initialSyncPendingTargetRef.current = null;
+    if (initialSyncTimeoutRef.current) {
+      clearTimeout(initialSyncTimeoutRef.current);
+      initialSyncTimeoutRef.current = null;
+    }
+    const video = videoRef.current;
+    if (video) {
+      if (targetSeconds > 0) {
+        video.currentTime = targetSeconds;
+      }
+      if (authoritativePlaybackRef.current.state === 'PLAYING' && video.paused) {
+        requestPlaybackStart('INITIAL_SYNC_APPLIED');
+      }
+    }
+  }, [requestPlaybackStart]);
+
+  const checkAndApplyPendingInitialSync = useCallback(() => {
+    if (initialSyncAppliedRef.current || initialSyncPendingTargetRef.current === null) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    const bufferedEnd = video.buffered.length > 0 ? video.buffered.end(0) : 0;
+    const hasSufficientBuffer = video.readyState >= 2 || bufferedEnd >= 0.8;
+
+    if (hasSufficientBuffer) {
+      const target = initialSyncPendingTargetRef.current;
+      console.log(`[WATCH_DIAG] INITIAL_SYNC_APPLIED (buffer ready: readyState=${video.readyState}, buffered=${bufferedEnd.toFixed(2)}s, applying target=${target.toFixed(2)}s)`);
+      applyInitialSync(target);
+    }
+  }, [applyInitialSync]);
+
+  // Stage 10.19 Fallback Candidate Discovery
+  const triggerFallbackCandidateLookup = useCallback(async () => {
+    if (!room?.mediaId || fallbackCandidate) return;
+    try {
+      const res = await authFetch('/api/watch-party/torrents/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mediaId: room.mediaId,
+          title: room.title,
+          seasonNumber: room.seasonNumber || undefined,
+          episodeNumber: room.episodeNumber || undefined,
+          mediaType: room.mediaType || 'movie',
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const candList: TorrentCandidate[] = data.candidates || [];
+        const currentHash = (sourceConfig.infoHash || '').toLowerCase();
+        // Pick alternative candidate with highest smart score
+        const alternative = candList.find((c) => (c.infoHash || '').toLowerCase() !== currentHash);
+        if (alternative) {
+          setFallbackCandidate(alternative);
+          console.log(`[WATCH_DIAG] FALLBACK_CANDIDATE_READY: candidate="${alternative.name}", size=${alternative.formattedSize}, seeders=${alternative.seeders}, res=${alternative.quality.resolution}`);
+        }
+      }
+    } catch (_err) {}
+  }, [room?.mediaId, room?.title, room?.seasonNumber, room?.episodeNumber, room?.mediaType, fallbackCandidate, authFetch, sourceConfig.infoHash]);
 
   // 4. Authoritative Play / Pause Synchronization
   useEffect(() => {
@@ -219,6 +306,17 @@ export const WatchPartyPlayer: React.FC = () => {
     if (isBufferingActive || isUserSeeking) {
       if (Math.abs(drift) >= 2.5) {
         console.log('[WatchPartyPlayer] DRIFT_SKIPPED_BUFFERING', { drift: drift.toFixed(2), isBuffering: isBufferingActive, isSeeking: isUserSeeking });
+        console.log('[WATCH_DIAG] DRIFT_SKIPPED_BUFFERING details:', {
+          drift: drift.toFixed(2),
+          isBuffering: isBufferingActive,
+          isSeeking: isUserSeeking,
+          videoSeeking: video.seeking,
+          readyState: video.readyState,
+          networkState: video.networkState,
+          currentTime: video.currentTime,
+          targetPos: targetPos.toFixed(2),
+          buffered: formatBufferedRanges(video.buffered),
+        });
       }
       video.playbackRate = 1.0;
       return;
@@ -428,14 +526,33 @@ export const WatchPartyPlayer: React.FC = () => {
       canPlayTests,
     });
 
-    // Align initial position
+    // -------------------------------------------------------------------------
+    // STAGE 10.19: STARTUP ALGORITHM & ADAPTIVE INITIAL SYNCHRONIZATION
+    // Distinguishes initial sync from user seek and avoids cold seeking on fMP4 stream
+    // -------------------------------------------------------------------------
     const target = calculateTargetPosition();
-    if (target > 0) {
-      video.currentTime = target;
-    }
+    if (target <= 5.0) {
+      // For target <= 5.0s, play smoothly from 0:00 without cold seeking
+      initialSyncAppliedRef.current = true;
+      initialSyncPendingTargetRef.current = null;
+      console.log(`[WATCH_DIAG] INITIAL_SYNC_APPLIED (target <= 5s [${target.toFixed(2)}s], playing from 0:00 without cold seek)`);
+      if (authoritativePlayback.state === 'PLAYING' && video.paused) {
+        requestPlaybackStart('INITIAL_SYNC_IMMEDIATE');
+      }
+    } else {
+      // For target > 5.0s, wait for adaptive small buffer before seeking
+      initialSyncPendingTargetRef.current = target;
+      console.log(`[WATCH_DIAG] INITIAL_SYNC_WAIT (target > 5s [${target.toFixed(2)}s], waiting for adaptive prebuffer)`);
+      checkAndApplyPendingInitialSync();
 
-    if (authoritativePlayback.state === 'PLAYING' && video.paused) {
-      requestPlaybackStart('LOADED_METADATA');
+      // 2500ms safety timeout fallback
+      if (initialSyncTimeoutRef.current) clearTimeout(initialSyncTimeoutRef.current);
+      initialSyncTimeoutRef.current = setTimeout(() => {
+        if (!initialSyncAppliedRef.current && initialSyncPendingTargetRef.current !== null) {
+          console.log(`[WATCH_DIAG] INITIAL_SYNC_APPLIED (prebuffer timeout fallback 2.5s reached, applying target=${initialSyncPendingTargetRef.current.toFixed(2)}s)`);
+          applyInitialSync(initialSyncPendingTargetRef.current);
+        }
+      }, 2500);
     }
   };
 
@@ -443,7 +560,33 @@ export const WatchPartyPlayer: React.FC = () => {
     setIsBuffering(true);
     isBufferingRef.current = true;
     console.log('[WatchPartyPlayer] BUFFERING_START');
+    const v = videoRef.current;
+    console.log('[WATCH_DIAG] video waiting (BUFFERING_START):', {
+      currentTime: v?.currentTime,
+      duration: v?.duration,
+      readyState: v?.readyState,
+      networkState: v?.networkState,
+      seeking: v?.seeking,
+      buffered: formatBufferedRanges(v?.buffered || null),
+    });
     sendProgress(currentTime, duration, true);
+
+    // -------------------------------------------------------------------------
+    // STAGE 10.19: BUFFER STARVATION DETECTION (SOURCE_STARVATION)
+    // -------------------------------------------------------------------------
+    const isSeekingRecent = isSeekingRef.current || (Date.now() - lastUserSeekTimestampRef.current < 2500);
+    if (!isSeekingRecent && authoritativePlayback.state === 'PLAYING' && isTorrent) {
+      const now = Date.now();
+      waitingTimestampsRef.current = waitingTimestampsRef.current.filter((t) => now - t < 15000);
+      waitingTimestampsRef.current.push(now);
+
+      const bufferedDuration = v && v.buffered.length > 0 && v.currentTime ? Math.max(0, v.buffered.end(0) - v.currentTime) : 0;
+      if (waitingTimestampsRef.current.length >= 3 && bufferedDuration < 0.5 && !isSourceStarved) {
+        console.log(`[WATCH_DIAG] SOURCE_STARVATION_DETECTED (waiting count: ${waitingTimestampsRef.current.length} in 15s window, buffered: ${bufferedDuration.toFixed(2)}s)`);
+        setIsSourceStarved(true);
+        triggerFallbackCandidateLookup();
+      }
+    }
 
     if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
     stallTimerRef.current = setTimeout(() => {
@@ -458,6 +601,13 @@ export const WatchPartyPlayer: React.FC = () => {
     setIsBuffering(false);
     isBufferingRef.current = false;
     console.log('[WatchPartyPlayer] BUFFERING_END');
+    const v = videoRef.current;
+    console.log('[WATCH_DIAG] video playing (BUFFERING_END):', {
+      currentTime: v?.currentTime,
+      readyState: v?.readyState,
+      seeking: v?.seeking,
+      buffered: formatBufferedRanges(v?.buffered || null),
+    });
     if (stallTimerRef.current) {
       clearTimeout(stallTimerRef.current);
       stallTimerRef.current = null;
@@ -467,6 +617,13 @@ export const WatchPartyPlayer: React.FC = () => {
   const handleCanPlay = () => {
     setIsBuffering(false);
     isBufferingRef.current = false;
+    const v = videoRef.current;
+    console.log('[WATCH_DIAG] video canplay:', {
+      currentTime: v?.currentTime,
+      readyState: v?.readyState,
+      seeking: v?.seeking,
+    });
+    checkAndApplyPendingInitialSync();
     if (stallTimerRef.current) {
       clearTimeout(stallTimerRef.current);
       stallTimerRef.current = null;
@@ -486,6 +643,12 @@ export const WatchPartyPlayer: React.FC = () => {
     isBufferingRef.current = false;
     isSeekingRef.current = false;
     const video = videoRef.current;
+    console.log('[WATCH_DIAG] video seeked:', {
+      currentTime: video?.currentTime,
+      readyState: video?.readyState,
+      seeking: video?.seeking,
+      buffered: formatBufferedRanges(video?.buffered || null),
+    });
     if (video) {
       setCurrentTime(video.currentTime);
       if (wasPlayingBeforeSeekRef.current && video.paused && authoritativePlayback.state === 'PLAYING') {
@@ -667,6 +830,22 @@ export const WatchPartyPlayer: React.FC = () => {
             onPlaying={handlePlaying}
             onCanPlay={handleCanPlay}
             onSeeked={handleSeeked}
+            onSeeking={() => {
+              const v = videoRef.current;
+              console.log('[WATCH_DIAG] video onSeeking:', { currentTime: v?.currentTime, readyState: v?.readyState, seeking: v?.seeking });
+            }}
+            onStalled={() => {
+              const v = videoRef.current;
+              console.log('[WATCH_DIAG] video onStalled:', { currentTime: v?.currentTime, readyState: v?.readyState, buffered: formatBufferedRanges(v?.buffered || null) });
+            }}
+            onProgress={() => {
+              checkAndApplyPendingInitialSync();
+              const v = videoRef.current;
+              // Log progress periodically if buffering
+              if (isBufferingRef.current) {
+                console.log('[WATCH_DIAG] video onProgress during buffering: buffered=' + formatBufferedRanges(v?.buffered || null));
+              }
+            }}
             onError={() => {
               if (!streamSrc) setVideoError('Не удалось загрузить видеопоток');
             }}
@@ -683,6 +862,55 @@ export const WatchPartyPlayer: React.FC = () => {
                 ? 'Вы можете настроить видеопоток, ссылку или торрент в настройках комнаты.'
                 : 'Создатель комнаты настраивает видеопоток.'}
             </p>
+          </div>
+        )}
+
+        {/* Stage 10.19 Source Starvation & Fallback Notification Banner */}
+        {isSourceStarved && fallbackCandidate && !dismissedStarvation && isHost && (
+          <div className="absolute top-4 left-4 right-4 z-30 p-3.5 sm:p-4 rounded-2xl bg-[#0B0D20]/95 border border-amber-500/40 shadow-2xl backdrop-blur-md animate-fadeIn flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-left">
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2 text-amber-400 font-bold text-xs sm:text-sm">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                <span>Источник не обеспечивает стабильную скорость</span>
+              </div>
+              <p className="text-[11px] sm:text-xs text-[#94A3B8] truncate">
+                Найден другой источник: <span className="text-white font-semibold">{fallbackCandidate.quality.resolution} {fallbackCandidate.quality.source || ''} • {fallbackCandidate.formattedSize || Math.round((fallbackCandidate.sizeBytes || 0)/1024/1024) + 'MB'} • {fallbackCandidate.seeders} сидов • {fallbackCandidate.quality.codec || 'H.264'} / {fallbackCandidate.quality.audioCodec || 'AAC'}</span>
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  hostChangeSource(
+                    {
+                      type: 'TORRENT',
+                      infoHash: fallbackCandidate.infoHash,
+                      magnetUri: fallbackCandidate.magnetUri,
+                      title: fallbackCandidate.name,
+                      torrentFileIndex: 0,
+                    },
+                    room?.mediaId || undefined,
+                    room?.seasonNumber || undefined,
+                    room?.episodeNumber || undefined
+                  );
+                  setIsSourceStarved(false);
+                  setFallbackCandidate(null);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-black font-bold text-xs shadow-md transition-all cursor-pointer"
+              >
+                Переключиться
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDismissedStarvation(true);
+                  setIsSourceStarved(false);
+                }}
+                className="px-3 py-2 rounded-xl bg-[#151932] hover:bg-[#1E2442] text-[#94A3B8] hover:text-white font-semibold text-xs transition-colors cursor-pointer border border-[#1E2442]"
+              >
+                Остаться
+              </button>
+            </div>
           </div>
         )}
 

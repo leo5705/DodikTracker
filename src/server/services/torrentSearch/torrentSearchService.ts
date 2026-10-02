@@ -37,6 +37,7 @@ export class TorrentSearchService {
         title: media.title,
         originalTitle: media.originalTitle,
         year: media.year,
+        totalDurationMinutes: media.totalDurationMinutes,
       })
       .from(media)
       .where(eq(media.id, mediaId))
@@ -58,6 +59,7 @@ export class TorrentSearchService {
             title: media.title,
             originalTitle: media.originalTitle,
             year: media.year,
+            totalDurationMinutes: media.totalDurationMinutes,
           })
           .from(media)
           .where(eq(media.id, byExt[0].mediaId))
@@ -106,6 +108,7 @@ export class TorrentSearchService {
       title: normalizedTitle,
       originalTitle: mediaRecord.originalTitle || undefined,
       year: normalizedYear,
+      durationMinutes: mediaRecord.totalDurationMinutes || undefined,
       tmdbId,
       imdbId,
       seasonNumber: finalSeason,

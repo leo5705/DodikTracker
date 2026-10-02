@@ -9,6 +9,7 @@ export interface TorrentSearchQuery {
   title: string;
   originalTitle?: string;
   year?: number;
+  durationMinutes?: number;
 
   tmdbId?: number;
   imdbId?: string;
@@ -19,11 +20,12 @@ export interface TorrentSearchQuery {
 
 export interface TorrentQualityInfo {
   resolution: '2160p' | '1080p' | '720p' | '480p' | 'unknown';
-  source?: string; // 'WEB-DL', 'BDRip', 'HDRip', 'BDremux', etc.
-  codec?: string; // 'HEVC', 'x264', 'x265', 'AVC', etc.
-  audioCodec?: string; // 'AAC', 'DTS', 'AC3', 'FLAC', etc.
+  source?: string; // 'WEB-DL', 'BDRip', 'HDRip', 'BDremux', 'WEBRip', 'BluRay', 'HDTV', etc.
+  codec?: string; // 'HEVC', 'x264', 'x265', 'AVC', 'AV1', etc.
+  audioCodec?: string; // 'AAC', 'DTS', 'AC3', 'E-AC-3', 'FLAC', etc.
   isHDR?: boolean;
   is10Bit?: boolean;
+  subtitles?: string[];
 }
 
 export interface TorrentCandidate {
@@ -35,6 +37,8 @@ export interface TorrentCandidate {
 
   sizeBytes?: number;
   formattedSize?: string;
+  estimatedBitrateMbps?: number;
+  seedEfficiency?: number;
 
   seeders: number;
   leechers: number;
@@ -54,7 +58,7 @@ export interface TorrentCandidate {
     episode?: boolean;
   };
 
-  score: number; // Computed suitability score (higher = better)
+  score?: number; // Computed suitability score (higher = better)
 }
 
 export type TorrentSearchStatus =

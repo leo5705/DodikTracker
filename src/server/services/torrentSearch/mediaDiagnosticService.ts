@@ -37,6 +37,22 @@ export interface VideoTrackInfo {
   browserNativeSupport: 'NATIVE' | 'PARTIAL' | 'UNKNOWN';
 }
 
+export interface SubtitleTrackInfo {
+  index: number;
+  codec: string;
+  language?: string;
+  title?: string;
+  forced?: boolean;
+  hearingImpaired?: boolean;
+  isBitmap: boolean;
+  format: 'TEXT' | 'BITMAP';
+}
+
+export function isBitmapSubtitleCodec(codec: string): boolean {
+  const c = (codec || '').toLowerCase();
+  return /hdmv_pgs|pgs|vobsub|dvd_subtitle|dvb_subtitle|xsub/i.test(c);
+}
+
 export interface MediaDiagnosticReport {
   container: string;
   containerLongName?: string;
@@ -49,12 +65,7 @@ export interface MediaDiagnosticReport {
   videoTracksCount: number;
   audioTracksCount: number;
   subtitleTracksCount: number;
-  subtitles: Array<{
-    index: number;
-    codec: string;
-    language?: string;
-    title?: string;
-  }>;
+  subtitles: SubtitleTrackInfo[];
   audioPlaybackDiagnosis: {
     hasAudio: boolean;
     primaryCodec: string;
@@ -249,12 +260,22 @@ export class MediaDiagnosticService {
       videoTracksCount: videoStreams.length,
       audioTracksCount: audioStreams.length,
       subtitleTracksCount: subtitleStreams.length,
-      subtitles: subtitleStreams.map((s: any) => ({
-        index: s.index,
-        codec: s.codec_name || 'unknown',
-        language: s.tags?.language || s.tags?.LANGUAGE,
-        title: s.tags?.title || s.tags?.TITLE,
-      })),
+      subtitles: subtitleStreams.map((s: any) => {
+        const codec = s.codec_name || 'unknown';
+        const isBitmap = isBitmapSubtitleCodec(codec);
+        const forced = s.disposition?.forced === 1 || Boolean(s.tags?.title && /forced|форсир/i.test(s.tags.title));
+        const hearingImpaired = s.disposition?.hearing_impaired === 1;
+        return {
+          index: s.index,
+          codec,
+          language: s.tags?.language || s.tags?.LANGUAGE,
+          title: s.tags?.title || s.tags?.TITLE,
+          forced,
+          hearingImpaired,
+          isBitmap,
+          format: isBitmap ? 'BITMAP' : 'TEXT',
+        };
+      }),
       audioPlaybackDiagnosis: {
         hasAudio,
         primaryCodec: primaryAudio?.codec || 'none',
